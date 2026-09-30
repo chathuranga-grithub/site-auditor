@@ -223,7 +223,8 @@ export async function runScan(
     finishedAt: new Date().toISOString(),
     sitemapCount: sitemap.urls.length,
     sitemapError: sitemap.error,
-    pagesCrawled: pages.filter((p) => p.isPage).length,
+    // Only pages that answered; a homepage that never responded isn't a crawled page.
+    pagesCrawled: pages.filter((p) => p.isPage && p.status !== 0).length,
     urlsChecked: results.size,
     pages,
     orphans,

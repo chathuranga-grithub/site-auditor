@@ -3,7 +3,7 @@
 // the rest wait in the queue and start automatically.
 
 import type { ScanProgress, ScanResult } from "./types";
-import { parseSiteUrl } from "./url";
+import { isBlockedHost, parseSiteUrl } from "./url";
 
 export const MAX_SITES = 50;
 
@@ -25,6 +25,8 @@ export interface SiteJob {
 export interface ParsedSiteList {
   sites: { input: string; host: string }[];
   invalid: string[];
+  /** localhost / private-network addresses, which the scanner refuses (SSRF protection). */
+  blocked: string[];
   duplicates: number;
   /** Entries dropped because the list was longer than MAX_SITES. */
   overLimit: number;
@@ -43,16 +45,21 @@ export function parseSiteList(text: string): ParsedSiteList {
   const seen = new Set<string>();
   const sites: ParsedSiteList["sites"] = [];
   const invalid: string[] = [];
+  const blocked: string[] = [];
   let duplicates = 0;
   let overLimit = 0;
 
   for (const input of entries) {
     const url = parseSiteUrl(input);
+    if (url && isBlockedHost(url.hostname)) {
+      blocked.push(input);
+      continue;
+    }
     if (!url || !url.hostname.includes(".")) {
       invalid.push(input);
       continue;
     }
-    const key = url.hostname.replace(/^www\./, "");
+    const key = url.host.replace(/^www\./, "");
     if (seen.has(key)) {
       duplicates++;
       continue;
@@ -65,7 +72,7 @@ export function parseSiteList(text: string): ParsedSiteList {
     sites.push({ input, host: url.host });
   }
 
-  return { sites, invalid, duplicates, overLimit };
+  return { sites, invalid, blocked, duplicates, overLimit };
 }
 
 export function isFinished(job: SiteJob): boolean {

@@ -1,7 +1,7 @@
 // Import a list of sites from a file (CSV, Excel .xlsx or plain text) for bulk scanning,
 // plus the downloadable sample CSV. Runs in the browser.
 
-export const IMPORT_ACCEPT = ".csv,.txt,.xlsx,text/csv,text/plain";
+export const IMPORT_ACCEPT = ".csv,.tsv,.txt,.xlsx,text/csv,text/plain";
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 
 /** Header names recognised as the URL column (case-insensitive). */
@@ -20,7 +20,7 @@ export function downloadSampleCsv() {
 }
 
 /** Reads a dropped or chosen file and returns the site entries found in it. */
-export async function readSiteFile(file: File): Promise<string[]> {
+export async function readSiteFile(file: File): Promise<ImportedSites> {
   if (file.size > MAX_FILE_BYTES) throw new Error("That file is too large. Keep it under 2 MB.");
   const name = file.name.toLowerCase();
 
@@ -29,45 +29,74 @@ export async function readSiteFile(file: File): Promise<string[]> {
     const wb = new Workbook();
     await wb.xlsx.load(await file.arrayBuffer());
     const ws = wb.worksheets[0];
-    if (!ws) return [];
+    if (!ws) return { sites: [], skipped: 0 };
     const rows: string[][] = [];
     ws.eachRow((row) => {
       const cells: string[] = [];
       row.eachCell({ includeEmpty: true }, (cell) => cells.push(cell.text.trim()));
       rows.push(cells);
     });
-    return sitesFromRows(rows);
+    return extractSites(rows);
   }
 
   if (name.endsWith(".xls")) throw new Error("Old .xls files aren't supported. Save it as .xlsx or .csv.");
-  return sitesFromText(await file.text());
+
+  const ext = name.includes(".") ? name.slice(name.lastIndexOf(".")) : "";
+  if (ext && ![".csv", ".txt", ".tsv"].includes(ext)) {
+    throw new Error(`${file.name} isn't a CSV file. Use .csv, .xlsx or .txt (download the sample CSV to see the format).`);
+  }
+
+  const text = await file.text();
+  // Binary content (an image or PDF renamed to .csv) has NUL bytes or many invalid characters.
+  const bad = (text.match(/[\u0000\uFFFD]/g) ?? []).length;
+  if (bad > 0 && bad / Math.max(1, text.length) > 0.001) {
+    throw new Error(`${file.name} doesn't look like a CSV or text file. Save it as CSV (UTF-8) and try again.`);
+  }
+  return extractSites(parseDelimited(text.replace(/^\uFEFF/, "")));
 }
 
 /** CSV or plain text. Plain text (no delimiter) is treated as one site per line. */
 export function sitesFromText(text: string): string[] {
-  return sitesFromRows(parseDelimited(text.replace(/^\uFEFF/, "")));
+  return extractSites(parseDelimited(text.replace(/^\uFEFF/, ""))).sites;
+}
+
+export function sitesFromRows(rows: string[][]): string[] {
+  return extractSites(rows).sites;
+}
+
+export interface ImportedSites {
+  sites: string[];
+  /** Data rows with nothing usable in the URL column (blank rows, stray separators). */
+  skipped: number;
 }
 
 /**
  * Picks the URL column: a header like "url" or "website" if present, otherwise the
  * first column. A non-URL first row (e.g. "Name") is treated as a header and skipped.
  */
-export function sitesFromRows(rows: string[][]): string[] {
-  const nonEmpty = rows.filter((r) => r.some((c) => c.trim()));
-  if (nonEmpty.length === 0) return [];
+export function extractSites(rows: string[][]): ImportedSites {
+  const isBlank = (r: string[]) => !r.some((c) => c.trim());
+  const firstIdx = rows.findIndex((r) => !isBlank(r));
+  if (firstIdx < 0) return { sites: [], skipped: 0 };
 
-  const first = nonEmpty[0].map((c) => c.trim());
+  const first = rows[firstIdx].map((c) => c.trim());
   let column = first.findIndex((c) => URL_HEADERS.test(c));
-  let start = 1;
+  let start = firstIdx + 1;
   if (column < 0) {
     column = 0;
-    start = looksLikeSite(first[0] ?? "") ? 0 : 1;
+    start = looksLikeSite(first[0] ?? "") ? firstIdx : firstIdx + 1;
   }
 
-  return nonEmpty
-    .slice(start)
+  // Trailing blank lines (a final newline) aren't counted as skipped rows.
+  const data = rows.slice(start);
+  let end = data.length;
+  while (end > 0 && isBlank(data[end - 1])) end--;
+  const body = data.slice(0, end);
+
+  const sites = body
     .map((r) => (r[column] ?? "").trim())
     .filter((v) => /[a-z0-9]/i.test(v)); // drops blanks and stray separators like ","
+  return { sites, skipped: body.length - sites.length };
 }
 
 function looksLikeSite(value: string): boolean {

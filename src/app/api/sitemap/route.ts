@@ -40,6 +40,8 @@ export async function POST(request: Request) {
   const site = parseSiteUrl(input);
   if (!site) return json({ error: "Invalid URL" }, 400);
   if (isBlockedHost(site.hostname)) return json({ error: "This host is not allowed" }, 403);
+  // A single word like "abc" isn't a public website (IPv6 literals keep their brackets).
+  if (!site.hostname.includes(".") && !site.hostname.startsWith("[")) return json({ error: "Invalid URL" }, 400);
 
   const origin = site.origin;
 

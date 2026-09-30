@@ -140,7 +140,7 @@ export interface ScanResult {
   sitemapCount: number;
   /** Set when the sitemap couldn't be read; the crawl still runs but orphans can't be found. */
   sitemapError: string | null;
-  /** HTML pages crawled (excludes files that only got a status check). */
+  /** HTML pages that responded (excludes files that only got a status check, and requests with no response). */
   pagesCrawled: number;
   /** Every URL requested during the crawl, pages and files. */
   urlsChecked: number;

@@ -101,18 +101,21 @@ export function SiteAudit() {
     e?.preventDefault();
     if (running) return;
 
-    const { sites, invalid, duplicates, overLimit } = parsed;
+    const { sites, invalid, blocked, duplicates, overLimit } = parsed;
     if (sites.length === 0) {
       setError(
         invalid.length
           ? `${invalid.length === 1 ? "That doesn't" : "These don't"} look like website addresses: ${invalid.slice(0, 3).join(", ")}. Try something like example.com.`
-          : friendlyError("Invalid URL"),
+          : blocked.length
+            ? friendlyError("This host is not allowed")
+            : friendlyError("Invalid URL"),
       );
       return;
     }
 
     const skippedNotes = [
       invalid.length && `${invalid.length} invalid entr${invalid.length === 1 ? "y" : "ies"} skipped (${invalid.slice(0, 3).join(", ")}${invalid.length > 3 ? "…" : ""})`,
+      blocked.length && `${blocked.length} local/private address${blocked.length === 1 ? "" : "es"} not allowed (${blocked.slice(0, 3).join(", ")})`,
       duplicates && `${duplicates} duplicate${duplicates === 1 ? "" : "s"} removed`,
       overLimit && `${overLimit} site${overLimit === 1 ? "" : "s"} over the ${MAX_SITES}-site limit left out`,
     ].filter(Boolean);
@@ -170,7 +173,14 @@ export function SiteAudit() {
             patchJob(job.id, { progress: p });
           },
         );
-        patchJob(job.id, { status: result.cancelled ? "stopped" : "done", result, finishedAt: Date.now() });
+        // A scan whose homepage never loaded (unreachable, blocked, 5xx) found nothing; report it as failed.
+        const problem = result.cancelled ? null : homepageProblem(result);
+        patchJob(job.id, {
+          status: result.cancelled ? "stopped" : problem ? "failed" : "done",
+          error: problem ?? undefined,
+          result,
+          finishedAt: Date.now(),
+        });
         if (single) {
           setSelectedId(job.id);
           setTab(defaultTab(result));
@@ -208,13 +218,16 @@ export function SiteAudit() {
     setImporting(true);
     setError(null);
     try {
-      const entries = await readSiteFile(file);
+      const { sites: entries, skipped } = await readSiteFile(file);
       if (entries.length === 0) {
         setError(`No website addresses found in ${file.name}. Put one site per row in the first column, or in a column named "url".`);
         return;
       }
       setInput((prev) => (prev.trim() ? `${prev.trimEnd()}\n` : "") + entries.join("\n"));
-      setNotice(`Imported ${entries.length} row${entries.length === 1 ? "" : "s"} from ${file.name}. Review the list, then click Scan.`);
+      const skippedNote = skipped ? ` (${skipped} empty row${skipped === 1 ? "" : "s"} skipped)` : "";
+      setNotice(
+        `Imported ${entries.length} row${entries.length === 1 ? "" : "s"} from ${file.name}${skippedNote}. Check the list in the box, then click Scan.`,
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : `Couldn't read ${file.name}.`);
     } finally {
@@ -356,9 +369,12 @@ export function SiteAudit() {
             </span>
           </div>
           {input.trim() && (
-            <span className={`font-mono text-[11px] ${parsed.invalid.length ? "text-status-warning" : "text-muted"}`}>
+            <span
+              className={`font-mono text-[11px] ${parsed.invalid.length || parsed.blocked.length ? "text-status-warning" : "text-muted"}`}
+            >
               {siteCount} site{siteCount === 1 ? "" : "s"} ready
               {parsed.invalid.length > 0 && ` · ${parsed.invalid.length} not valid`}
+              {parsed.blocked.length > 0 && ` · ${parsed.blocked.length} not allowed`}
               {parsed.duplicates > 0 && ` · ${parsed.duplicates} duplicate${parsed.duplicates === 1 ? "" : "s"}`}
             </span>
           )}
