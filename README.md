@@ -7,6 +7,18 @@ Internal tool for engineers and SEO specialists. Paste a website URL (usually Wo
 - **Redirects**: internal links that point at a URL which redirects
 - **Blocked by Cloudflare**: URLs where a bot challenge answered instead of the page
 
+## Checking several sites at once
+
+Paste a list into the URL box, one site per line or separated by commas, and click **Scan N sites**. Up to 50 sites per batch.
+
+- **One at a time:** sites are scanned one after another, and the next starts automatically. Each scan already runs 5 requests in parallel, so this keeps the load predictable.
+- **Clean-up:** duplicates (`example.com`, `https://www.example.com/`) and invalid entries are removed, and a note says what was skipped.
+- **Queue:** shows each site's live status, pages crawled, and broken/orphan/redirect counts.
+- **Failures:** a site that fails doesn't stop the batch. **Stop all** stops the current site and skips the rest.
+- **Details:** click a finished site to open its full results and single-site exports.
+- **Download all sites (.xlsx):** an **Overview** sheet (one row per site) plus combined Broken links / Orphan pages / Redirects / Cloudflare / Unreachable sheets, each with a **Site** column to filter by.
+- **Copy summary:** a plain-text summary of every site, with the first few broken links and orphans for each.
+
 ## How it works
 
 To stay within Vercel's function time limits, the crawl runs in the **browser**, and each server call does only a small amount of work:

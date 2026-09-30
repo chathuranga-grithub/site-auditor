@@ -32,10 +32,13 @@ export function ScanConsole({
   progress,
   log,
   elapsedMs,
+  site,
 }: {
   progress: ScanProgress | null;
   log: LogEntry[];
   elapsedMs: number;
+  /** Shown in the header during a bulk scan, e.g. "example.com (2/5)". */
+  site?: string;
 }) {
   const phase = progress?.phase ?? "sitemap";
   const done = progress?.crawled ?? 0;
@@ -59,6 +62,7 @@ export function ScanConsole({
             <span className="relative size-2 rounded-full bg-accent-2" />
           </span>
           Live · {PHASE_LABELS[phase]}
+          {site && <span className="normal-case tracking-normal text-ink">· {site}</span>}
         </span>
       }
       actions={<span className="font-mono text-xs text-muted tabular-nums">{formatDuration(elapsedMs)}</span>}

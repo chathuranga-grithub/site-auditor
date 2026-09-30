@@ -2,6 +2,7 @@
 // chat/email), friendly error messages, and stats shared by the UI and Excel export
 // (the workbook itself is built in excel-report.ts).
 
+import type { SiteJob } from "./batch";
 import type { ScanResult } from "./types";
 import { normalizeUrl } from "./url";
 
@@ -123,6 +124,29 @@ export function buildTextReport(result: ScanResult): string {
     result.unreachable.map((u) => `- ${u.url}: ${friendlyError(u.error)}`),
   );
 
+  return lines.join("\n");
+}
+
+/** Plain-text summary of a bulk scan: one block per site with its key counts. */
+export function buildBatchTextReport(jobs: SiteJob[]): string {
+  const lines = [`Bulk site audit: ${jobs.length} sites`, `Generated ${new Date().toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })}`, ""];
+  for (const job of jobs) {
+    const r = job.result;
+    if (!r) {
+      lines.push(`${job.host}: ${job.status === "failed" ? `FAILED (${job.error ?? "error"})` : job.status.toUpperCase()}`);
+      continue;
+    }
+    const soft = r.soft404 ? (r.soft404.passed ? "pass" : "FAIL") : "not run";
+    lines.push(
+      `${new URL(r.origin).host}${r.cancelled ? " (stopped early)" : ""}`,
+      `  Broken links: ${r.brokenLinks.length} · Orphan pages: ${r.orphans.length} · Redirects: ${r.redirects.length} · Cloudflare: ${r.blocked.length} · Soft-404: ${soft}`,
+    );
+    for (const b of r.brokenLinks.slice(0, 5)) lines.push(`  - broken ${b.status}: ${b.url}`);
+    if (r.brokenLinks.length > 5) lines.push(`  - …and ${r.brokenLinks.length - 5} more broken links`);
+    for (const o of r.orphans.slice(0, 5)) lines.push(`  - orphan: ${o.url}`);
+    if (r.orphans.length > 5) lines.push(`  - …and ${r.orphans.length - 5} more orphan pages`);
+  }
+  lines.push("", "Full details: download the bulk Excel report.");
   return lines.join("\n");
 }
 

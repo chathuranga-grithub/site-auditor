@@ -1,10 +1,12 @@
 "use client";
 
-// Site Audit tool: scan form, live console, and results (overview + tabbed tables).
-// The crawl itself runs in the browser via runScan (src/lib/crawler.ts).
+// Site Audit tool: scan form (one site or a pasted list), bulk queue, live console,
+// and results (overview + tabbed tables). Sites in a list are scanned one after
+// another automatically; each crawl runs in the browser via runScan (src/lib/crawler.ts).
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Check, Copy, Globe, Play, RotateCcw, Square } from "lucide-react";
+import { MAX_SITES, parseSiteList, type SiteJob } from "@/lib/batch";
 import { runScan } from "@/lib/crawler";
 import {
   buildTextReport,
@@ -14,12 +16,12 @@ import {
   scanWarnings,
 } from "@/lib/report";
 import type { ScanProgress, ScanResult } from "@/lib/types";
-import { parseSiteUrl } from "@/lib/url";
 import { Notice, Panel, StatTile, Tag, buttonClass } from "@/components/ui/primitives";
 import { Tabs, type TabItem } from "@/components/ui/tabs";
 import { ScanConsole, formatDuration, type LogEntry } from "./scan-console";
 import { StatusBreakdown } from "./status-breakdown";
 import { ExportMenu } from "./export-menu";
+import { BatchQueue } from "./batch-queue";
 import {
   AllUrlsTable,
   BlockedTable,
@@ -37,96 +39,160 @@ const LOG_LIMIT = 300;
 type Tab = "urls" | "broken" | "orphans" | "redirects" | "blocked" | "unreachable";
 
 export function SiteAudit() {
-  const [url, setUrl] = useState("");
-  const [scanning, setScanning] = useState(false);
+  const [input, setInput] = useState("");
+  const [jobs, setJobs] = useState<SiteJob[]>([]);
+  const [running, setRunning] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
   const [log, setLog] = useState<LogEntry[]>([]);
-  const [result, setResult] = useState<ScanResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("broken");
-  const [startedAt, setStartedAt] = useState(0);
+  const [siteStartedAt, setSiteStartedAt] = useState(0);
   const [now, setNow] = useState(0);
   const controllerRef = useRef<AbortController | null>(null);
 
+  const parsed = useMemo(() => parseSiteList(input), [input]);
+  const current = jobs.find((j) => j.status === "running");
+  const selected = jobs.find((j) => j.id === selectedId) ?? null;
+  const isBulk = jobs.length > 1;
+
   // Tick the elapsed timer; Esc stops the scan.
   useEffect(() => {
-    if (!scanning) return;
+    if (!running) return;
     const timer = setInterval(() => setNow(Date.now()), 500);
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && controllerRef.current?.abort();
+    const onKey = (e: globalThis.KeyboardEvent) => e.key === "Escape" && controllerRef.current?.abort();
     window.addEventListener("keydown", onKey);
     return () => {
       clearInterval(timer);
       window.removeEventListener("keydown", onKey);
     };
-  }, [scanning]);
+  }, [running]);
+
+  const patchJob = (id: string, patch: Partial<SiteJob>) =>
+    setJobs((list) => list.map((j) => (j.id === id ? { ...j, ...patch } : j)));
 
   /** Back to an empty form. */
   function handleReset() {
-    setUrl("");
-    setResult(null);
+    setInput("");
+    setJobs([]);
+    setSelectedId(null);
     setError(null);
+    setNotice(null);
     setProgress(null);
     setLog([]);
     setTab("broken");
   }
 
-  async function handleScan(e: FormEvent) {
-    e.preventDefault();
-    if (scanning) return;
-    if (!parseSiteUrl(url)) {
-      setError(friendlyError("Invalid URL"));
+  function handleSelect(id: string) {
+    const job = jobs.find((j) => j.id === id);
+    setSelectedId(id);
+    if (job?.result) setTab(defaultTab(job.result));
+  }
+
+  async function handleScan(e?: FormEvent) {
+    e?.preventDefault();
+    if (running) return;
+
+    const { sites, invalid, duplicates, overLimit } = parsed;
+    if (sites.length === 0) {
+      setError(
+        invalid.length
+          ? `${invalid.length === 1 ? "That doesn't" : "These don't"} look like website addresses: ${invalid.slice(0, 3).join(", ")}. Try something like example.com.`
+          : friendlyError("Invalid URL"),
+      );
       return;
     }
 
+    const skippedNotes = [
+      invalid.length && `${invalid.length} invalid entr${invalid.length === 1 ? "y" : "ies"} skipped (${invalid.slice(0, 3).join(", ")}${invalid.length > 3 ? "…" : ""})`,
+      duplicates && `${duplicates} duplicate${duplicates === 1 ? "" : "s"} removed`,
+      overLimit && `${overLimit} site${overLimit === 1 ? "" : "s"} over the ${MAX_SITES}-site limit left out`,
+    ].filter(Boolean);
+    setNotice(skippedNotes.length ? `${skippedNotes.join(" · ")}.` : null);
+
+    const list: SiteJob[] = sites.map((s, i) => ({ id: `${i}-${s.host}`, input: s.input, host: s.host, status: "queued" }));
     const controller = new AbortController();
     controllerRef.current = controller;
-    const start = Date.now();
-    let nextId = 0;
-
-    setScanning(true);
+    setJobs(list);
+    setSelectedId(null);
     setError(null);
-    setResult(null);
-    setProgress(null);
-    setLog([]);
-    setStartedAt(start);
-    setNow(start);
+    setRunning(true);
 
-    try {
-      const scan = await runScan(
-        url,
-        {
-          maxPages: MAX_PAGES,
-          concurrency: CONCURRENCY,
-          signal: controller.signal,
-          onFetch: (r, phase) => {
-            const entry: LogEntry = {
-              id: nextId++,
-              at: Date.now() - start,
-              phase,
-              status: r.status,
-              redirected: r.redirected,
-              blocked: r.blocked,
-              durationMs: r.durationMs,
-              url: r.url,
-              error: r.error,
-            };
-            setLog((prev) => (prev.length >= LOG_LIMIT ? [...prev.slice(-LOG_LIMIT + 1), entry] : [...prev, entry]));
-          },
-        },
-        setProgress,
-      );
-      setResult(scan);
-      setTab(defaultTab(scan));
-    } catch (err) {
-      if (!controller.signal.aborted) {
-        setError(friendlyError(err instanceof Error ? err.message : String(err)));
+    // One site at a time; the next starts as soon as the previous one finishes.
+    for (const job of list) {
+      if (controller.signal.aborted) {
+        patchJob(job.id, { status: "skipped" });
+        continue;
       }
-    } finally {
-      setScanning(false);
-      setNow(Date.now());
-      controllerRef.current = null;
+
+      const start = Date.now();
+      let nextId = 0;
+      setLog([]);
+      setProgress(null);
+      setSiteStartedAt(start);
+      setNow(start);
+      patchJob(job.id, { status: "running", startedAt: start });
+
+      try {
+        const result = await runScan(
+          job.input,
+          {
+            maxPages: MAX_PAGES,
+            concurrency: CONCURRENCY,
+            signal: controller.signal,
+            onFetch: (r, phase) => {
+              const entry: LogEntry = {
+                id: nextId++,
+                at: Date.now() - start,
+                phase,
+                status: r.status,
+                redirected: r.redirected,
+                blocked: r.blocked,
+                durationMs: r.durationMs,
+                url: r.url,
+                error: r.error,
+              };
+              setLog((prev) => (prev.length >= LOG_LIMIT ? [...prev.slice(-LOG_LIMIT + 1), entry] : [...prev, entry]));
+            },
+          },
+          (p) => {
+            setProgress(p);
+            patchJob(job.id, { progress: p });
+          },
+        );
+        patchJob(job.id, { status: result.cancelled ? "stopped" : "done", result, finishedAt: Date.now() });
+        if (list.length === 1) {
+          setSelectedId(job.id);
+          setTab(defaultTab(result));
+        }
+      } catch (err) {
+        const aborted = controller.signal.aborted;
+        const message = err instanceof Error ? err.message : String(err);
+        patchJob(job.id, {
+          status: aborted ? "stopped" : "failed",
+          error: aborted ? undefined : message,
+          finishedAt: Date.now(),
+        });
+        if (list.length === 1 && !aborted) setError(friendlyError(message));
+      }
+    }
+
+    setRunning(false);
+    setNow(Date.now());
+    controllerRef.current = null;
+  }
+
+  // Enter runs the scan; Shift+Enter adds a new line for typing a list by hand.
+  function onInputKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      void handleScan();
     }
   }
+
+  const lineCount = input.split("\n").length;
+  const siteCount = parsed.sites.length;
 
   return (
     <div className="mx-auto w-full max-w-7xl space-y-5 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
@@ -141,59 +207,90 @@ export function SiteAudit() {
           </p>
         </div>
         <div className="flex flex-wrap gap-1.5">
-          <Tag>limit {MAX_PAGES} pages</Tag>
+          <Tag>up to {MAX_SITES} sites</Tag>
+          <Tag>limit {MAX_PAGES} pages / site</Tag>
           <Tag>{CONCURRENCY} workers</Tag>
-          <Tag>15s timeout</Tag>
         </div>
       </header>
 
-      <form onSubmit={handleScan} className="glass flex flex-col gap-2 rounded-xl p-2 sm:flex-row">
-        <label className="relative flex-1">
-          <span className="sr-only">Website URL</span>
-          <Globe className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-subtle" />
-          <input
-            type="text"
-            inputMode="url"
-            autoComplete="url"
-            spellCheck={false}
-            placeholder="https://example.com"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            disabled={scanning}
-            required
-            className="h-10 w-full rounded-lg border border-transparent bg-canvas/60 pr-3 pl-10 font-mono text-base text-ink outline-none placeholder:text-subtle focus:border-accent/60 focus:ring-2 focus:ring-accent/20 disabled:opacity-60 sm:text-sm"
-          />
-        </label>
-        {scanning ? (
-          <button type="button" onClick={() => controllerRef.current?.abort()} className={buttonClass.danger}>
-            <Square className="size-3.5 fill-current" />
-            Stop
-            <kbd className="hidden rounded border border-current/30 px-1 font-mono text-[10px] opacity-70 sm:inline">
-              Esc
-            </kbd>
-          </button>
-        ) : (
-          <>
-            <button type="submit" className={buttonClass.primary}>
-              <Play className="size-3.5 fill-current" />
-              Run scan
+      <form onSubmit={handleScan} className="glass rounded-xl p-2">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
+          <label className="relative flex-1">
+            <span className="sr-only">Website URLs</span>
+            <Globe className="pointer-events-none absolute top-3 left-3.5 size-4 text-subtle" />
+            <textarea
+              rows={Math.min(8, Math.max(1, lineCount))}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="https://example.com — or paste several sites, one per line"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={onInputKeyDown}
+              disabled={running}
+              required
+              className="block min-h-10 w-full resize-none rounded-lg border border-transparent bg-canvas/60 py-2 pr-3 pl-10 font-mono text-base leading-6 text-ink outline-none placeholder:text-subtle focus:border-accent/60 focus:ring-2 focus:ring-accent/20 disabled:opacity-60 sm:text-sm"
+            />
+          </label>
+          {running ? (
+            <button type="button" onClick={() => controllerRef.current?.abort()} className={buttonClass.danger}>
+              <Square className="size-3.5 fill-current" />
+              {isBulk ? "Stop all" : "Stop"}
+              <kbd className="hidden rounded border border-current/30 px-1 font-mono text-[10px] opacity-70 sm:inline">
+                Esc
+              </kbd>
             </button>
-            {(url || result || error) && (
-              <button type="button" onClick={handleReset} className={buttonClass.ghost}>
-                <RotateCcw className="size-3.5" />
-                Reset
+          ) : (
+            <>
+              <button type="submit" className={buttonClass.primary}>
+                <Play className="size-3.5 fill-current" />
+                {siteCount > 1 ? `Scan ${siteCount} sites` : "Run scan"}
               </button>
-            )}
-          </>
-        )}
+              {(input || jobs.length > 0 || error) && (
+                <button type="button" onClick={handleReset} className={buttonClass.ghost}>
+                  <RotateCcw className="size-3.5" />
+                  Reset
+                </button>
+              )}
+            </>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-2 pt-2 pb-0.5 font-mono text-[11px] text-subtle">
+          <span>
+            Paste one site or a list (one per line, or separated by commas). Shift+Enter for a new line.
+          </span>
+          {input.trim() && (
+            <span className={parsed.invalid.length ? "text-status-warning" : "text-muted"}>
+              {siteCount} site{siteCount === 1 ? "" : "s"} ready
+              {parsed.invalid.length > 0 && ` · ${parsed.invalid.length} not valid`}
+              {parsed.duplicates > 0 && ` · ${parsed.duplicates} duplicate${parsed.duplicates === 1 ? "" : "s"}`}
+            </span>
+          )}
+        </div>
       </form>
 
       {error && <Notice tone="error">{error}</Notice>}
+      {notice && <Notice tone="info">{notice}</Notice>}
 
-      {scanning && <ScanConsole progress={progress} log={log} elapsedMs={now - startedAt} />}
+      {isBulk && (
+        <BatchQueue jobs={jobs} running={running} selectedId={selectedId} onSelect={handleSelect} now={now} />
+      )}
 
-      {result && (
-        <Results result={result} tab={tab} onTab={setTab} durationMs={now - startedAt} />
+      {running && current && (
+        <ScanConsole
+          progress={progress}
+          log={log}
+          elapsedMs={now - siteStartedAt}
+          site={isBulk ? `${current.host} (${jobs.indexOf(current) + 1}/${jobs.length})` : undefined}
+        />
+      )}
+
+      {selected?.result && (
+        <Results
+          result={selected.result}
+          tab={tab}
+          onTab={setTab}
+          durationMs={(selected.finishedAt ?? now) - (selected.startedAt ?? now)}
+        />
       )}
     </div>
   );

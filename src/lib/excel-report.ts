@@ -1,21 +1,34 @@
-// Styled Excel export for a finished scan: the full report (Summary + one sheet per
-// category) or a single category on its own. Runs in the browser; exceljs is loaded
-// on demand so it isn't part of the initial page bundle.
+// Styled Excel export: for one scan, the full report (Summary + one sheet per category)
+// or a single category; for a bulk scan, an Overview plus combined category sheets.
+// Runs in the browser; exceljs is loaded on demand so it isn't in the initial bundle.
 
 import type { Workbook, Worksheet } from "exceljs";
 import { exportFileName, friendlyError, homepageProblem, responseTimes, scanWarnings } from "./report";
+import type { JobStatus, SiteJob } from "./batch";
 import type { ScanResult } from "./types";
 
 export type SectionId = "broken" | "orphans" | "redirects" | "blocked" | "unreachable" | "urls";
 
 type CellValue = string | number | boolean | null;
-type Kind = "url" | "status" | "number" | "text" | "flag";
+type Kind = "url" | "status" | "number" | "text" | "flag" | "count" | "badge";
 
 interface ColumnDef {
   header: string;
   width: number;
   kind?: Kind;
+  /** For kind "count": tint used when the value is above zero. */
+  severity?: Severity;
 }
+
+/** Tints for kind "badge" cells (scan status in the bulk overview). */
+const BADGE_SEVERITY: Record<string, Severity> = {
+  Done: "good",
+  Failed: "critical",
+  Stopped: "warning",
+  Skipped: "notice",
+  PASS: "good",
+  FAIL: "serious",
+};
 
 interface SectionDef {
   id: SectionId;
@@ -217,6 +230,93 @@ export async function buildWorkbook(result: ScanResult, what: "full" | SectionId
   return (await wb.xlsx.writeBuffer()) as ArrayBuffer;
 }
 
+// ---------- Bulk (several sites) ----------
+
+const STATUS_LABEL: Record<JobStatus, string> = {
+  queued: "Skipped",
+  running: "Stopped",
+  done: "Done",
+  failed: "Failed",
+  stopped: "Stopped",
+  skipped: "Skipped",
+};
+
+const OVERVIEW_COLUMNS: ColumnDef[] = [
+  { header: "Site", width: 34, kind: "url" },
+  { header: "Status", width: 11, kind: "badge" },
+  { header: "Sitemap URLs", width: 14, kind: "number" },
+  { header: "Pages crawled", width: 15, kind: "number" },
+  { header: "Broken links", width: 14, kind: "count", severity: "critical" },
+  { header: "Orphan pages", width: 15, kind: "count", severity: "serious" },
+  { header: "Redirects", width: 12, kind: "count", severity: "warning" },
+  { header: "Cloudflare", width: 12, kind: "count", severity: "warning" },
+  { header: "Unreachable", width: 13, kind: "count", severity: "notice" },
+  { header: "Soft-404", width: 11, kind: "badge" },
+  { header: "Notes", width: 70 },
+];
+
+/** Downloads one workbook covering every site in a bulk scan. */
+export async function downloadBatchExcel(jobs: SiteJob[]): Promise<void> {
+  const buffer = await buildBatchWorkbook(jobs);
+  const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  saveBlob(blob, `site-audit-bulk-${new Date().toISOString().slice(0, 10)}-${jobs.length}-sites.xlsx`);
+}
+
+/** Overview (one row per site) + one combined sheet per category with a "Site" column. */
+export async function buildBatchWorkbook(jobs: SiteJob[]): Promise<ArrayBuffer> {
+  const { Workbook } = (await import("exceljs")).default;
+  const wb = new Workbook();
+  wb.creator = "Site Auditor";
+  wb.created = new Date();
+
+  const scanned = jobs.filter((j) => j.result);
+  addTableSheet(wb, {
+    name: "Overview",
+    description: "One row per site. The category sheets list every issue across all sites.",
+    meta: `${jobs.length} sites  ·  exported ${formatDate(new Date().toISOString())}`,
+    tabColor: C.accent,
+    columns: OVERVIEW_COLUMNS,
+    rows: jobs.map(overviewRow),
+  });
+
+  for (const s of SECTIONS.filter((x) => x.id !== "urls")) {
+    const rows = scanned.flatMap((j) => s.rows(j.result!).map((r) => [j.host, ...r]));
+    addTableSheet(wb, {
+      name: s.label,
+      description: `${s.description} All sites combined; filter the Site column to see one site.`,
+      meta: `${scanned.length} sites  ·  ${rows.length.toLocaleString()} rows`,
+      tabColor: s.tabColor,
+      columns: [{ header: "Site", width: 28 }, ...s.columns],
+      rows,
+    });
+  }
+
+  return (await wb.xlsx.writeBuffer()) as ArrayBuffer;
+}
+
+function overviewRow(job: SiteJob): CellValue[] {
+  const r = job.result;
+  const site = r?.origin ?? `https://${job.host}`;
+  if (!r) return [site, STATUS_LABEL[job.status], null, null, null, null, null, null, null, null, job.error ?? null];
+
+  const problem = homepageProblem(r);
+  const notes = problem ? [problem] : scanWarnings(r);
+  const soft = r.soft404 ? (r.soft404.passed ? "PASS" : "FAIL") : null;
+  return [
+    site,
+    STATUS_LABEL[job.status],
+    r.sitemapError ? null : r.sitemapCount,
+    r.pagesCrawled,
+    r.brokenLinks.length,
+    r.orphans.length,
+    r.redirects.length,
+    r.blocked.length,
+    r.unreachable.length,
+    soft,
+    notes.join(" ") || null,
+  ];
+}
+
 export function saveBlob(blob: Blob, name: string) {
   const href = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -231,40 +331,54 @@ export function saveBlob(blob: Blob, name: string) {
 const HEADER_ROW = 5;
 
 function addSectionSheet(wb: Workbook, s: SectionDef, result: ScanResult) {
-  const ws = wb.addWorksheet(s.label, {
-    properties: { tabColor: { argb: s.tabColor } },
+  const rows = s.rows(result);
+  addTableSheet(wb, {
+    name: s.label,
+    description: s.description,
+    meta: `${host(result)}  ·  scanned ${formatDate(result.finishedAt)}  ·  ${s.count(result).toLocaleString()} items, ${rows.length.toLocaleString()} rows`,
+    tabColor: s.tabColor,
+    columns: s.columns,
+    rows,
+  });
+}
+
+/** Title block, frozen styled header, banded rows and column filters. */
+function addTableSheet(
+  wb: Workbook,
+  t: { name: string; description: string; meta: string; tabColor: string; columns: ColumnDef[]; rows: CellValue[][] },
+) {
+  const ws = wb.addWorksheet(t.name, {
+    properties: { tabColor: { argb: t.tabColor } },
     views: [{ state: "frozen", ySplit: HEADER_ROW, showGridLines: false }],
   });
-  ws.columns = s.columns.map((c) => ({ width: c.width }));
-
-  const rows = s.rows(result);
-  writeTitle(ws, s.label, s.description, `${host(result)}  ·  scanned ${formatDate(result.finishedAt)}  ·  ${s.count(result).toLocaleString()} items, ${rows.length.toLocaleString()} rows`);
+  ws.columns = t.columns.map((c) => ({ width: c.width }));
+  writeTitle(ws, t.name, t.description, t.meta);
 
   const header = ws.getRow(HEADER_ROW);
-  s.columns.forEach((c, i) => {
+  t.columns.forEach((c, i) => {
     const cell = header.getCell(i + 1);
     cell.value = c.header;
     styleHeaderCell(cell, c.kind);
   });
   header.height = 24;
 
-  if (rows.length === 0) {
+  if (t.rows.length === 0) {
     const cell = ws.getCell(HEADER_ROW + 1, 1);
     cell.value = "Nothing found.";
     cell.font = { italic: true, color: { argb: C.muted } };
     return;
   }
 
-  rows.forEach((values, r) => {
+  t.rows.forEach((values, r) => {
     const row = ws.getRow(HEADER_ROW + 1 + r);
     const banded = r % 2 === 1;
-    s.columns.forEach((c, i) => writeCell(row.getCell(i + 1), values[i], c.kind ?? "text", banded));
+    t.columns.forEach((c, i) => writeCell(row.getCell(i + 1), values[i], c, banded));
     row.height = 18;
   });
 
   ws.autoFilter = {
     from: { row: HEADER_ROW, column: 1 },
-    to: { row: HEADER_ROW + rows.length, column: s.columns.length },
+    to: { row: HEADER_ROW + t.rows.length, column: t.columns.length },
   };
 }
 
@@ -404,18 +518,32 @@ function styleHeaderCell(cell: ExcelCell, kind?: Kind) {
   cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: C.headerFill } };
   cell.alignment = {
     vertical: "middle",
-    horizontal: kind === "number" ? "right" : kind === "status" || kind === "flag" ? "center" : "left",
-    indent: kind === "number" || kind === "status" || kind === "flag" ? 0 : 1,
+    horizontal:
+      kind === "number" ? "right" : kind === "status" || kind === "flag" || kind === "count" || kind === "badge" ? "center" : "left",
+    indent: kind === "text" || kind === "url" || kind === undefined ? 1 : 0,
   };
 }
 
-function writeCell(cell: ExcelCell, value: CellValue, kind: Kind, banded: boolean) {
+function writeCell(cell: ExcelCell, value: CellValue, col: ColumnDef, banded: boolean) {
+  const kind = col.kind ?? "text";
   const fill = banded ? C.band : null;
   cell.alignment = { vertical: "middle" };
   cell.font = { size: 10, color: { argb: C.ink } };
 
   if (value === null || value === "") {
     cell.value = null;
+  } else if (kind === "count" && typeof value === "number") {
+    // Issue count: tinted by the column's severity when non-zero, green when clean.
+    cell.value = value;
+    cell.numFmt = "#,##0";
+    paintSeverity(cell, value > 0 ? (col.severity ?? "warning") : "good");
+    bottomBorder(cell);
+    return;
+  } else if (kind === "badge" && typeof value === "string") {
+    cell.value = value;
+    paintSeverity(cell, BADGE_SEVERITY[value] ?? "notice");
+    bottomBorder(cell);
+    return;
   } else if (kind === "url" && typeof value === "string") {
     cell.value = { text: value, hyperlink: value };
     cell.font = { size: 10, color: { argb: C.link }, underline: true };
