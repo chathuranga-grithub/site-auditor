@@ -1,0 +1,2 @@
+# Import fixtures must keep their exact bytes (UTF-8 BOM, CRLF line endings, binary content).
+test-data/* -text
