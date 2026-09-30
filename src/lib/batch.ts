@@ -1,6 +1,6 @@
 // Bulk scanning: parse a pasted list of sites and describe the scan queue.
-// Sites are scanned one after another (each scan already runs 5 requests in parallel),
-// which keeps load on the serverless functions and the target servers predictable.
+// A few sites are scanned at the same time (see SITES_IN_PARALLEL in site-audit.tsx);
+// the rest wait in the queue and start automatically.
 
 import type { ScanProgress, ScanResult } from "./types";
 import { parseSiteUrl } from "./url";

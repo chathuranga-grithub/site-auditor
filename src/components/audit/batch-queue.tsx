@@ -1,7 +1,8 @@
 "use client";
 
-// Bulk scan queue: every site with its live status and issue counts. Sites run one
-// after another; clicking a finished site opens its full results below.
+// Bulk scan queue: every site with its live status and issue counts. A few sites run
+// at the same time and the rest start automatically; clicking a finished site opens
+// its full results below.
 
 import { useState } from "react";
 import { Check, ChevronRight, Copy, FileSpreadsheet, Loader2 } from "lucide-react";
@@ -17,12 +18,15 @@ export function BatchQueue({
   selectedId,
   onSelect,
   now,
+  parallel,
 }: {
   jobs: SiteJob[];
   running: boolean;
   selectedId: string | null;
   onSelect: (id: string) => void;
   now: number;
+  /** How many sites are scanned at the same time. */
+  parallel: number;
 }) {
   const finished = jobs.filter(isFinished).length;
   const pct = jobs.length ? Math.round((finished / jobs.length) * 100) : 0;
@@ -42,7 +46,7 @@ export function BatchQueue({
         </div>
         <p className="mt-2 text-xs text-muted">
           {running
-            ? "Sites are checked one after another. The next one starts automatically."
+            ? `Up to ${parallel} sites are checked at the same time. The rest start automatically as slots free up.`
             : "Click a site to see its full results."}
         </p>
       </div>
@@ -67,7 +71,7 @@ export function BatchQueue({
               const r = job.result;
               const selectable = !!r;
               const selected = job.id === selectedId;
-              const elapsed = job.startedAt ? (job.finishedAt ?? now) - job.startedAt : null;
+              const elapsed = job.startedAt ? Math.max(0, (job.finishedAt ?? now) - job.startedAt) : null;
               return (
                 <tr
                   key={job.id}

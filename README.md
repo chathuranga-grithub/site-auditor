@@ -9,9 +9,13 @@ Internal tool for engineers and SEO specialists. Paste a website URL (usually Wo
 
 ## Checking several sites at once
 
-Paste a list into the URL box, one site per line or separated by commas, and click **Scan N sites**. Up to 50 sites per batch.
+Paste a list into the URL box (one site per line, or separated by commas), or **import a file**, then click **Scan N sites**. Up to 50 sites per batch.
 
-- **One at a time:** sites are scanned one after another, and the next starts automatically. Each scan already runs 5 requests in parallel, so this keeps the load predictable.
+- **Import CSV / Excel:** click **Sample CSV** to get the template (a single `url` column), fill it in, then click **Import CSV / Excel** or drop the file onto the box.
+  - Accepts `.csv` (comma, semicolon or tab), `.xlsx` and `.txt`.
+  - Uses a column named `url`, `website`, `domain`, `site` or `link` if there is one, otherwise the first column.
+  - Imported sites are added to the box so you can review them before scanning.
+- **In parallel:** 3 sites are scanned at the same time, and the rest start automatically as slots free up. Each site uses 10 parallel requests. That's under about 200 requests a minute per site, which stays below common WordPress security-plugin limits.
 - **Clean-up:** duplicates (`example.com`, `https://www.example.com/`) and invalid entries are removed, and a note says what was skipped.
 - **Queue:** shows each site's live status, pages crawled, and broken/orphan/redirect counts.
 - **Failures:** a site that fails doesn't stop the batch. **Stop all** stops the current site and skips the rest.
@@ -27,7 +31,7 @@ To stay within Vercel's function time limits, the crawl runs in the **browser**,
 |---|---|
 | `POST /api/sitemap` | Finds the sitemap (`/sitemap-index.xml`, `/sitemap_index.xml`, `/sitemap.xml`, then `robots.txt`) and returns every page URL |
 | `POST /api/fetch` | Fetches **one** URL and returns its status, final URL, title, noindex flag and internal links |
-| `src/lib/crawler.ts` | Runs in the browser: crawls breadth-first from the homepage, 5 requests at a time, up to 500 HTML pages |
+| `src/lib/crawler.ts` | Runs in the browser: crawls breadth-first from the homepage, 10 requests at a time, up to 500 HTML pages |
 
 The server refuses private and local addresses (localhost, 10.x, 192.168.x, cloud metadata, etc.). It checks the resolved IP on every redirect hop.
 

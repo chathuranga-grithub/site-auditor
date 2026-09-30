@@ -1,12 +1,13 @@
 "use client";
 
 // Site Audit tool: scan form (one site or a pasted list), bulk queue, live console,
-// and results (overview + tabbed tables). Sites in a list are scanned one after
-// another automatically; each crawl runs in the browser via runScan (src/lib/crawler.ts).
+// and results (overview + tabbed tables). Sites in a list are scanned a few at a time,
+// automatically; each crawl runs in the browser via runScan (src/lib/crawler.ts).
 
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { Check, Copy, Globe, Play, RotateCcw, Square } from "lucide-react";
+import { Check, Copy, FileDown, Globe, Loader2, Play, RotateCcw, Square, Upload } from "lucide-react";
 import { MAX_SITES, parseSiteList, type SiteJob } from "@/lib/batch";
+import { IMPORT_ACCEPT, downloadSampleCsv, readSiteFile } from "@/lib/site-import";
 import { runScan } from "@/lib/crawler";
 import {
   buildTextReport,
@@ -33,7 +34,10 @@ import {
 
 /** Safety limit on HTML pages crawled. Our sites are small, so this is never reached in practice. */
 const MAX_PAGES = 500;
-const CONCURRENCY = 5;
+/** Parallel requests per site. 10 keeps a site under ~200 requests/min, below common WordPress security-plugin throttles. */
+const CONCURRENCY = 10;
+/** Sites scanned at the same time in a bulk scan. Different sites are different servers, so this adds no load per site. */
+const SITES_IN_PARALLEL = 3;
 const LOG_LIMIT = 300;
 
 type Tab = "urls" | "broken" | "orphans" | "redirects" | "blocked" | "unreachable";
@@ -50,7 +54,10 @@ export function SiteAudit() {
   const [tab, setTab] = useState<Tab>("broken");
   const [siteStartedAt, setSiteStartedAt] = useState(0);
   const [now, setNow] = useState(0);
+  const [importing, setImporting] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
   const controllerRef = useRef<AbortController | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const parsed = useMemo(() => parseSiteList(input), [input]);
   const current = jobs.find((j) => j.status === "running");
@@ -118,20 +125,20 @@ export function SiteAudit() {
     setSelectedId(null);
     setError(null);
     setRunning(true);
+    setNow(Date.now());
 
-    // One site at a time; the next starts as soon as the previous one finishes.
-    for (const job of list) {
-      if (controller.signal.aborted) {
-        patchJob(job.id, { status: "skipped" });
-        continue;
-      }
+    const single = list.length === 1;
 
+    async function scanOne(job: SiteJob) {
       const start = Date.now();
       let nextId = 0;
-      setLog([]);
-      setProgress(null);
-      setSiteStartedAt(start);
-      setNow(start);
+      if (single) {
+        // The live console and request log are only shown for a single-site scan.
+        setLog([]);
+        setProgress(null);
+        setSiteStartedAt(start);
+        setNow(start);
+      }
       patchJob(job.id, { status: "running", startedAt: start });
 
       try {
@@ -141,28 +148,30 @@ export function SiteAudit() {
             maxPages: MAX_PAGES,
             concurrency: CONCURRENCY,
             signal: controller.signal,
-            onFetch: (r, phase) => {
-              const entry: LogEntry = {
-                id: nextId++,
-                at: Date.now() - start,
-                phase,
-                status: r.status,
-                redirected: r.redirected,
-                blocked: r.blocked,
-                durationMs: r.durationMs,
-                url: r.url,
-                error: r.error,
-              };
-              setLog((prev) => (prev.length >= LOG_LIMIT ? [...prev.slice(-LOG_LIMIT + 1), entry] : [...prev, entry]));
-            },
+            onFetch: single
+              ? (r, phase) => {
+                  const entry: LogEntry = {
+                    id: nextId++,
+                    at: Date.now() - start,
+                    phase,
+                    status: r.status,
+                    redirected: r.redirected,
+                    blocked: r.blocked,
+                    durationMs: r.durationMs,
+                    url: r.url,
+                    error: r.error,
+                  };
+                  setLog((prev) => (prev.length >= LOG_LIMIT ? [...prev.slice(-LOG_LIMIT + 1), entry] : [...prev, entry]));
+                }
+              : undefined,
           },
           (p) => {
-            setProgress(p);
+            if (single) setProgress(p);
             patchJob(job.id, { progress: p });
           },
         );
         patchJob(job.id, { status: result.cancelled ? "stopped" : "done", result, finishedAt: Date.now() });
-        if (list.length === 1) {
+        if (single) {
           setSelectedId(job.id);
           setTab(defaultTab(result));
         }
@@ -174,13 +183,43 @@ export function SiteAudit() {
           error: aborted ? undefined : message,
           finishedAt: Date.now(),
         });
-        if (list.length === 1 && !aborted) setError(friendlyError(message));
+        if (single && !aborted) setError(friendlyError(message));
       }
     }
+
+    // Up to SITES_IN_PARALLEL sites at once; each free slot picks up the next queued site.
+    let next = 0;
+    const worker = async () => {
+      while (next < list.length) {
+        const job = list[next++];
+        if (controller.signal.aborted) patchJob(job.id, { status: "skipped" });
+        else await scanOne(job);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(SITES_IN_PARALLEL, list.length) }, worker));
 
     setRunning(false);
     setNow(Date.now());
     controllerRef.current = null;
+  }
+
+  /** Adds the sites from a file to the box so they can be reviewed before scanning. */
+  async function handleImport(file: File) {
+    setImporting(true);
+    setError(null);
+    try {
+      const entries = await readSiteFile(file);
+      if (entries.length === 0) {
+        setError(`No website addresses found in ${file.name}. Put one site per row in the first column, or in a column named "url".`);
+        return;
+      }
+      setInput((prev) => (prev.trim() ? `${prev.trimEnd()}\n` : "") + entries.join("\n"));
+      setNotice(`Imported ${entries.length} row${entries.length === 1 ? "" : "s"} from ${file.name}. Review the list, then click Scan.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : `Couldn't read ${file.name}.`);
+    } finally {
+      setImporting(false);
+    }
   }
 
   // Enter runs the scan; Shift+Enter adds a new line for typing a list by hand.
@@ -209,11 +248,37 @@ export function SiteAudit() {
         <div className="flex flex-wrap gap-1.5">
           <Tag>up to {MAX_SITES} sites</Tag>
           <Tag>limit {MAX_PAGES} pages / site</Tag>
-          <Tag>{CONCURRENCY} workers</Tag>
+          <Tag>{CONCURRENCY} requests / site</Tag>
+          <Tag>{SITES_IN_PARALLEL} sites at a time</Tag>
         </div>
       </header>
 
-      <form onSubmit={handleScan} className="glass rounded-xl p-2">
+      <form
+        onSubmit={handleScan}
+        onDragOver={(e) => {
+          if (running || !e.dataTransfer.types.includes("Files")) return;
+          e.preventDefault();
+          setDragOver(true);
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false);
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          const file = e.dataTransfer.files?.[0];
+          if (file && !running) void handleImport(file);
+        }}
+        className={`glass relative rounded-xl p-2 transition ${dragOver ? "ring-2 ring-accent-2" : ""}`}
+      >
+        {dragOver && (
+          <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center rounded-xl bg-canvas/80 text-sm font-medium text-ink backdrop-blur-sm">
+            <span className="inline-flex items-center gap-2">
+              <Upload className="size-4 text-accent-2" />
+              Drop a .csv, .xlsx or .txt file to import sites
+            </span>
+          </div>
+        )}
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
           <label className="relative flex-1">
             <span className="sr-only">Website URLs</span>
@@ -254,12 +319,44 @@ export function SiteAudit() {
             </>
           )}
         </div>
-        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-2 pt-2 pb-0.5 font-mono text-[11px] text-subtle">
-          <span>
-            Paste one site or a list (one per line, or separated by commas). Shift+Enter for a new line.
-          </span>
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1 pt-2 pb-0.5">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <input
+              ref={fileRef}
+              type="file"
+              accept={IMPORT_ACCEPT}
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void handleImport(file);
+                e.target.value = "";
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => fileRef.current?.click()}
+              disabled={running || importing}
+              className={`${buttonClass.secondary} disabled:opacity-50`}
+              title="Import a list of sites from a .csv, .xlsx or .txt file"
+            >
+              {importing ? <Loader2 className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />}
+              Import CSV / Excel
+            </button>
+            <button
+              type="button"
+              onClick={downloadSampleCsv}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs text-link hover:bg-surface-2 hover:text-accent-2"
+              title="Download a sample file to fill in with your sites"
+            >
+              <FileDown className="size-3.5" />
+              Sample CSV
+            </button>
+            <span className="hidden font-mono text-[11px] text-subtle lg:inline">
+              · or paste a list (one per line, or comma-separated) · drop a file here
+            </span>
+          </div>
           {input.trim() && (
-            <span className={parsed.invalid.length ? "text-status-warning" : "text-muted"}>
+            <span className={`font-mono text-[11px] ${parsed.invalid.length ? "text-status-warning" : "text-muted"}`}>
               {siteCount} site{siteCount === 1 ? "" : "s"} ready
               {parsed.invalid.length > 0 && ` · ${parsed.invalid.length} not valid`}
               {parsed.duplicates > 0 && ` · ${parsed.duplicates} duplicate${parsed.duplicates === 1 ? "" : "s"}`}
@@ -272,10 +369,10 @@ export function SiteAudit() {
       {notice && <Notice tone="info">{notice}</Notice>}
 
       {isBulk && (
-        <BatchQueue jobs={jobs} running={running} selectedId={selectedId} onSelect={handleSelect} now={now} />
+        <BatchQueue jobs={jobs} running={running} selectedId={selectedId} onSelect={handleSelect} now={now} parallel={SITES_IN_PARALLEL} />
       )}
 
-      {running && current && (
+      {running && !isBulk && current && (
         <ScanConsole
           progress={progress}
           log={log}
