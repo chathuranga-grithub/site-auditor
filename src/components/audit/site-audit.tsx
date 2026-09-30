@@ -4,7 +4,7 @@
 // and results (overview + tabbed tables). Sites in a list are scanned a few at a time,
 // automatically; each crawl runs in the browser via runScan (src/lib/crawler.ts).
 
-import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Check, Copy, FileDown, Globe, Loader2, Play, RotateCcw, Square, Upload } from "lucide-react";
 import { MAX_SITES, parseSiteList, type SiteJob } from "@/lib/batch";
 import { IMPORT_ACCEPT, downloadSampleCsv, readSiteFile } from "@/lib/site-import";
@@ -91,11 +91,16 @@ export function SiteAudit() {
     setTab("broken");
   }
 
-  function handleSelect(id: string) {
-    const job = jobs.find((j) => j.id === id);
+  // Stable callback (reads jobs through a ref) so memoised queue rows don't re-render on every update.
+  const jobsRef = useRef(jobs);
+  useEffect(() => {
+    jobsRef.current = jobs;
+  }, [jobs]);
+  const handleSelect = useCallback((id: string) => {
+    const job = jobsRef.current.find((j) => j.id === id);
     setSelectedId(id);
     if (job?.result) setTab(defaultTab(job.result));
-  }
+  }, []);
 
   async function handleScan(e?: FormEvent) {
     e?.preventDefault();

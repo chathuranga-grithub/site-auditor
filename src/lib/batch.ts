@@ -5,7 +5,7 @@
 import type { ScanProgress, ScanResult } from "./types";
 import { isBlockedHost, parseSiteUrl } from "./url";
 
-export const MAX_SITES = 50;
+export const MAX_SITES = 200;
 
 export type JobStatus = "queued" | "running" | "done" | "failed" | "stopped" | "skipped";
 

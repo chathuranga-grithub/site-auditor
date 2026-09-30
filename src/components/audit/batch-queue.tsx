@@ -4,7 +4,7 @@
 // at the same time and the rest start automatically; clicking a finished site opens
 // its full results below.
 
-import { useState } from "react";
+import { memo, useState } from "react";
 import { Check, ChevronRight, Copy, FileSpreadsheet, Loader2 } from "lucide-react";
 import { isFinished, type SiteJob } from "@/lib/batch";
 import { downloadBatchExcel } from "@/lib/excel-report";
@@ -67,53 +67,77 @@ export function BatchQueue({
             </tr>
           </thead>
           <tbody className="divide-y divide-line">
-            {jobs.map((job, i) => {
-              const r = job.result;
-              const selectable = !!r;
-              const selected = job.id === selectedId;
-              const elapsed = job.startedAt ? Math.max(0, (job.finishedAt ?? now) - job.startedAt) : null;
-              return (
-                <tr
-                  key={job.id}
-                  onClick={selectable ? () => onSelect(job.id) : undefined}
-                  className={`transition-colors ${selectable ? "cursor-pointer hover:bg-surface-2" : ""} ${
-                    selected ? "bg-accent/10 ring-1 ring-accent/40 ring-inset" : ""
-                  }`}
-                >
-                  <td className="px-4 py-2.5 font-mono text-xs text-subtle tabular-nums">{i + 1}</td>
-                  <td className="px-4 py-2.5 font-mono text-xs text-ink">{job.host}</td>
-                  <td className="px-4 py-2.5">
-                    <JobStatusCell job={job} />
-                  </td>
-                  <td className="px-4 py-2.5 text-right font-mono text-xs text-muted tabular-nums">
-                    {r ? r.pagesCrawled : job.status === "running" ? (job.progress?.crawled ?? 0) : "—"}
-                  </td>
-                  <td className="px-4 py-2.5 text-right">
-                    <Count value={r?.brokenLinks.length} severity="critical" />
-                  </td>
-                  <td className="px-4 py-2.5 text-right">
-                    <Count value={r?.orphans.length} severity="serious" />
-                  </td>
-                  <td className="px-4 py-2.5 text-right">
-                    <Count value={r?.redirects.length} severity="warning" />
-                  </td>
-                  <td className="px-4 py-2.5 text-right font-mono text-xs text-muted tabular-nums">
-                    {elapsed === null ? "—" : formatDuration(elapsed)}
-                  </td>
-                  <td className="px-2 py-2.5 text-right">
-                    {selectable && (
-                      <ChevronRight className={`inline size-4 ${selected ? "text-accent-2" : "text-subtle"}`} aria-hidden />
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
+            {jobs.map((job, i) => (
+              <QueueRow
+                key={job.id}
+                job={job}
+                index={i}
+                selected={job.id === selectedId}
+                // Only running rows need the ticking clock; the rest keep a constant so they don't re-render.
+                now={job.status === "running" ? now : 0}
+                onSelect={onSelect}
+              />
+            ))}
           </tbody>
         </table>
       </div>
     </Panel>
   );
 }
+
+/**
+ * One site's row. Memoised so a 200-site batch only re-renders the rows whose job
+ * changed (jobs are replaced immutably on update) instead of the whole table.
+ */
+const QueueRow = memo(function QueueRow({
+  job,
+  index,
+  selected,
+  now,
+  onSelect,
+}: {
+  job: SiteJob;
+  index: number;
+  selected: boolean;
+  now: number;
+  onSelect: (id: string) => void;
+}) {
+  const r = job.result;
+  const selectable = !!r;
+  const elapsed = job.startedAt ? Math.max(0, (job.finishedAt ?? now) - job.startedAt) : null;
+  return (
+    <tr
+      onClick={selectable ? () => onSelect(job.id) : undefined}
+      className={`transition-colors ${selectable ? "cursor-pointer hover:bg-surface-2" : ""} ${
+        selected ? "bg-accent/10 ring-1 ring-accent/40 ring-inset" : ""
+      }`}
+    >
+      <td className="px-4 py-2.5 font-mono text-xs text-subtle tabular-nums">{index + 1}</td>
+      <td className="px-4 py-2.5 font-mono text-xs text-ink">{job.host}</td>
+      <td className="px-4 py-2.5">
+        <JobStatusCell job={job} />
+      </td>
+      <td className="px-4 py-2.5 text-right font-mono text-xs text-muted tabular-nums">
+        {r ? r.pagesCrawled : job.status === "running" ? (job.progress?.crawled ?? 0) : "—"}
+      </td>
+      <td className="px-4 py-2.5 text-right">
+        <Count value={r?.brokenLinks.length} severity="critical" />
+      </td>
+      <td className="px-4 py-2.5 text-right">
+        <Count value={r?.orphans.length} severity="serious" />
+      </td>
+      <td className="px-4 py-2.5 text-right">
+        <Count value={r?.redirects.length} severity="warning" />
+      </td>
+      <td className="px-4 py-2.5 text-right font-mono text-xs text-muted tabular-nums">
+        {elapsed === null ? "—" : formatDuration(elapsed)}
+      </td>
+      <td className="px-2 py-2.5 text-right">
+        {selectable && <ChevronRight className={`inline size-4 ${selected ? "text-accent-2" : "text-subtle"}`} aria-hidden />}
+      </td>
+    </tr>
+  );
+});
 
 function JobStatusCell({ job }: { job: SiteJob }) {
   switch (job.status) {

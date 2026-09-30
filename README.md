@@ -9,7 +9,7 @@ Internal tool for engineers and SEO specialists. Paste a website URL (usually Wo
 
 ## Checking several sites at once
 
-Paste a list into the URL box (one site per line, or separated by commas), or **import a file**, then click **Scan N sites**. Up to 50 sites per batch.
+Paste a list into the URL box (one site per line, or separated by commas), or **import a file**, then click **Scan N sites**. Up to 200 sites per batch. A full batch takes roughly 20–35 minutes, and the browser tab must stay open. For more sites, split the list into batches.
 
 - **Import CSV / Excel:** click **Sample CSV** to get the template (a single `url` column), fill it in, then click **Import CSV / Excel** or drop the file onto the box.
   - Accepts `.csv` (comma, semicolon or tab), `.xlsx` and `.txt`.
