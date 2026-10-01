@@ -24,7 +24,9 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
   // Render per request so the signed-in user is always current (never a build-time snapshot).
   await connection();
   const session = AUTH_CONFIGURED ? await auth() : null;
-  const user = session?.user?.email ? { email: session.user.email, name: session.user.name } : null;
+  const user = session?.user?.email
+    ? { email: session.user.email, name: session.user.name, image: session.user.image }
+    : null;
 
   return (
     <html
