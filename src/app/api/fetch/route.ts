@@ -4,6 +4,7 @@
 // so each request stays well under Vercel's free-plan function time limit.
 
 import * as cheerio from "cheerio";
+import { isAuthorized } from "@/auth";
 import { BlockedUrlError, describeFetchError, safeFetch } from "@/lib/safe-fetch";
 import type { FetchResponse, FetchResult, PageLink } from "@/lib/types";
 import { isBlockedHost, isInternal, shouldSkipCrawl } from "@/lib/url";
@@ -17,6 +18,8 @@ const HTML_ACCEPT ="text/html,application/xhtml+xml;q=0.9,*/*;q=0.8";
 const SKIP_SCHEMES = /^(mailto|tel|javascript):/i;
 
 export async function POST(request: Request) {
+  if (!(await isAuthorized())) return json({ error: "Sign in with your company Google account to use Site Auditor." }, 401);
+
   let body: { url?: unknown; siteHost?: unknown };
   try {
     body = await request.json();

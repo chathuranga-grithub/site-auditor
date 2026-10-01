@@ -252,7 +252,7 @@ async function loadSitemap(siteUrl: string, signal?: AbortSignal) {
   const data = (await res.json().catch(() => ({ error: `Sitemap API error (${res.status})` }))) as SitemapResponse;
 
   if ("urls" in data) return { origin: data.origin, urls: data.urls, error: null };
-  if (res.status === 400 || res.status === 403) throw new Error(data.error);
+  if (res.status === 400 || res.status === 401 || res.status === 403) throw new Error(data.error);
 
   const site = parseSiteUrl(siteUrl);
   if (!site) throw new Error("Invalid URL");

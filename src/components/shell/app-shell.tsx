@@ -6,18 +6,29 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, type ReactNode } from "react";
-import { Menu, X } from "lucide-react";
+import { LogOut, Menu, X } from "lucide-react";
+import { signOutAction } from "@/app/actions";
 import { TOOLS } from "@/config/tools";
 
-export function AppShell({ children }: { children: ReactNode }) {
+export interface ShellUser {
+  email: string;
+  name?: string | null;
+}
+
+export function AppShell({ children, user }: { children: ReactNode; user?: ShellUser | null }) {
   const [open, setOpen] = useState(false);
+  const pathname = usePathname();
+
+  // The login page is shown on its own, without navigation.
+  if (pathname === "/login") return <>{children}</>;
 
   return (
     <div className="flex min-h-screen">
       <aside className="hidden w-60 shrink-0 border-r border-line bg-canvas/60 backdrop-blur-xl md:block">
-        <div className="sticky top-0">
+        <div className="sticky top-0 flex h-screen flex-col">
           <Brand />
           <Nav />
+          {user && <UserMenu user={user} />}
         </div>
       </aside>
 
@@ -29,7 +40,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             onClick={() => setOpen(false)}
           />
-          <aside className="relative h-full w-64 border-r border-line bg-surface-solid">
+          <aside className="relative flex h-full w-64 flex-col border-r border-line bg-surface-solid">
             <div className="flex items-center justify-between pr-2">
               <Brand />
               <button
@@ -42,6 +53,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               </button>
             </div>
             <Nav onNavigate={() => setOpen(false)} />
+            {user && <UserMenu user={user} />}
           </aside>
         </div>
       )}
@@ -60,6 +72,35 @@ export function AppShell({ children }: { children: ReactNode }) {
         </header>
         <main className="min-w-0 flex-1">{children}</main>
       </div>
+    </div>
+  );
+}
+
+/** Signed-in account and sign-out, pinned to the bottom of the sidebar. */
+function UserMenu({ user }: { user: ShellUser }) {
+  const initial = (user.name || user.email).trim().charAt(0).toUpperCase();
+  return (
+    <div className="mt-auto border-t border-line p-3">
+      <div className="flex items-center gap-2.5 px-1">
+        <span className="grid size-8 shrink-0 place-items-center rounded-full bg-surface-2 font-mono text-xs text-ink ring-1 ring-line-strong">
+          {initial}
+        </span>
+        <div className="min-w-0 flex-1">
+          {user.name && <div className="truncate text-sm text-ink">{user.name}</div>}
+          <div className="truncate font-mono text-[11px] text-subtle" title={user.email}>
+            {user.email}
+          </div>
+        </div>
+      </div>
+      <form action={signOutAction} className="mt-2">
+        <button
+          type="submit"
+          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-muted transition hover:bg-surface-2 hover:text-ink"
+        >
+          <LogOut className="size-4" />
+          Sign out
+        </button>
+      </form>
     </div>
   );
 }

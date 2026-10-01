@@ -3,6 +3,7 @@
 // the flat list of page URLs. This list is the source of truth for orphan detection.
 
 import * as cheerio from "cheerio";
+import { isAuthorized } from "@/auth";
 import { BlockedUrlError, describeFetchError, safeFetch } from "@/lib/safe-fetch";
 import type { SitemapResponse } from "@/lib/types";
 import { isBlockedHost, normalizeUrl, parseSiteUrl } from "@/lib/url";
@@ -27,6 +28,8 @@ interface ParsedSitemap {
 }
 
 export async function POST(request: Request) {
+  if (!(await isAuthorized())) return json({ error: "Sign in with your company Google account to use Site Auditor." }, 401);
+
   let input: unknown;
   try {
     input = ((await request.json()) as { url?: unknown })?.url;

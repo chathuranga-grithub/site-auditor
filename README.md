@@ -48,9 +48,34 @@ Open http://localhost:3000. It redirects to the Site Audit tool.
 
 Other scripts: `npm run build` (production build and type-check), `npm run lint`.
 
+## Login (company Google accounts)
+
+Every page and API route requires **Sign in with Google**, and only verified `@grithub.ae` Google Workspace accounts are allowed. This is set up in `src/auth.ts` and `src/proxy.ts`, using Auth.js.
+
+It needs three environment variables:
+
+| Variable | What it is |
+|---|---|
+| `AUTH_GOOGLE_ID` | OAuth client ID from Google Cloud |
+| `AUTH_GOOGLE_SECRET` | OAuth client secret from Google Cloud |
+| `AUTH_SECRET` | Random string used to sign sessions. Generate one with `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"` |
+
+- **Production without them:** the app stays **locked**. The login page says login isn't set up.
+- **Local `npm run dev` without them:** the app runs without login, so development isn't blocked. To test login locally, put the three values in `.env.local`.
+
+**Google Cloud setup (one time):**
+1. Go to [console.cloud.google.com](https://console.cloud.google.com), signed in with a `@grithub.ae` account, and create a project.
+2. Open **APIs & Services → OAuth consent screen**. Choose user type **Internal**, so only your Workspace can sign in. Fill in the app name and support email.
+3. Open **APIs & Services → Credentials → Create credentials → OAuth client ID**, and choose **Web application**.
+   - **Authorized JavaScript origins:** `https://site-auditor-pi.vercel.app` (and `http://localhost:3000` for local testing).
+   - **Authorized redirect URIs:** `https://site-auditor-pi.vercel.app/api/auth/callback/google` (and `http://localhost:3000/api/auth/callback/google`).
+4. Copy the client ID and secret into Vercel: **Project → Settings → Environment Variables**, together with `AUTH_SECRET`. Then redeploy.
+
+If you add a custom domain later, add its origin and callback URL in Google Cloud too.
+
 ## Deploy
 
-The app deploys to Vercel with no configuration and needs no environment variables. Both API routes set `runtime = "nodejs"` and `maxDuration = 30`. Each call handles one URL, so a normal request finishes in a few seconds.
+The app deploys to Vercel with no extra build configuration. It needs the three login environment variables above. Both API routes set `runtime = "nodejs"` and `maxDuration = 30`. Each call handles one URL, so a normal request finishes in a few seconds.
 
 1. Push the repo to GitHub.
 2. On vercel.com, choose **Add New → Project** and import the repo.
