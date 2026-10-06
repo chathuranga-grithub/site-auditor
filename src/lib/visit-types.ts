@@ -105,8 +105,6 @@ export interface VisitReport {
   proxy: ProxyInfo | null;
   /** Where the visit came from, checked inside the proxied browser before any page is opened. */
   exit: ExitInfo | null;
-  /** This computer's own public IP, looked up without the proxy. Must differ from exit.ip. */
-  localIp: string | null;
   /** Checked again after the last page, to catch the proxy changing IP or country mid-test. */
   exitEnd: ExitInfo | null;
   start: VisitPage | null;
@@ -144,7 +142,7 @@ export interface Discovery {
 /** Streamed from POST /api/visit-test, one JSON object per line. */
 export type VisitEvent =
   | { type: "step"; message: string }
-  | { type: "proxy"; proxy: ProxyInfo; exit: ExitInfo | null; localIp: string | null }
+  | { type: "proxy"; proxy: ProxyInfo; exit: ExitInfo | null }
   | { type: "page"; page: VisitPage }
   | { type: "scroll"; scroll: ScrollResult }
   | { type: "discovered"; discovery: Discovery }

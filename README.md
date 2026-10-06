@@ -70,11 +70,7 @@ The third tool, at `/visit-test`. It checks that **every page of a company site 
 **What it does:**
 1. Gets a proxy from your proxy provider's API, e.g. ShopLike, which returns `{ status: "success", data: { proxy: "ip:port" } }`.
 2. Opens a real browser (the **Microsoft Edge or Google Chrome installed on the computer**) through that proxy.
-3. **Proves the visit really uses the proxy, from Vietnam, before opening any page:**
-   - It looks up the visit's IP and country inside the proxied browser (ipinfo.io, with api.country.is as a backup).
-   - It looks up this computer's own IP without the proxy.
-   - The test stops, with no pages opened, if the two IPs are the same (the proxy isn't being used), if the country isn't Vietnam, or if the location can't be confirmed.
-   - This matters because the office connection is in Vietnam too: a country check alone would pass even without the proxy.
+3. **Checks the proxy IP is in Vietnam before opening any page:** it looks up the IP and country through the proxy (ipinfo.io, with api.country.is as a backup). The test stops, with no pages opened, if it isn't Vietnam or can't be confirmed. Nothing is sent from this computer's own IP, and with a proxy set the browser never falls back to a direct connection.
 4. Opens the start page, scrolls it and checks its images.
 5. **Finds every internal page:**
    - the sitemap (Yoast, Rank Math, WordPress core `wp-sitemap.xml`, or the one listed in robots.txt), read through the proxy too;

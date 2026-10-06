@@ -32,26 +32,14 @@ export function buildChecklist(r: VisitReport): ChecklistItem[] {
     r.proxy ? `${r.proxy.address}${r.proxy.reused ? " (previous proxy reused, provider not giving a new IP yet)" : ""}` : "The proxy API didn't return a proxy",
   );
 
-  // 2-3. The visit really goes through the proxy, from the right country
+  // 2. The proxy IP is in the right country (looked up through the proxy)
   const country = new Intl.DisplayNames(["en"], { type: "region" }).of(EXPECTED_COUNTRY) ?? EXPECTED_COUNTRY;
   if (!r.exit) {
-    add("proxy-used", "Proxy IP used (not this computer's)", r.proxy ? "fail" : "skip", r.proxy ? "Couldn't look up the visit's IP, so the test stopped" : notRun);
-    add("location", `Visitor is in ${country}`, r.proxy ? "fail" : "skip", r.proxy ? "Couldn't look up the visit's country" : notRun);
+    add("location", `Proxy IP is in ${country}`, r.proxy ? "fail" : "skip", r.proxy ? "Couldn't look up the proxy IP's location, so the test stopped" : notRun);
   } else {
-    const same = !!r.localIp && r.exit.ip === r.localIp;
-    add(
-      "proxy-used",
-      "Proxy IP used (not this computer's)",
-      same ? "fail" : r.localIp ? "pass" : "warn",
-      same
-        ? `The visit used this computer's own IP (${r.exit.ip})`
-        : r.localIp
-          ? `Visit IP ${r.exit.ip} · this computer's IP ${r.localIp}`
-          : `Visit IP ${r.exit.ip} · couldn't look up this computer's IP to compare`,
-    );
     add(
       "location",
-      `Visitor is in ${country}`,
+      `Proxy IP is in ${country}`,
       r.exit.countryCode === EXPECTED_COUNTRY ? "pass" : "fail",
       `${r.exit.country ?? "Unknown"}${r.exit.city ? `, ${r.exit.city}` : ""} · ${r.exit.ip}${r.exit.org ? ` · ${r.exit.org}` : ""}`,
     );

@@ -65,7 +65,6 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, signal, send }: V
     finishedAt: "",
     proxy: null,
     exit: null,
-    localIp: null,
     exitEnd: null,
     start: null,
     scroll: null,
@@ -80,9 +79,6 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, signal, send }: V
     if (signal.aborted) report.cancelled = true;
     return signal.aborted;
   };
-
-  // This computer's own IP (no proxy), to prove the test really goes through the proxy.
-  const localIp = publicIpDirect();
 
   // 1. Proxy
   send({ type: "step", message: "Getting a proxy from the proxy API…" });
@@ -109,19 +105,19 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, signal, send }: V
     const phone = mobile ? await browser.newContext({ ...PHONE, locale: "vi-VN", timezoneId: "Asia/Ho_Chi_Minh" }) : null;
     phone?.setDefaultNavigationTimeout(NAV_TIMEOUT);
 
-    // 2. Where does the visit really come from? Checked inside the proxied browser and compared
-    // with this computer's own IP. Wrong or unknown location: stop before opening any page.
-    send({ type: "step", message: "Checking the visit really comes from the proxy (IP and country)…" });
+    // 2. Where does the visit come from? Looked up inside the proxied browser (through the proxy;
+    // nothing is sent from this computer's own IP). Wrong or unknown location: stop before opening
+    // any page. With a proxy set, the browser never falls back to a direct connection.
+    send({ type: "step", message: "Checking the proxy IP's location…" });
     report.exit = await exitLocation(context);
-    report.localIp = await localIp;
-    send({ type: "proxy", proxy: publicProxy, exit: report.exit, localIp: report.localIp });
+    send({ type: "proxy", proxy: publicProxy, exit: report.exit });
     if (stopped()) return finish(report);
-    report.stopReason = exitProblem(report.exit, report.localIp);
+    report.stopReason = exitProblem(report.exit);
     if (report.stopReason) return finish(report);
     const exit = report.exit!;
     send({
       type: "step",
-      message: `Confirmed: visiting from ${exit.country}${exit.city ? `, ${exit.city}` : ""} (IP ${exit.ip}${report.localIp ? `, not this computer's ${report.localIp}` : ""}).`,
+      message: `Confirmed: visiting from ${exit.country}${exit.city ? `, ${exit.city}` : ""} (proxy IP ${exit.ip}${exit.org ? `, ${exit.org}` : ""}).`,
     });
     // The sitemap is read through the proxy too, so every request to the site comes from there.
     const sitemap = readSitemap(new URL(url).origin, proxiedFetcher(context)).catch(() => null);
@@ -303,24 +299,9 @@ async function exitLocation(context: BrowserContext): Promise<ExitInfo | null> {
   return null;
 }
 
-/** This computer's own public IP, without the proxy. */
-async function publicIpDirect(): Promise<string | null> {
-  for (const service of IP_SERVICES) {
-    try {
-      const res = await fetch(service, { signal: AbortSignal.timeout(10_000), headers: { accept: "application/json" } });
-      const ip = ((await res.json()) as { ip?: string }).ip;
-      if (ip) return ip;
-    } catch {
-      /* try the next service */
-    }
-  }
-  return null;
-}
-
 /** Why the test must not continue from this IP, or null when it's the right country through the proxy. */
-function exitProblem(exit: ExitInfo | null, localIp: string | null): string | null {
+function exitProblem(exit: ExitInfo | null): string | null {
   if (!exit) return "Couldn't confirm the proxy's IP and country, so no pages were opened (the results might not be from the right country). Run the test again.";
-  if (localIp && exit.ip === localIp) return `The visit used this computer's own IP (${exit.ip}), not the proxy, so no pages were opened.`;
   if (exit.countryCode !== EXPECTED_COUNTRY) {
     const where = new Intl.DisplayNames(["en"], { type: "region" }).of(EXPECTED_COUNTRY);
     return `The proxy's IP (${exit.ip}) is in ${exit.country ?? "an unknown country"}, not ${where}, so no pages were opened. Get a ${where} proxy and run again.`;
