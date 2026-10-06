@@ -24,7 +24,7 @@ export function RankTable({
 }) {
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[860px] text-left text-sm">
+      <table className="w-full min-w-[700px] text-left text-sm">
         <thead className="border-b border-line bg-surface font-mono text-[10px] tracking-[0.14em] text-subtle uppercase">
           <tr>
             <th className="w-12 px-4 py-2.5 font-medium">#</th>
@@ -49,16 +49,18 @@ export function RankTable({
                 className={`cursor-pointer transition-colors hover:bg-surface-2 ${isSel ? "bg-accent/10 ring-1 ring-accent/40 ring-inset" : ""}`}
               >
                 <td className="px-4 py-2.5 align-top font-mono text-sm font-semibold text-ink tabular-nums">{r.position}</td>
-                <td className="px-4 py-2.5 align-top">
-                  <div className="font-mono text-xs text-ink">{r.domain}</div>
+                {/* w-full + max-w-0: the cell takes the spare width but never grows past it, so long URLs are cut with … instead of widening the table. */}
+                <td className="w-full max-w-0 px-4 py-2.5 align-top">
+                  <div className="truncate font-mono text-xs text-ink">{r.domain}</div>
                   <div className="mt-0.5 flex min-w-0 items-center gap-1">
-                    <span className="truncate font-mono text-[11px] text-link" title={r.url}>
+                    {/* Fixed width: every URL is cut at the same point and the buttons line up. */}
+                    <span className="w-[26rem] max-w-full truncate font-mono text-[11px] text-link" title={r.url}>
                       {r.url}
                     </span>
                     <CopyUrlButton url={r.url} />
                     <VisitTestButton url={r.url} />
                   </div>
-                  <div className="mt-0.5 line-clamp-1 text-xs text-muted">{r.title}</div>
+                  <div className="mt-0.5 max-w-[26rem] truncate text-xs text-muted" title={r.title}>{r.title}</div>
                 </td>
                 {page ? (
                   <>
