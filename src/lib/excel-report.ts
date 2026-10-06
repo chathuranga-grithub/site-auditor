@@ -5,6 +5,9 @@
 import type { Workbook, Worksheet } from "exceljs";
 import { exportFileName, friendlyError, homepageProblem, responseTimes, scanWarnings } from "./report";
 import type { JobStatus, SiteJob } from "./batch";
+import { findCountry } from "./countries";
+import { SEO_CHECKS, checksPassed, isAnalyzable } from "./rankings-checks";
+import type { AnalysisState, PageSeo, SerpResponse } from "./rankings-types";
 import type { ScanResult } from "./types";
 
 export type SectionId = "broken" | "orphans" | "redirects" | "blocked" | "unreachable" | "urls";
@@ -315,6 +318,88 @@ function overviewRow(job: SiteJob): CellValue[] {
     soft,
     notes.join(" ") || null,
   ];
+}
+
+// ---------- Keyword Rankings ----------
+
+const RANKING_COLUMNS: ColumnDef[] = [
+  { header: "#", width: 6, kind: "number" },
+  { header: "Domain", width: 26 },
+  { header: "URL", width: 56, kind: "url" },
+  { header: "Google title", width: 44 },
+  { header: "Checks passed", width: 14 },
+  { header: "Words", width: 10, kind: "number" },
+  { header: "Response (ms)", width: 14, kind: "number" },
+  { header: "Size (KB)", width: 11, kind: "number" },
+  { header: "Title length", width: 13, kind: "number" },
+  { header: "Description length", width: 19, kind: "number" },
+  { header: "H1", width: 7, kind: "number" },
+  { header: "H2", width: 7, kind: "number" },
+  { header: "HTTPS", width: 9, kind: "flag" },
+  { header: "Mobile viewport", width: 16, kind: "flag" },
+  { header: "Canonical", width: 12 },
+  { header: "Schema types", width: 34 },
+  { header: "og:image", width: 10, kind: "flag" },
+  { header: "Images missing alt", width: 18, kind: "number" },
+  { header: "Internal links", width: 14, kind: "number" },
+  { header: "External links", width: 14, kind: "number" },
+  { header: "Note", width: 44 },
+];
+
+/** One sheet: every ranking page with its on-page SEO measurements. */
+export async function downloadRankingsExcel(data: SerpResponse, analysis: Record<string, AnalysisState>): Promise<void> {
+  const { Workbook } = (await import("exceljs")).default;
+  const wb = new Workbook();
+  wb.creator = "Site Auditor";
+  wb.created = new Date(data.searchedAt);
+
+  const country = findCountry(data.country)?.name ?? data.country;
+  const rows: CellValue[][] = data.results.map((r) => {
+    const a = analysis[r.url];
+    const p = isAnalyzable(a as PageSeo) ? (a as PageSeo) : null;
+    const base: CellValue[] = [r.position, r.domain, r.url, r.title];
+    if (!p) return [...base, null, ...Array(15).fill(null), a && a !== "pending" ? unavailableNote(a) : "Not analysed"];
+    return [
+      ...base,
+      `${checksPassed(p)}/${SEO_CHECKS.length}`,
+      p.wordCount,
+      p.durationMs,
+      Math.round(p.bytes / 1024),
+      p.title?.length ?? 0,
+      p.description?.length ?? 0,
+      p.h1Count,
+      p.h2Count,
+      p.https,
+      p.viewport,
+      p.canonical ? (p.canonicalSelf ? "Self" : "Other URL") : "Missing",
+      p.schemaTypes.join(", ") || null,
+      p.ogImage,
+      p.imagesMissingAlt,
+      p.internalLinks,
+      p.externalLinks,
+      p.redirected ? `Redirects to ${p.finalUrl}` : null,
+    ];
+  });
+
+  addTableSheet(wb, {
+    name: "Rankings",
+    description: `Google top ${data.results.length} for "${data.keyword}" in ${country}, with on-page SEO for each ranking page.`,
+    meta: `Searched ${formatDate(data.searchedAt)}  ·  ${data.results.length} results`,
+    tabColor: C.accent,
+    columns: RANKING_COLUMNS,
+    rows,
+  });
+
+  const buffer = (await wb.xlsx.writeBuffer()) as ArrayBuffer;
+  const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  saveBlob(blob, `keyword-rankings-${slug(data.keyword)}-${data.country.toLowerCase()}-${data.searchedAt.slice(0, 10)}.xlsx`);
+}
+
+function unavailableNote(a: Exclude<AnalysisState, "pending">): string {
+  if ("failed" in a) return `Couldn't analyse: ${friendlyError(a.failed)}`;
+  if (a.blocked) return "Blocked by bot protection";
+  if (a.error) return `Couldn't load: ${friendlyError(a.error)}`;
+  return `HTTP ${a.status}`;
 }
 
 export function saveBlob(blob: Blob, name: string) {

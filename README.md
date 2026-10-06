@@ -1,6 +1,8 @@
 # Site Auditor
 
-Internal tool for engineers and SEO specialists. Paste a website URL (usually WordPress) and it reports:
+Internal tool for engineers and SEO specialists, with two tools: **Site Audit** and **Keyword Rankings** (see below).
+
+**Site Audit:** paste a website URL (usually WordPress) and it reports:
 
 - **Orphan pages**: URLs in the sitemap that no crawled page links to
 - **Broken internal links**: internal links returning 4xx/5xx, with the pages they were found on
@@ -22,6 +24,38 @@ Paste a list into the URL box (one site per line, or separated by commas), or **
 - **Details:** click a finished site to open its full results and single-site exports.
 - **Download all sites (.xlsx):** an **Overview** sheet (one row per site) plus combined Broken links / Orphan pages / Redirects / Cloudflare / Unreachable sheets, each with a **Site** column to filter by.
 - **Copy summary:** a plain-text summary of every site, with the first few broken links and orphans for each.
+
+## Keyword Rankings
+
+The second tool, at `/rankings`. Pick a **country** and enter a **keyword** (e.g. `iphone`). It shows the **top 5 or 10 Google results** and analyses each ranking page's on-page SEO.
+
+- **Charts:** word count by position, response time by position, and an SEO checklist showing how many of the top results pass each check.
+- **The 9 checks:**
+  - title length 30–60 characters
+  - meta description 70–160 characters
+  - exactly one H1
+  - HTTPS
+  - mobile viewport tag
+  - canonical tag
+  - structured data (schema)
+  - social preview image (og:image)
+  - image alt text
+- **Table:** one row per result. Click a row for the full details.
+- **Exports:** **Excel** and **Copy summary**.
+
+**Search results** come from a SERP API, because scraping Google directly is blocked and against its terms. Set at least one key in `.env.local` and in Vercel:
+
+| Variable | Service | Free allowance |
+|---|---|---|
+| `SERPER_API_KEY` | [serper.dev](https://serper.dev) | 2,500 searches, one-time, no card |
+| `SERPAPI_API_KEY` | [serpapi.com](https://serpapi.com) | 250 searches per month |
+
+**How the keys are used:**
+- Serper is used first. If it fails or its credits run out, the tool switches to SerpApi automatically.
+- Top 5 or Top 10 costs **1 search**.
+- Without a key, the tool shows "Search isn't set up yet".
+
+Page analysis (`/api/analyze`) uses the same SSRF-safe fetch as Site Audit.
 
 ## How it works
 

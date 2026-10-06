@@ -29,6 +29,9 @@
   --color-status-warning: #fab219;
   --color-status-serious: #ec835a;
   --color-status-critical: #d03b3b;
+
+  /* Data series (dataviz categorical slot 1, dark-surface step). For single-series charts. */
+  --color-series-1: #3987e5;
 }
 
 :root {
