@@ -6,7 +6,7 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Check, Copy, Play, Square, Timer } from "lucide-react";
-import { CHECK_MINUTES, type CheckMinutes, type ProxyCheckResult } from "@/lib/proxy-check-types";
+import { CHECK_MINUTES, MAX_CHECK_MINUTES, type ProxyCheckResult } from "@/lib/proxy-check-types";
 import { Notice, Panel, StatTile, buttonClass } from "@/components/ui/primitives";
 import { ProxyApiField } from "@/components/ui/proxy-api-field";
 
@@ -14,7 +14,8 @@ import { ProxyApiField } from "@/components/ui/proxy-api-field";
 const ERROR_RETRY = 30;
 
 export function ProxyCheck() {
-  const [minutes, setMinutes] = useState<CheckMinutes>(30);
+  // Test length in minutes: a quick pick or any number the tester types (1 to MAX_CHECK_MINUTES).
+  const [minutes, setMinutes] = useState(30);
   const [env, setEnv] = useState<{ local: boolean; savedProxyApi: boolean } | null>(null);
   const [running, setRunning] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -42,6 +43,10 @@ export function ProxyCheck() {
   async function handleStart(e: FormEvent) {
     e.preventDefault();
     if (running) return;
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > MAX_CHECK_MINUTES) {
+      setError(`Enter a test length from 1 to ${MAX_CHECK_MINUTES} minutes.`);
+      return;
+    }
     const controller = new AbortController();
     abortRef.current = controller;
     const end = Date.now() + minutes * 60_000;
@@ -115,6 +120,23 @@ export function ProxyCheck() {
               {m === 60 ? "1 hour" : `${m} min`}
             </button>
           ))}
+          <label className="ml-1 flex items-center gap-1 border-l border-line pl-2 text-xs text-muted">
+            <span>Custom</span>
+            <input
+              type="number"
+              min={1}
+              max={MAX_CHECK_MINUTES}
+              step={1}
+              value={Number.isNaN(minutes) ? "" : minutes}
+              onChange={(e) => setMinutes(e.target.valueAsNumber)}
+              disabled={running}
+              aria-label="Test length in minutes"
+              className={`h-7 w-16 rounded-md border bg-canvas/60 px-2 text-right font-mono text-xs text-ink outline-none focus:border-accent/60 disabled:opacity-60 ${
+                (CHECK_MINUTES as readonly number[]).includes(minutes) ? "border-line" : "border-accent/60"
+              }`}
+            />
+            <span>min</span>
+          </label>
         </div>
         {running ? (
           // Separate keys: otherwise React reuses one <button>, and the click that stops the run
@@ -317,6 +339,10 @@ function ms(v: number) {
   return v >= 1000 ? `${(v / 1000).toFixed(1)}s` : `${v}ms`;
 }
 
+/** 2:41, or 1:05:09 from an hour up. */
 function clock(s: number) {
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = String(s % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
 }

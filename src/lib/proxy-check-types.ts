@@ -1,9 +1,10 @@
 // Shared types for Proxy Check (local only): tests the rotating proxy service itself, over a
 // time period. It never visits our sites; each check only asks neutral test addresses.
 
-/** Test lengths offered, in minutes. */
+/** Quick picks for the test length, in minutes; testers can also type any length. */
 export const CHECK_MINUTES = [15, 30, 45, 60] as const;
-export type CheckMinutes = (typeof CHECK_MINUTES)[number];
+/** Longest test a tester can type, in minutes (8 hours). */
+export const MAX_CHECK_MINUTES = 480;
 
 /** Residential = home / mobile ISP (Viettel, VNPT, FPT…); datacenter = hosting or cloud. */
 export type NetworkType = "residential" | "datacenter" | "unknown";
