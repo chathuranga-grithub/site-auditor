@@ -125,6 +125,8 @@ export interface VisitReport {
   cancelled: boolean;
   /** Whether each page was also checked on a phone screen. */
   mobileChecked: boolean;
+  /** Whether screenshots were taken (off = lighter, faster run with the same checks). */
+  screenshots: boolean;
 }
 
 /** How many internal pages the test found, and where. */

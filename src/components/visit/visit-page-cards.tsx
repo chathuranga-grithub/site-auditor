@@ -15,7 +15,7 @@ const PAGE_SIZE = 24;
 
 type Filter = "all" | "problems" | "ok";
 
-export function VisitPageCards({ pages, onOpen }: { pages: VisitPage[]; onOpen: (page: VisitPage) => void }) {
+export function VisitPageCards({ pages, onOpen, showShots = true }: { pages: VisitPage[]; onOpen: (page: VisitPage) => void; showShots?: boolean }) {
   const [filter, setFilter] = useState<Filter>("all");
   const [page, setPage] = useState(1);
   const top = useRef<HTMLDivElement>(null);
@@ -66,6 +66,7 @@ export function VisitPageCards({ pages, onOpen }: { pages: VisitPage[]; onOpen: 
                   problems.length ? "border-status-warning/50" : "border-line"
                 }`}
               >
+                {showShots && (
                 <div className="relative aspect-video w-full overflow-hidden bg-black/30">
                   {p.screenshot ? (
                     // eslint-disable-next-line @next/next/no-img-element -- data URL screenshot
@@ -89,7 +90,14 @@ export function VisitPageCards({ pages, onOpen }: { pages: VisitPage[]; onOpen: 
                     />
                   )}
                 </div>
+                )}
                 <div className="flex min-w-0 flex-1 flex-col gap-1 p-3">
+                  {!showShots && (
+                    <div className="flex items-center justify-between font-mono text-[10px] text-muted tabular-nums">
+                      <span>#{n}</span>
+                      {p.status !== null ? <StatusCode status={p.status} /> : <span className="text-status-serious">none</span>}
+                    </div>
+                  )}
                   <div className="truncate text-sm font-medium text-ink">{p.title ?? "(no title)"}</div>
                   <div className="truncate font-mono text-[11px] text-link" title={p.finalUrl}>
                     {displayUrl(p.finalUrl)}

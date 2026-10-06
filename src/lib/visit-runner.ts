@@ -48,6 +48,8 @@ export interface VisitOptions {
   proxyApiUrl: string;
   /** Also open every page on a phone-sized screen, and test the phone menu. */
   mobile: boolean;
+  /** Take screenshots. Off: the same checks, but faster and much lighter on memory. */
+  screenshots: boolean;
   signal: AbortSignal;
   send: (e: VisitEvent) => void;
 }
@@ -60,7 +62,7 @@ interface Target {
   note?: string;
 }
 
-export async function runVisitTest({ url, proxyApiUrl, mobile, signal, send }: VisitOptions): Promise<VisitReport> {
+export async function runVisitTest({ url, proxyApiUrl, mobile, screenshots, signal, send }: VisitOptions): Promise<VisitReport> {
   const report: VisitReport = {
     url,
     startedAt: new Date().toISOString(),
@@ -77,6 +79,7 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, signal, send }: V
     issues: [],
     cancelled: false,
     mobileChecked: mobile,
+    screenshots,
   };
   const stopped = () => {
     if (signal.aborted) report.cancelled = true;
@@ -131,7 +134,7 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, signal, send }: V
     // 3. Start page: open, scroll, screenshot
     send({ type: "step", message: `Opening ${url}…` });
     const page = await context.newPage();
-    const start = await checkPage(page, url, "start", () => page.goto(url, { waitUntil: "domcontentloaded" }), START_SCROLL, null);
+    const start = await checkPage(page, url, "start", () => page.goto(url, { waitUntil: "domcontentloaded" }), START_SCROLL, screenshots ? "full" : null);
     report.start = start;
     report.scroll = start.scroll ?? null;
     send({ type: "page", page: start });
@@ -142,7 +145,7 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, signal, send }: V
     send({ type: "step", message: "Finding all internal pages (sitemap and start-page links)…" });
     const siteHost = new URL(start.finalUrl).hostname;
     const links = await startPageLinks(page, start.finalUrl, siteHost);
-    const shrink = await makeThumbnailer(context);
+    const shrink = screenshots ? await makeThumbnailer(context) : null;
 
     await page.close().catch(() => {});
 
@@ -370,8 +373,8 @@ async function checkPage(
   kind: VisitPage["kind"],
   navigate: () => Promise<{ status(): number } | null>,
   scrollOpts: typeof PAGE_SCROLL,
-  /** Shrinks screenshots of pages without problems; null keeps every screenshot full size. */
-  shrink: Thumbnailer | null,
+  /** "full": full-size screenshot; a thumbnailer: full size only for pages with problems; null: no screenshot. */
+  shots: "full" | Thumbnailer | null,
 ): Promise<VisitPage> {
   const consoleErrors: string[] = [];
   const failedRequests: string[] = [];
@@ -423,11 +426,13 @@ async function checkPage(
     if (!result.ok) result.error = `The page returned HTTP ${result.status ?? "no response"}.`;
 
     result.scroll = await scrollPage(page, scrollOpts).catch(() => null);
-    // Every page gets a screenshot. Full size where someone needs to look closely (start page,
+    // Screenshots (unless turned off): full size where someone needs to look closely (start page,
     // pages with problems); a small one for the rest, so hundreds of pages stay light.
-    await page.waitForTimeout(400); // let the top of the page repaint after scrolling back up
-    const jpeg = await page.screenshot({ type: "jpeg", quality: 55 });
-    result.screenshot = !shrink || hasProblem(result) ? `data:image/jpeg;base64,${jpeg.toString("base64")}` : await shrink(jpeg).catch(() => undefined);
+    if (shots) {
+      await page.waitForTimeout(400); // let the top of the page repaint after scrolling back up
+      const jpeg = await page.screenshot({ type: "jpeg", quality: 55 });
+      result.screenshot = shots === "full" || hasProblem(result) ? `data:image/jpeg;base64,${jpeg.toString("base64")}` : await shots(jpeg).catch(() => undefined);
+    }
   } catch (err) {
     result.error = friendly(err);
   } finally {
@@ -528,7 +533,8 @@ async function startPageLinks(page: Page, pageUrl: string, siteHost: string): Pr
 }
 
 /** Opens the page on a phone: does it load, fit the screen, have the viewport tag, load its images? */
-async function checkMobile(page: Page, url: string, shrink: Thumbnailer): Promise<MobileCheck> {
+/** shrink: null = no screenshot. */
+async function checkMobile(page: Page, url: string, shrink: Thumbnailer | null): Promise<MobileCheck> {
   const out: MobileCheck = { ok: false, status: null, overflowPx: 0, viewportTag: false, images: 0, brokenImages: [] };
   try {
     const res = await page.goto(url, { waitUntil: "domcontentloaded" });
@@ -553,8 +559,10 @@ async function checkMobile(page: Page, url: string, shrink: Thumbnailer): Promis
     });
     out.overflowPx = m.overflow;
     out.viewportTag = m.viewportTag;
-    await page.waitForTimeout(300);
-    out.screenshot = await shrink(await page.screenshot({ type: "jpeg", quality: 60 }), PHONE_THUMB_WIDTH).catch(() => undefined);
+    if (shrink) {
+      await page.waitForTimeout(300);
+      out.screenshot = await shrink(await page.screenshot({ type: "jpeg", quality: 60 }), PHONE_THUMB_WIDTH).catch(() => undefined);
+    }
   } catch (err) {
     out.error = friendly(err);
   }
@@ -562,7 +570,7 @@ async function checkMobile(page: Page, url: string, shrink: Thumbnailer): Promis
 }
 
 /** On a phone: finds the menu button (☰), taps it and checks the menu opens with links. */
-async function mobileMenu(page: Page, shrink: Thumbnailer): Promise<NonNullable<MenuCheck["mobile"]>> {
+async function mobileMenu(page: Page, shrink: Thumbnailer | null): Promise<NonNullable<MenuCheck["mobile"]>> {
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.waitForTimeout(300);
   const toggles = page.locator(
@@ -610,7 +618,7 @@ async function mobileMenu(page: Page, shrink: Thumbnailer): Promise<NonNullable<
   const expanded = (await toggle.getAttribute("aria-expanded").catch(() => null)) === "true";
   const shown = Math.max(0, after - before);
   const opened = shown >= 3 || (expanded && shown > 0);
-  const screenshot = await shrink(await page.screenshot({ type: "jpeg", quality: 60 }), PHONE_THUMB_WIDTH).catch(() => undefined);
+  const screenshot = shrink ? await shrink(await page.screenshot({ type: "jpeg", quality: 60 }), PHONE_THUMB_WIDTH).catch(() => undefined) : undefined;
   return { buttonFound: true, opened, linksShown: shown, note: opened ? undefined : "The menu button was tapped, but no menu links appeared.", screenshot };
 }
 

@@ -48,6 +48,18 @@ const thumbColumn = (onOpen: (page: VisitPage) => void): Column<Row> => ({
   className: "w-36",
 });
 
+const titleOpens = (col: Column<Row>, onOpen: (page: VisitPage) => void): Column<Row> => ({
+  ...col,
+  cell: (r) => (
+    <div className="min-w-0 space-y-0.5">
+      <button type="button" onClick={() => onOpen(r.page)} aria-label={`Details for ${r.page.title ?? r.page.url}`} className="block max-w-full truncate text-left text-ink hover:underline">
+        {r.page.title ?? "(no title)"}
+      </button>
+      <UrlLink href={r.page.finalUrl} />
+    </div>
+  ),
+});
+
 const COLUMNS: Column<Row>[] = [
   {
     id: "n",
@@ -123,9 +135,10 @@ const FILTERS: QuickFilter<Row>[] = [
   { id: "phone", label: "Phone problems", test: (r) => r.problems.some((p) => p.startsWith("Phone")) },
 ];
 
-export function VisitPagesTable({ pages, onOpen }: { pages: VisitPage[]; onOpen: (page: VisitPage) => void }) {
+export function VisitPagesTable({ pages, onOpen, showShots = true }: { pages: VisitPage[]; onOpen: (page: VisitPage) => void; showShots?: boolean }) {
   const rows: Row[] = pages.map((page, i) => ({ n: i + 1, page, problems: pageProblems(page) }));
-  const columns = useMemo(() => [COLUMNS[0], thumbColumn(onOpen), ...COLUMNS.slice(1)], [onOpen]);
+  // Without screenshots, the page title opens the details instead of the thumbnail.
+  const columns = useMemo(() => (showShots ? [COLUMNS[0], thumbColumn(onOpen), ...COLUMNS.slice(1)] : [COLUMNS[0], ...COLUMNS.slice(1).map((c) => (c.id === "page" ? titleOpens(c, onOpen) : c))]), [onOpen, showShots]);
   return (
     <DataTable
       rows={rows}

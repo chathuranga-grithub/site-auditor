@@ -5,7 +5,7 @@
 
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Check, CircleCheck, CircleMinus, CircleX, Copy, Globe, KeyRound, LayoutGrid, List, Loader2, Monitor, Smartphone, Play, Square, Timer, TriangleAlert } from "lucide-react";
+import { Check, CircleCheck, CircleMinus, CircleX, Copy, Globe, KeyRound, LayoutGrid, List, Loader2, Camera, CameraOff, Monitor, Smartphone, Play, Square, Timer, TriangleAlert } from "lucide-react";
 import {
   buildChecklist,
   checklistHeadline,
@@ -30,11 +30,11 @@ export function VisitTest() {
   const [url, setUrl] = useState(() => searchParams.get("url") ?? "");
   const [proxyApi, setProxyApi] = useState("");
   const [mobile, setMobile] = useState(true);
+  const [screenshots, setScreenshots] = useState(true);
   const [env, setEnv] = useState<{ local: boolean; savedProxyApi: boolean } | null>(null);
   const [running, setRunning] = useState(false);
   const [steps, setSteps] = useState<string[]>([]);
   const [pages, setPages] = useState<VisitPage[]>([]);
-  const [scroll, setScroll] = useState<ScrollResult | null>(null);
   const [discovery, setDiscovery] = useState<Discovery | null>(null);
   // Start time and time of the latest page, for the "time left" estimate.
   const [timing, setTiming] = useState({ start: 0, last: 0 });
@@ -69,7 +69,6 @@ export function VisitTest() {
     setError(null);
     setSteps([]);
     setPages([]);
-    setScroll(null);
     setDiscovery(null);
     discoveredRef.current = false;
     setReport(null);
@@ -82,7 +81,7 @@ export function VisitTest() {
       const res = await fetch("/api/visit-test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, proxyApiUrl: proxyApi, mobile }),
+        body: JSON.stringify({ url, proxyApiUrl: proxyApi, mobile, screenshots }),
         signal: controller.signal,
       });
       if (!res.ok || !res.body) {
@@ -118,9 +117,6 @@ export function VisitTest() {
         // The start page is sent again once its phone check is done: replace it, don't add it twice.
         setPages((p) => (e.page.kind === "start" && p.some((x) => x.kind === "start") ? p.map((x) => (x.kind === "start" ? e.page : x)) : [...p, e.page]));
         setTiming((t) => ({ ...t, last: Date.now() }));
-        break;
-      case "scroll":
-        setScroll(e.scroll);
         break;
       case "discovered":
         // The first count goes in the step log; later ones (pages found while visiting) only update the progress bar.
@@ -171,7 +167,7 @@ export function VisitTest() {
         </Notice>
       )}
 
-      <form onSubmit={handleRun} className="glass grid gap-2 rounded-xl p-2 lg:grid-cols-[1.2fr_1fr_auto_auto]">
+      <form onSubmit={handleRun} className="glass grid gap-2 rounded-xl p-2 lg:grid-cols-[1.2fr_1fr_auto_auto_auto]">
         <label className="relative block">
           <span className="sr-only">Website URL</span>
           <Globe className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-subtle" />
@@ -220,6 +216,19 @@ export function VisitTest() {
             </button>
           ))}
         </div>
+        <button
+          type="button"
+          aria-pressed={screenshots}
+          onClick={() => setScreenshots((v) => !v)}
+          disabled={running}
+          title={screenshots ? "Screenshots on. Turn off for a faster, lighter test (all checks still run)." : "Screenshots off: faster and lighter, all checks still run. Turn on to see each page."}
+          className={`inline-flex h-10 items-center justify-center gap-1.5 rounded-lg px-3 text-xs font-medium whitespace-nowrap transition disabled:opacity-60 ${
+            screenshots ? "bg-canvas/60 text-ink" : "bg-canvas/60 text-muted ring-1 ring-line-strong"
+          }`}
+        >
+          {screenshots ? <Camera className="size-3.5" /> : <CameraOff className="size-3.5" />}
+          {screenshots ? "Screenshots on" : "Screenshots off"}
+        </button>
         {running ? (
           <button type="button" onClick={() => abortRef.current?.abort()} className={buttonClass.danger}>
             <Square className="size-3.5 fill-current" />
@@ -260,7 +269,7 @@ export function VisitTest() {
         </Panel>
       )}
 
-      {(report || pages.length > 0) && <Results report={report} pages={pages} scroll={scroll} />}
+      {(report || pages.length > 0) && <Results report={report} pages={pages} />}
     </div>
   );
 }
@@ -294,9 +303,8 @@ function discoveryMessage(d: Discovery) {
   }, 3 at a time. Links on each page are followed too, so the total can grow…`;
 }
 
-function Results({ report, pages, scroll }: { report: VisitReport | null; pages: VisitPage[]; scroll: ScrollResult | null }) {
+function Results({ report, pages }: { report: VisitReport | null; pages: VisitPage[] }) {
   const start = pages.find((p) => p.kind === "start") ?? null;
-  const internal = pages.filter((p) => p.kind === "internal");
   const okPages = pages.filter((p) => p.ok).length;
   const jsPages = pages.filter((p) => p.consoleErrors.length).length;
   const scrolled = pages.filter((p) => p.scroll);
@@ -304,6 +312,8 @@ function Results({ report, pages, scroll }: { report: VisitReport | null; pages:
   const brokenImages = scrolled.reduce((n, p) => n + p.scroll!.brokenImages.length, 0);
   const [view, setView] = useState<"cards" | "list">("cards");
   const [openPage, setOpenPage] = useState<VisitPage | null>(null);
+  // Screenshots turned off: no picture areas in the results, so they stay compact.
+  const hasShots = pages.some((p) => p.screenshot || p.mobile?.screenshot);
   const exit = report?.exit;
 
   return (
@@ -363,9 +373,7 @@ function Results({ report, pages, scroll }: { report: VisitReport | null; pages:
         />
       </div>
 
-      {start && <PageCard page={start} heading="Start page" scroll={scroll} onOpen={() => setOpenPage(start)} />}
-
-      {internal.length > 0 && (
+      {pages.length > 0 && (
         <Panel
           title={"All pages visited · " + pages.length + (report?.discovery ? " of " + (report.discovery.total + 1) : "")}
           actions={
@@ -388,9 +396,9 @@ function Results({ report, pages, scroll }: { report: VisitReport | null; pages:
           bodyClassName=""
         >
           {view === "cards" ? (
-            <VisitPageCards pages={pages} onOpen={setOpenPage} />
+            <VisitPageCards pages={pages} onOpen={setOpenPage} showShots={hasShots} />
           ) : (
-            <VisitPagesTable pages={pages} onOpen={setOpenPage} />
+            <VisitPagesTable pages={pages} onOpen={setOpenPage} showShots={hasShots} />
           )}
         </Panel>
       )}
@@ -468,6 +476,7 @@ function PageCard({
 }) {
   const phone = page.mobile?.screenshot;
   const menu = page.menus?.mobile?.screenshot;
+  const anyShot = !!(page.screenshot || phone || menu);
   const desktop = page.screenshot ? (
     // eslint-disable-next-line @next/next/no-img-element -- data URL screenshot
     <img src={page.screenshot} alt={`Desktop screenshot of ${page.title ?? page.url}`} className="block w-full" />
@@ -484,9 +493,9 @@ function PageCard({
           {page.loadMs != null && <span>{formatMs(page.loadMs)}</span>}
         </span>
       }
-      bodyClassName={`grid gap-5 p-4 ${large ? "" : "md:grid-cols-[minmax(0,17rem)_1fr] xl:grid-cols-[minmax(0,24rem)_1fr]"}`}
+      bodyClassName={`grid gap-5 p-4 ${large || !anyShot ? "" : "md:grid-cols-[minmax(0,17rem)_1fr] xl:grid-cols-[minmax(0,24rem)_1fr]"}`}
     >
-      {large ? (
+      {!anyShot ? null : large ? (
         <div className="flex items-start gap-3">
           <figure className="min-w-0 flex-1">
             <div className="overflow-hidden rounded-lg border border-line bg-black/30">{desktop}</div>
