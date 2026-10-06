@@ -48,7 +48,9 @@ export async function POST(request: Request) {
       };
       try {
         const report = await runVisitTest({ url: site.toString(), proxyApiUrl, signal: request.signal, send });
-        send({ type: "done", report });
+        // Screenshots were already streamed with each page; leaving them out avoids sending megabytes twice.
+        const strip = <T extends { screenshot?: string }>(p: T): T => ({ ...p, screenshot: undefined });
+        send({ type: "done", report: { ...report, start: report.start && strip(report.start), pages: report.pages.map(strip) } });
       } catch (err) {
         if (err instanceof ProxyWaitError) send({ type: "wait", seconds: err.waitSec });
         else send({ type: "error", message: err instanceof Error ? err.message : String(err) });

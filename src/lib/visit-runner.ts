@@ -104,7 +104,7 @@ export async function runVisitTest({ url, proxyApiUrl, signal, send }: VisitOpti
     // 3. Start page: open, scroll, screenshot
     send({ type: "step", message: `Opening ${url}…` });
     const page = await context.newPage();
-    const start = await checkPage(page, url, "start", () => page.goto(url, { waitUntil: "load" }), START_SCROLL, true);
+    const start = await checkPage(page, url, "start", () => page.goto(url, { waitUntil: "load" }), START_SCROLL, null);
     report.start = start;
     report.scroll = start.scroll ?? null;
     send({ type: "page", page: start });
@@ -142,6 +142,7 @@ export async function runVisitTest({ url, proxyApiUrl, signal, send }: VisitOpti
       if (added) send({ type: "discovered", discovery: { ...discovery } });
     };
 
+    const shrink = await makeThumbnailer(context);
     let next = 0;
     let active = 0;
     let proxyFailures = 0;
@@ -157,7 +158,7 @@ export async function runVisitTest({ url, proxyApiUrl, signal, send }: VisitOpti
         active++;
         if (tab.isClosed()) tab = await context.newPage();
         const referer = t.foundIn === "start page" ? start.finalUrl : undefined;
-        const result = await checkPage(tab, t.href, "internal", () => tab.goto(t.href, { waitUntil: "load", referer }), PAGE_SCROLL, false);
+        const result = await checkPage(tab, t.href, "internal", () => tab.goto(t.href, { waitUntil: "load", referer }), PAGE_SCROLL, shrink);
         if (result.ok && isInternal(result.finalUrl, siteHost)) addFound(await pageLinks(tab, siteHost).catch(() => []));
         active--;
         if (stopped()) break;
@@ -291,6 +292,29 @@ function proxiedFetcher(context: BrowserContext): SitemapFetcher {
   };
 }
 
+type Thumbnailer = (jpeg: Buffer) => Promise<string>;
+
+const THUMB_WIDTH = 480;
+
+/** Shrinks screenshots to THUMB_WIDTH in a blank tab (no network, no site code), as a JPEG data URL. */
+async function makeThumbnailer(context: BrowserContext): Promise<Thumbnailer> {
+  const helper = await context.newPage();
+  return (jpeg) =>
+    helper.evaluate(
+      async ({ src, width }) => {
+        const img = new Image();
+        img.src = src;
+        await img.decode();
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = Math.round((img.height * width) / img.width);
+        canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height);
+        return canvas.toDataURL("image/jpeg", 0.6);
+      },
+      { src: `data:image/jpeg;base64,${jpeg.toString("base64")}`, width: THUMB_WIDTH },
+    );
+}
+
 /** Opens one page, scrolls to the bottom and records status, timing, errors and images. */
 async function checkPage(
   page: Page,
@@ -298,7 +322,8 @@ async function checkPage(
   kind: VisitPage["kind"],
   navigate: () => Promise<{ status(): number } | null>,
   scrollOpts: typeof PAGE_SCROLL,
-  alwaysScreenshot: boolean,
+  /** Shrinks screenshots of pages without problems; null keeps every screenshot full size. */
+  shrink: Thumbnailer | null,
 ): Promise<VisitPage> {
   const consoleErrors: string[] = [];
   const failedRequests: string[] = [];
@@ -336,11 +361,11 @@ async function checkPage(
     if (!result.ok) result.error = `The page returned HTTP ${result.status ?? "no response"}.`;
 
     result.scroll = await scrollPage(page, scrollOpts).catch(() => null);
-    // Screenshots only where someone needs to look: the start page and pages with problems.
-    if (alwaysScreenshot || hasProblem(result)) {
-      await page.waitForTimeout(400); // let the top of the page repaint after scrolling back up
-      result.screenshot = `data:image/jpeg;base64,${(await page.screenshot({ type: "jpeg", quality: 55 })).toString("base64")}`;
-    }
+    // Every page gets a screenshot. Full size where someone needs to look closely (start page,
+    // pages with problems); a small one for the rest, so hundreds of pages stay light.
+    await page.waitForTimeout(400); // let the top of the page repaint after scrolling back up
+    const jpeg = await page.screenshot({ type: "jpeg", quality: 55 });
+    result.screenshot = !shrink || hasProblem(result) ? `data:image/jpeg;base64,${jpeg.toString("base64")}` : await shrink(jpeg).catch(() => undefined);
   } catch (err) {
     result.error = friendly(err);
   } finally {

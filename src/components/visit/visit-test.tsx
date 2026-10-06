@@ -5,14 +5,13 @@
 
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Check, CircleCheck, CircleMinus, CircleX, Copy, Globe, KeyRound, Loader2, Play, Square, Timer, TriangleAlert } from "lucide-react";
-import { buildChecklist, checklistHeadline, checklistTotals, discoverySources, pageProblems, type CheckStatus } from "@/lib/visit-checklist";
+import { Check, CircleCheck, CircleMinus, CircleX, Copy, Globe, KeyRound, LayoutGrid, List, Loader2, Play, Square, Timer, TriangleAlert } from "lucide-react";
+import { buildChecklist, checklistHeadline, checklistTotals, discoverySources, type CheckStatus } from "@/lib/visit-checklist";
 import { MAX_PAGES, type Discovery, type ScrollResult, type VisitEvent, type VisitPage, type VisitReport } from "@/lib/visit-types";
 import { Notice, Panel, StatTile, StatusCode, Tag, UrlLink, buttonClass } from "@/components/ui/primitives";
+import { VisitPageCards } from "./visit-page-cards";
 import { VisitPagesTable } from "./visit-pages-table";
 
-/** Problem pages shown as cards with a screenshot; the rest are in the table. */
-const PROBLEM_CARDS = 12;
 /** Problems listed in the notice before "and N more". */
 const ISSUES_SHOWN = 15;
 
@@ -272,7 +271,7 @@ function Results({ report, pages, scroll }: { report: VisitReport | null; pages:
   const scrolled = pages.filter((p) => p.scroll);
   const images = scrolled.reduce((n, p) => n + p.scroll!.images, 0);
   const brokenImages = scrolled.reduce((n, p) => n + p.scroll!.brokenImages.length, 0);
-  const problemPages = internal.filter((p) => pageProblems(p).length > 0);
+  const [view, setView] = useState<"cards" | "table">("cards");
   const exit = report?.exit;
 
   return (
@@ -300,7 +299,7 @@ function Results({ report, pages, scroll }: { report: VisitReport | null; pages:
                 ))}
               </ul>
               {report.issues.length > ISSUES_SHOWN && (
-                <div className="mt-1 text-xs">…and {report.issues.length - ISSUES_SHOWN} more. Use the Problems filter in the table below, or Copy summary.</div>
+                <div className="mt-1 text-xs">…and {report.issues.length - ISSUES_SHOWN} more. Use the Problems filter below, or Copy summary.</div>
               )}
             </Notice>
           )}
@@ -334,23 +333,33 @@ function Results({ report, pages, scroll }: { report: VisitReport | null; pages:
 
       {start && <PageCard page={start} heading="Start page" scroll={scroll} />}
 
-      {problemPages.length > 0 && (
-        <div>
-          <h2 className="mb-3 font-mono text-[11px] tracking-[0.18em] text-muted uppercase">
-            Pages with problems · {problemPages.length}
-            {problemPages.length > PROBLEM_CARDS ? ` (first ${PROBLEM_CARDS} shown, all are in the table)` : ""}
-          </h2>
-          <div className="grid gap-4 md:grid-cols-2">
-            {problemPages.slice(0, PROBLEM_CARDS).map((p, i) => (
-              <PageCard key={`${p.url}-${i}`} page={p} heading={p.title ?? "Page"} scroll={p.scroll} />
-            ))}
-          </div>
-        </div>
-      )}
-
       {internal.length > 0 && (
-        <Panel title={`All pages visited · ${pages.length}${report?.discovery ? ` of ${report.discovery.total + 1}` : ""}`} bodyClassName="">
-          <VisitPagesTable pages={pages} />
+        <Panel
+          title={"All pages visited · " + pages.length + (report?.discovery ? " of " + (report.discovery.total + 1) : "")}
+          actions={
+            <div className="flex rounded-lg bg-canvas/60 p-0.5" role="radiogroup" aria-label="View">
+              {(["cards", "table"] as const).map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  role="radio"
+                  aria-checked={view === v}
+                  onClick={() => setView(v)}
+                  className={"inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition " + (view === v ? "bg-surface-2 text-ink ring-1 ring-line-strong" : "text-muted hover:text-ink")}
+                >
+                  {v === "cards" ? <LayoutGrid className="size-3.5" /> : <List className="size-3.5" />}
+                  {v === "cards" ? "Cards" : "Table"}
+                </button>
+              ))}
+            </div>
+          }
+          bodyClassName=""
+        >
+          {view === "cards" ? (
+            <VisitPageCards pages={pages} renderDetail={(p) => <PageCard page={p} heading={p.kind === "start" ? "Start page" : (p.title ?? "Page")} scroll={p.scroll} large />} />
+          ) : (
+            <VisitPagesTable pages={pages} />
+          )}
         </Panel>
       )}
     </div>
@@ -404,7 +413,7 @@ function Checklist({ report }: { report: VisitReport }) {
   );
 }
 
-function PageCard({ page, heading, scroll }: { page: VisitPage; heading: string; scroll?: ScrollResult | null }) {
+function PageCard({ page, heading, scroll, large = false }: { page: VisitPage; heading: string; scroll?: ScrollResult | null; large?: boolean }) {
   const [big, setBig] = useState(false);
   return (
     <Panel
@@ -415,14 +424,14 @@ function PageCard({ page, heading, scroll }: { page: VisitPage; heading: string;
           {page.loadMs != null && <span>{formatMs(page.loadMs)}</span>}
         </span>
       }
-      bodyClassName="grid gap-4 p-4 sm:grid-cols-[minmax(0,14rem)_1fr]"
+      bodyClassName={`grid gap-4 p-4 ${large ? "" : "sm:grid-cols-[minmax(0,14rem)_1fr]"}`}
     >
       {page.screenshot ? (
         <button
           type="button"
-          onClick={() => setBig((b) => !b)}
+          onClick={() => !large && setBig((b) => !b)}
           title={big ? "Smaller" : "Bigger"}
-          className={`overflow-hidden rounded-lg border border-line bg-black/30 ${big ? "sm:col-span-2" : ""}`}
+          className={`overflow-hidden rounded-lg border border-line bg-black/30 ${big ? "sm:col-span-2" : ""} ${large ? "cursor-default" : ""}`}
         >
           {/* eslint-disable-next-line @next/next/no-img-element -- data URL screenshot */}
           <img src={page.screenshot} alt={`Screenshot of ${page.title ?? page.url}`} className="block w-full" />
