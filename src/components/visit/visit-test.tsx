@@ -363,7 +363,7 @@ function Results({ report, pages, scroll }: { report: VisitReport | null; pages:
         />
       </div>
 
-      {start && <PageCard page={start} heading="Start page" scroll={scroll} />}
+      {start && <PageCard page={start} heading="Start page" scroll={scroll} onOpen={() => setOpenPage(start)} />}
 
       {internal.length > 0 && (
         <Panel
@@ -451,8 +451,30 @@ function Checklist({ report }: { report: VisitReport }) {
   );
 }
 
-function PageCard({ page, heading, scroll, large = false }: { page: VisitPage; heading: string; scroll?: ScrollResult | null; large?: boolean }) {
-  const [big, setBig] = useState(false);
+function PageCard({
+  page,
+  heading,
+  scroll,
+  large = false,
+  onOpen,
+}: {
+  page: VisitPage;
+  heading: string;
+  scroll?: ScrollResult | null;
+  /** In the details popup: big screenshots side by side, details below. */
+  large?: boolean;
+  /** Clicking a screenshot opens the details popup. */
+  onOpen?: () => void;
+}) {
+  const phone = page.mobile?.screenshot;
+  const menu = page.menus?.mobile?.screenshot;
+  const desktop = page.screenshot ? (
+    // eslint-disable-next-line @next/next/no-img-element -- data URL screenshot
+    <img src={page.screenshot} alt={`Desktop screenshot of ${page.title ?? page.url}`} className="block w-full" />
+  ) : (
+    <div className="grid aspect-video place-items-center text-xs text-subtle">No screenshot</div>
+  );
+
   return (
     <Panel
       title={heading}
@@ -462,58 +484,60 @@ function PageCard({ page, heading, scroll, large = false }: { page: VisitPage; h
           {page.loadMs != null && <span>{formatMs(page.loadMs)}</span>}
         </span>
       }
-      bodyClassName={`grid gap-4 p-4 ${large ? "" : "sm:grid-cols-[minmax(0,14rem)_1fr]"}`}
+      bodyClassName={`grid gap-5 p-4 ${large ? "" : "md:grid-cols-[minmax(0,17rem)_1fr] xl:grid-cols-[minmax(0,24rem)_1fr]"}`}
     >
-      <div className={`flex items-start gap-3 ${big ? "sm:col-span-2" : ""}`}>
-        {page.screenshot ? (
-          <button
-            type="button"
-            onClick={() => !large && setBig((v) => !v)}
-            title={large ? "Desktop view" : big ? "Smaller" : "Bigger"}
-            className={`min-w-0 flex-1 overflow-hidden rounded-lg border border-line bg-black/30 ${large ? "cursor-default" : ""}`}
-          >
-            {/* eslint-disable-next-line @next/next/no-img-element -- data URL screenshot */}
-            <img src={page.screenshot} alt={`Desktop screenshot of ${page.title ?? page.url}`} className="block w-full" />
-          </button>
-        ) : (
-          <div className="grid aspect-video min-w-0 flex-1 place-items-center rounded-lg border border-dashed border-line text-xs text-subtle">No screenshot</div>
-        )}
-        {(large || big) && page.mobile?.screenshot && <PhoneShot src={page.mobile.screenshot} label="Phone" />}
-        {(large || big) && page.menus?.mobile?.screenshot && <PhoneShot src={page.menus.mobile.screenshot} label="Phone menu open" />}
-      </div>
+      {large ? (
+        <div className="flex items-start gap-3">
+          <figure className="min-w-0 flex-1">
+            <div className="overflow-hidden rounded-lg border border-line bg-black/30">{desktop}</div>
+            <figcaption className="mt-1 text-center font-mono text-[10px] text-subtle">Desktop</figcaption>
+          </figure>
+          {phone && <PhoneShot src={phone} label="Phone" />}
+          {menu && <PhoneShot src={menu} label="Phone menu open" />}
+        </div>
+      ) : (
+        // Screenshots grouped: desktop on top, phone views side by side below it.
+        <div className="space-y-3">
+          <figure>
+            <button
+              type="button"
+              onClick={onOpen}
+              disabled={!onOpen}
+              title={onOpen ? "Open bigger screenshots" : undefined}
+              className="block w-full overflow-hidden rounded-lg border border-line bg-black/30 transition enabled:hover:border-line-strong"
+            >
+              {desktop}
+            </button>
+            <figcaption className="mt-1 font-mono text-[10px] text-subtle">Desktop</figcaption>
+          </figure>
+          {(phone || menu) && (
+            <div className="flex gap-3">
+              {phone && <PhoneShot src={phone} label="Phone" size="md" onClick={onOpen} />}
+              {menu && <PhoneShot src={menu} label="Phone menu open" size="md" onClick={onOpen} />}
+            </div>
+          )}
+        </div>
+      )}
 
-      <div className="min-w-0 space-y-2 text-sm">
-        <div className="font-medium break-words text-ink">{page.title ?? "(no title)"}</div>
-        <UrlLink href={page.finalUrl} full />
-        {page.linkText && <div className="text-xs text-muted">Link text: &ldquo;{page.linkText}&rdquo;</div>}
-        {page.kind === "internal" && (
-          <div className="text-xs">
-            <span className="text-muted">
-              {page.foundIn === "another page" ? "Found through a link on another page" : `Found in the ${page.foundIn ?? "sitemap"}`}
-            </span>
-            {page.clickable === true && <span className="text-status-good"> · link clickable</span>}
-            {page.clickable === false && <span className="text-status-warning"> · link not clickable</span>}
-            {page.note && <span className="text-muted"> · {page.note}</span>}
-          </div>
-        )}
-        {page.error && (
-          <div className="flex gap-1.5 text-xs text-status-serious">
-            <TriangleAlert className="mt-0.5 size-3.5 shrink-0" /> {page.error}
-          </div>
-        )}
-        {scroll && (
-          <div className="text-xs text-muted">
-            Scrolled {scroll.reachedBottom ? "to the bottom" : "partway"} in {scroll.steps} steps (
-            {scroll.pageHeight.toLocaleString()}px tall). Images: {scroll.imagesLoaded}/{scroll.images} loaded
-            {scroll.brokenImages.length ? `, ${scroll.brokenImages.length} broken` : ""}.
-          </div>
-        )}
-        {!large && !big && (page.mobile?.screenshot || page.menus?.mobile?.screenshot) && (
-          <div className="flex gap-2">
-            {page.mobile?.screenshot && <PhoneShot src={page.mobile.screenshot} label="Phone" small />}
-            {page.menus?.mobile?.screenshot && <PhoneShot src={page.menus.mobile.screenshot} label="Phone menu open" small />}
-          </div>
-        )}
+      <div className="min-w-0 space-y-3 text-sm">
+        <div className="space-y-1">
+          <div className="font-medium break-words text-ink">{page.title ?? "(no title)"}</div>
+          <UrlLink href={page.finalUrl} full />
+          {page.linkText && <div className="text-xs text-muted">Link text: &ldquo;{page.linkText}&rdquo;</div>}
+          {page.kind === "internal" && (
+            <div className="text-xs">
+              <span className="text-muted">
+                {page.foundIn === "another page" ? "Found through a link on another page" : `Found in the ${page.foundIn ?? "sitemap"}`}
+              </span>
+              {page.note && <span className="text-muted"> · {page.note}</span>}
+            </div>
+          )}
+          {page.error && (
+            <div className="flex gap-1.5 text-xs text-status-serious">
+              <TriangleAlert className="mt-0.5 size-3.5 shrink-0" /> {page.error}
+            </div>
+          )}
+        </div>
         <ActivityList items={pageActivities(page)} />
         <Details title="Still loading after 30s" items={page.stillLoading ?? []} />
         <Details title="JavaScript errors" items={page.consoleErrors} />
@@ -525,11 +549,20 @@ function PageCard({ page, heading, scroll, large = false }: { page: VisitPage; h
   );
 }
 
-function PhoneShot({ src, label, small = false }: { src: string; label: string; small?: boolean }) {
+function PhoneShot({ src, label, size = "lg", onClick }: { src: string; label: string; size?: "md" | "lg"; onClick?: () => void }) {
+  const img = (
+    // eslint-disable-next-line @next/next/no-img-element -- data URL screenshot
+    <img src={src} alt={`${label} screenshot`} className="block w-full rounded-lg border border-line bg-black/30" />
+  );
   return (
-    <figure className={`shrink-0 ${small ? "w-16" : "w-28 sm:w-36"}`}>
-      {/* eslint-disable-next-line @next/next/no-img-element -- data URL screenshot */}
-      <img src={src} alt={`${label} screenshot`} className="block w-full rounded-lg border border-line bg-black/30" />
+    <figure className={`shrink-0 ${size === "md" ? "w-28" : "w-28 sm:w-36"}`}>
+      {onClick ? (
+        <button type="button" onClick={onClick} title="Open bigger screenshots" className="block w-full rounded-lg transition hover:opacity-90">
+          {img}
+        </button>
+      ) : (
+        img
+      )}
       <figcaption className="mt-1 text-center font-mono text-[10px] text-subtle">{label}</figcaption>
     </figure>
   );
@@ -538,7 +571,7 @@ function PhoneShot({ src, label, small = false }: { src: string; label: string; 
 /** "What was checked" on one page: every step with PASS / WARN / FAIL. */
 function ActivityList({ items }: { items: ChecklistItem[] }) {
   return (
-    <div className="rounded-lg border border-line">
+    <div className="@container rounded-lg border border-line">
       <div className="border-b border-line px-3 py-1.5 font-mono text-[10px] tracking-[0.14em] text-subtle uppercase">
         What was checked · {items.filter((i) => i.status === "pass").length}/{items.length} passed
       </div>
@@ -546,11 +579,11 @@ function ActivityList({ items }: { items: ChecklistItem[] }) {
         {items.map((i) => {
           const S = ACTIVITY_STYLE[i.status];
           return (
-            <li key={i.id} className="grid grid-cols-[1rem_minmax(0,9.5rem)_1fr_auto] items-start gap-2 px-3 py-1.5 text-xs">
+            <li key={i.id} className="grid grid-cols-[1rem_1fr_auto] items-start gap-x-2 gap-y-0.5 @md:grid-cols-[1rem_minmax(0,9.5rem)_1fr_auto] px-3 py-1.5 text-xs">
               <S.icon className={`mt-0.5 size-3.5 ${S.color}`} aria-hidden />
               <span className="text-ink">{i.label}</span>
-              <span className="min-w-0 break-words text-muted">{i.detail}</span>
-              <span className={`font-mono text-[10px] font-semibold ${S.color}`}>{S.text}</span>
+              <span className="col-start-2 row-start-2 min-w-0 break-words text-muted @md:col-start-3 @md:row-start-1">{i.detail}</span>
+              <span className={`col-start-3 row-start-1 font-mono text-[10px] font-semibold ${S.color} @md:col-start-4`}>{S.text}</span>
             </li>
           );
         })}
