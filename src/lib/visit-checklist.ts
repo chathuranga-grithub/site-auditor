@@ -43,6 +43,23 @@ export function buildChecklist(r: VisitReport): ChecklistItem[] {
       r.exit.countryCode === EXPECTED_COUNTRY ? "pass" : "fail",
       `${r.exit.country ?? "Unknown"}${r.exit.city ? `, ${r.exit.city}` : ""} · ${r.exit.ip}${r.exit.org ? ` · ${r.exit.org}` : ""}`,
     );
+    add(
+      "residential",
+      "Proxy IP is residential",
+      r.exit.network === "residential" ? "pass" : "warn",
+      r.exit.network === "residential"
+        ? `Home / mobile network${r.exit.org ? ` (${r.exit.org})` : ""}`
+        : r.exit.network === "datacenter"
+          ? `Datacenter network${r.exit.org ? ` (${r.exit.org})` : ""}: sites may treat it differently from real visitors`
+          : `Couldn't tell from the network name${r.exit.org ? ` (${r.exit.org})` : ""}`,
+    );
+    if (r.exit.lookupMs != null)
+      add(
+        "proxy-speed",
+        "Proxy speed",
+        r.exit.lookupMs < 3000 ? "pass" : "warn",
+        `Answered in ${seconds(r.exit.lookupMs)}${r.exit.lookupMs < 3000 ? "" : ": slow, so page load times in this test will be slower than for real visitors"}`,
+      );
   }
 
   // 3-4. Start page

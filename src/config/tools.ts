@@ -1,7 +1,7 @@
 // Registry of tools shown in the sidebar. The first entry is the default ("/" redirects to it).
 // To add a tool: create its route under src/app/<slug>/page.tsx and add an entry here.
 
-import { MousePointerClick, Network, ScanSearch, TrendingUp, type LucideIcon } from "lucide-react";
+import { MousePointerClick, ScanSearch, TrendingUp, type LucideIcon } from "lucide-react";
 
 export interface Tool {
   /** Route, e.g. "/audit". */
@@ -29,11 +29,5 @@ export const TOOLS: Tool[] = [
     name: "Visit Test",
     description: "Runs on this computer: visits every page of a company site through a Vietnam proxy, on desktop and phone, and logs what works.",
     icon: MousePointerClick,
-  },
-  {
-    href: "/proxy-check",
-    name: "Proxy Check",
-    description: "Runs on this computer: tests the rotating residential proxy over a time period (location, network, connection, speed of each IP).",
-    icon: Network,
   },
 ];

@@ -70,7 +70,7 @@ The third tool, at `/visit-test`. It checks that **every page of a company site 
 **What it does:**
 1. Gets a proxy from your proxy provider's API, e.g. ShopLike, which returns `{ status: "success", data: { proxy: "ip:port" } }`.
 2. Opens a real browser (the **Microsoft Edge or Google Chrome installed on the computer**) through that proxy.
-3. **Checks the proxy IP is in Vietnam before opening any page:** it looks up the IP and country through the proxy (ipinfo.io, with api.country.is as a backup). The test stops, with no pages opened, if it isn't Vietnam or can't be confirmed. Nothing is sent from this computer's own IP, and with a proxy set the browser never falls back to a direct connection.
+3. **Checks the proxy IP before opening any page** (location, residential or datacenter network, speed) and stops unless it is in Vietnam: it looks up the IP and country through the proxy (ipinfo.io, with api.country.is as a backup). The test stops, with no pages opened, if it isn't Vietnam or can't be confirmed. Nothing is sent from this computer's own IP, and with a proxy set the browser never falls back to a direct connection.
 4. Opens the start page, scrolls it and checks its images.
 5. **Finds every internal page:**
    - the sitemap (Yoast, Rank Math, WordPress core `wp-sitemap.xml`, or the one listed in robots.txt), read through the proxy too;
@@ -107,17 +107,6 @@ The third tool, at `/visit-test`. It checks that **every page of a company site 
 - If the provider says to wait for a new IP (`"Con lai 177 giay de get proxy moi"`), the previous proxy is reused while it's still valid (`proxyTimeout`). Otherwise the page shows a countdown.
 
 **On Vercel:** the tool is disabled, because there's no browser there and the provider would likely reject Vercel's IPs.
-
-## Proxy Check (runs on your computer only)
-
-The fourth tool, at `/proxy-check`. It tests the **rotating residential proxy service itself** over 15, 30, 45 or 60 minutes. It never visits our sites.
-
-Each time the provider gives a new IP (following its "wait N seconds" timing), it checks through that proxy:
-- where the IP really is (country, city), using ipinfo.io or api.country.is;
-- the network: **residential** (Viettel, VNPT, FPT…) or **datacenter** (hosting / cloud), guessed from the ISP name;
-- whether it connects, and how fast (a tiny request to `gstatic.com/generate_204`).
-
-You get a live table, one row per IP: new IP, wait, failed, or repeat. The summary shows IPs received (unique / repeats), % in Vietnam, % residential, average and slowest speed, failures, and how often it really rotates. Copy summary shares it. No browser is used, so it's light.
 
 ## How it works
 

@@ -8,6 +8,8 @@ export const MAX_PAGES = 500;
 /** Country the visit must come from. The test stops before visiting pages if it doesn't. */
 export const EXPECTED_COUNTRY = "VN";
 
+import type { NetworkType } from "./network-type";
+
 /** Proxy returned by the proxy provider's API. */
 export interface ProxyInfo {
   /** "host:port" */
@@ -29,6 +31,10 @@ export interface ExitInfo {
   city: string | null;
   /** Network / ISP, e.g. "AS7552 Viettel Group". */
   org: string | null;
+  /** Residential (home / mobile ISP) or datacenter, guessed from the ISP name. */
+  network: NetworkType;
+  /** How long the IP lookup took through the proxy: a quick speed reading of the proxy. */
+  lookupMs: number | null;
 }
 
 export interface VisitPage {

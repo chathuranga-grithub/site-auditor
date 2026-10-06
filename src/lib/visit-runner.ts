@@ -5,6 +5,7 @@
 
 import { chromium, devices, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { getProxyOrReuse } from "./proxy-api";
+import { networkType } from "./network-type";
 import { readSitemap, type SitemapFetcher } from "./sitemap";
 import { isBlockedHost, isInternal, normalizeUrl, shouldSkipCrawl } from "./url";
 import {
@@ -108,7 +109,7 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, signal, send }: V
     // 2. Where does the visit come from? Looked up inside the proxied browser (through the proxy;
     // nothing is sent from this computer's own IP). Wrong or unknown location: stop before opening
     // any page. With a proxy set, the browser never falls back to a direct connection.
-    send({ type: "step", message: "Checking the proxy IP's location…" });
+    send({ type: "step", message: "Checking the proxy IP (location, network, speed)…" });
     report.exit = await exitLocation(context);
     send({ type: "proxy", proxy: publicProxy, exit: report.exit });
     if (stopped()) return finish(report);
@@ -117,7 +118,7 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, signal, send }: V
     const exit = report.exit!;
     send({
       type: "step",
-      message: `Confirmed: visiting from ${exit.country}${exit.city ? `, ${exit.city}` : ""} (proxy IP ${exit.ip}${exit.org ? `, ${exit.org}` : ""}).`,
+      message: `Proxy IP ${exit.ip}: ${exit.country}${exit.city ? `, ${exit.city}` : ""} · ${exit.network}${exit.org ? ` (${exit.org})` : ""}${exit.lookupMs != null ? ` · answered in ${(exit.lookupMs / 1000).toFixed(1)}s` : ""}.`,
     });
     // The sitemap is read through the proxy too, so every request to the site comes from there.
     const sitemap = readSitemap(new URL(url).origin, proxiedFetcher(context)).catch(() => null);
@@ -270,7 +271,7 @@ async function launchBrowser(proxy: { server: string; username?: string; passwor
 /** IP lookup services, tried in order. Both return { ip, country (2-letter code) }. */
 const IP_SERVICES = ["https://ipinfo.io/json", "https://api.country.is/"];
 
-function toExitInfo(j: Record<string, string> | undefined): ExitInfo | null {
+function toExitInfo(j: Record<string, string> | undefined, lookupMs: number): ExitInfo | null {
   if (!j?.ip) return null;
   const names = new Intl.DisplayNames(["en"], { type: "region" });
   return {
@@ -279,6 +280,8 @@ function toExitInfo(j: Record<string, string> | undefined): ExitInfo | null {
     country: j.country ? (names.of(j.country) ?? j.country) : null,
     city: j.city ?? null,
     org: j.org ?? null,
+    network: networkType(j.org ?? null),
+    lookupMs,
   };
 }
 
@@ -287,8 +290,9 @@ async function exitLocation(context: BrowserContext): Promise<ExitInfo | null> {
   for (const service of IP_SERVICES) {
     const page = await context.newPage();
     try {
+      const t0 = Date.now();
       const res = await page.goto(service, { timeout: 20_000 });
-      const info = toExitInfo((await res?.json()) as Record<string, string> | undefined);
+      const info = toExitInfo((await res?.json()) as Record<string, string> | undefined, Date.now() - t0);
       if (info) return info;
     } catch {
       /* try the next service */
