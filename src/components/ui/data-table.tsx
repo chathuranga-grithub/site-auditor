@@ -5,7 +5,6 @@
 
 import { useMemo, useState, type ReactNode } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown, Search } from "lucide-react";
-import { Pagination } from "./pagination";
 
 export interface Column<T> {
   id: string;
@@ -36,8 +35,6 @@ interface DataTableProps<T> {
   empty: ReactNode;
   toolbar?: ReactNode;
   pageSize?: number;
-  /** Page-by-page navigation (Previous, 1 2 3, Next) instead of "Show more". */
-  paged?: boolean;
 }
 
 export function DataTable<T>({
@@ -50,13 +47,11 @@ export function DataTable<T>({
   empty,
   toolbar,
   pageSize = 100,
-  paged = false,
 }: DataTableProps<T>) {
   const [query, setQuery] = useState("");
   const [filterId, setFilterId] = useState("all");
   const [sort, setSort] = useState<SortState>(defaultSort);
   const [limit, setLimit] = useState(pageSize);
-  const [page, setPage] = useState(1);
 
   const filterCounts = useMemo(
     () => new Map(filters.map((f) => [f.id, rows.filter(f.test).length])),
@@ -85,10 +80,6 @@ export function DataTable<T>({
     return out;
   }, [rows, filters, filterId, query, searchText, sort, columns]);
 
-  const pageCount = Math.max(1, Math.ceil(visible.length / pageSize));
-  const currentPage = Math.min(page, pageCount);
-  const shown = paged ? visible.slice((currentPage - 1) * pageSize, currentPage * pageSize) : visible.slice(0, limit);
-
   const toggleSort = (id: string) =>
     setSort((s) => (s?.id !== id ? { id, dir: "asc" } : s.dir === "asc" ? { id, dir: "desc" } : null));
 
@@ -106,7 +97,6 @@ export function DataTable<T>({
                 onChange={(e) => {
                   setQuery(e.target.value);
                   setLimit(pageSize);
-                  setPage(1);
                 }}
                 placeholder="Search URLs…"
                 className="h-8 w-full rounded-lg border border-line bg-canvas/60 pr-3 pl-9 font-mono text-xs text-ink outline-none placeholder:text-subtle focus:border-accent/60 focus:ring-2 focus:ring-accent/20"
@@ -117,10 +107,7 @@ export function DataTable<T>({
             <div className="flex flex-wrap gap-1.5" role="group" aria-label="Quick filters">
               <FilterChip
                 active={filterId === "all"}
-                onClick={() => {
-                  setFilterId("all");
-                  setPage(1);
-                }}
+                onClick={() => setFilterId("all")}
                 label="All"
                 count={rows.length}
               />
@@ -131,7 +118,6 @@ export function DataTable<T>({
                   onClick={() => {
                     setFilterId(f.id);
                     setLimit(pageSize);
-                    setPage(1);
                   }}
                   label={f.label}
                   count={filterCounts.get(f.id) ?? 0}
@@ -182,7 +168,7 @@ export function DataTable<T>({
               </tr>
             </thead>
             <tbody className="divide-y divide-line">
-              {shown.map((row) => (
+              {visible.slice(0, limit).map((row) => (
                 <tr key={rowKey(row)} className="transition-colors hover:bg-surface-2">
                   {columns.map((c) => (
                     <td key={c.id} className={`px-4 py-2 align-top ${c.className ?? ""}`}>
@@ -196,25 +182,21 @@ export function DataTable<T>({
         </div>
       )}
 
-      {paged ? (
-        <Pagination page={currentPage} pageSize={pageSize} total={visible.length} unit="rows" onPage={setPage} />
-      ) : (
-        <div className="flex items-center justify-between border-t border-line px-4 py-2 font-mono text-[11px] text-subtle">
-          <span>
-            {Math.min(limit, visible.length).toLocaleString()} / {visible.length.toLocaleString()} rows
-            {visible.length !== rows.length && ` · filtered from ${rows.length.toLocaleString()}`}
-          </span>
-          {visible.length > limit && (
-            <button
-              type="button"
-              onClick={() => setLimit((l) => l + pageSize)}
-              className="rounded-md px-2 py-0.5 text-muted hover:bg-surface-2 hover:text-ink"
-            >
-              Show {Math.min(pageSize, visible.length - limit)} more
-            </button>
-          )}
-        </div>
-      )}
+      <div className="flex items-center justify-between border-t border-line px-4 py-2 font-mono text-[11px] text-subtle">
+        <span>
+          {Math.min(limit, visible.length).toLocaleString()} / {visible.length.toLocaleString()} rows
+          {visible.length !== rows.length && ` · filtered from ${rows.length.toLocaleString()}`}
+        </span>
+        {visible.length > limit && (
+          <button
+            type="button"
+            onClick={() => setLimit((l) => l + pageSize)}
+            className="rounded-md px-2 py-0.5 text-muted hover:bg-surface-2 hover:text-ink"
+          >
+            Show {Math.min(pageSize, visible.length - limit)} more
+          </button>
+        )}
+      </div>
     </div>
   );
 }

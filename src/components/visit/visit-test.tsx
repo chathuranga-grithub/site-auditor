@@ -5,7 +5,7 @@
 
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Check, CircleCheck, CircleMinus, CircleX, Copy, Globe, KeyRound, LayoutGrid, List, Loader2, Camera, CameraOff, Monitor, Smartphone, Play, Square, Timer, TriangleAlert } from "lucide-react";
+import { Check, CircleCheck, CircleMinus, CircleX, Copy, Globe, KeyRound, Loader2, Camera, CameraOff, Monitor, Smartphone, Play, Square, Timer, TriangleAlert } from "lucide-react";
 import {
   buildChecklist,
   checklistHeadline,
@@ -16,10 +16,9 @@ import {
   type CheckStatus,
   type ChecklistItem,
 } from "@/lib/visit-checklist";
-import { MAX_PAGES, type Discovery, type ScrollResult, type VisitEvent, type VisitPage, type VisitReport } from "@/lib/visit-types";
+import { MAX_PAGES, OVERFLOW_PX, type Discovery, type ScrollResult, type VisitEvent, type VisitPage, type VisitReport } from "@/lib/visit-types";
 import { Notice, Panel, StatTile, StatusCode, Tag, UrlLink, buttonClass } from "@/components/ui/primitives";
-import { ACTIVITY_STYLE, DetailDialog, VisitPageCards } from "./visit-page-cards";
-import { VisitPagesTable } from "./visit-pages-table";
+import { ACTIVITY_STYLE, DetailDialog } from "./visit-dialog";
 
 /** Problems listed in the notice before "and N more". */
 const ISSUES_SHOWN = 15;
@@ -34,7 +33,7 @@ export function VisitTest() {
   const [env, setEnv] = useState<{ local: boolean; savedProxyApi: boolean } | null>(null);
   const [running, setRunning] = useState(false);
   const [steps, setSteps] = useState<string[]>([]);
-  const [pages, setPages] = useState<VisitPage[]>([]);
+  const [pages, setPages] = useState<LoggedPage[]>([]);
   const [discovery, setDiscovery] = useState<Discovery | null>(null);
   // Start time and time of the latest page, for the "time left" estimate.
   const [timing, setTiming] = useState({ start: 0, last: 0 });
@@ -43,6 +42,7 @@ export function VisitTest() {
   const [waitUntil, setWaitUntil] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const abortRef = useRef<AbortController | null>(null);
+  const [openPage, setOpenPage] = useState<VisitPage | null>(null);
   const discoveredRef = useRef(false);
 
   useEffect(() => {
@@ -115,7 +115,10 @@ export function VisitTest() {
         break;
       case "page":
         // The start page is sent again once its phone check is done: replace it, don't add it twice.
-        setPages((p) => (e.page.kind === "start" && p.some((x) => x.kind === "start") ? p.map((x) => (x.kind === "start" ? e.page : x)) : [...p, e.page]));
+        {
+          const logged: LoggedPage = { ...e.page, at: Date.now() };
+          setPages((p) => (logged.kind === "start" && p.some((x) => x.kind === "start") ? p.map((x) => (x.kind === "start" ? { ...logged, at: x.at } : x)) : [...p, logged]));
+        }
         setTiming((t) => ({ ...t, last: Date.now() }));
         break;
       case "discovered":
@@ -266,68 +269,186 @@ export function VisitTest() {
           {discovery && discovery.total > 0 && (
             <Progress done={pages.filter((p) => p.kind === "internal").length} total={discovery.total} running={running} elapsedMs={timing.last - timing.start} />
           )}
-          {pages.length > 0 && <LiveLog pages={pages} total={discovery ? discovery.total + 1 : null} />}
+          {pages.length > 0 && <LiveLog pages={pages} total={discovery ? discovery.total + 1 : null} onOpen={setOpenPage} />}
         </Panel>
       )}
 
       {(report || pages.length > 0) && <Results report={report} pages={pages} />}
+
+      {openPage && (
+        <DetailDialog onClose={() => setOpenPage(null)}>
+          <PageCard page={openPage} heading={openPage.kind === "start" ? "Start page" : (openPage.title ?? "Page")} scroll={openPage.scroll} large />
+        </DetailDialog>
+      )}
     </div>
   );
 }
 
-/** Console-style log: one line per page as it's checked. Follows the newest line unless scrolled up. */
-function LiveLog({ pages, total }: { pages: VisitPage[]; total: number | null }) {
+/** A page result plus the time it arrived, for the console. */
+type LoggedPage = VisitPage & { at: number };
+
+type LogFilter = "all" | "problems" | "failed";
+
+/**
+ * The test console: a live summary, then one line per page as it's checked (time, number, status,
+ * load time, phone result, page, result) with the details of any problem underneath. Follows the
+ * newest line unless scrolled up; click a line for everything about that page.
+ */
+function LiveLog({ pages, total, onOpen }: { pages: LoggedPage[]; total: number | null; onOpen: (page: VisitPage) => void }) {
   const box = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
+  const [filter, setFilter] = useState<LogFilter>("all");
   useEffect(() => {
     if (stick.current && box.current) box.current.scrollTop = box.current.scrollHeight;
-  }, [pages.length]);
+  }, [pages.length, filter]);
+
+  const lines = pages.map((p, i) => ({ n: i + 1, page: p, problems: pageProblems(p) }));
+  const failed = lines.filter((l) => !l.page.ok).length;
+  const warnings = lines.filter((l) => l.page.ok && l.problems.length).length;
+  const ok = lines.length - failed - warnings;
+  const loads = pages.map((p) => p.loadMs).filter((ms): ms is number => ms != null);
+  const avg = loads.length ? Math.round(loads.reduce((x, y) => x + y, 0) / loads.length) : null;
+  const elapsed = pages.length > 1 ? Math.round((Math.max(...pages.map((p) => p.at)) - Math.min(...pages.map((p) => p.at))) / 1000) : 0;
+  const shown = filter === "all" ? lines : filter === "failed" ? lines.filter((l) => !l.page.ok) : lines.filter((l) => l.problems.length);
   const width = String(total ?? pages.length).length;
+  const counts: Record<LogFilter, number> = { all: lines.length, problems: failed + warnings, failed };
+  const grid = "grid grid-cols-[4.5rem_4rem_2.5rem_3rem_4.5rem_minmax(10rem,18rem)_1fr] gap-x-3";
 
   return (
-    <div className="mt-4">
-      <div className="mb-1 flex items-center justify-between font-mono text-[10px] tracking-[0.14em] text-subtle uppercase">
-        <span>Live log</span>
-        <span className="tracking-normal normal-case">{pages.length.toLocaleString()} line(s)</span>
+    <div className="mt-4 overflow-hidden rounded-lg border border-line bg-black/50 font-mono text-[11px]">
+      {/* Summary bar */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-line bg-black/40 px-3 py-2">
+        <span className="text-ink">
+          Checked <b className="tabular-nums">{lines.length}</b>
+          {total ? <span className="text-subtle">/{total}</span> : null}
+        </span>
+        <span className="text-status-good tabular-nums">✓ {ok} OK</span>
+        <span className={`tabular-nums ${warnings ? "text-status-warning" : "text-subtle"}`}>⚠ {warnings} warning{warnings === 1 ? "" : "s"}</span>
+        <span className={`tabular-nums ${failed ? "text-status-critical" : "text-subtle"}`}>✕ {failed} failed</span>
+        <span className="text-muted tabular-nums">avg load {avg != null ? formatMs(avg) : "–"}</span>
+        <span className="text-muted tabular-nums">elapsed {formatWait(elapsed)}</span>
+        <span className="ml-auto flex rounded-md bg-canvas/60 p-0.5" role="radiogroup" aria-label="Log lines">
+          {(["all", "problems", "failed"] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              role="radio"
+              aria-checked={filter === v}
+              onClick={() => setFilter(v)}
+              className={`rounded px-2 py-0.5 transition ${filter === v ? "bg-surface-2 text-ink ring-1 ring-line-strong" : "text-muted hover:text-ink"}`}
+            >
+              {v === "all" ? "All" : v === "problems" ? "Problems" : "Failed"} ({counts[v]})
+            </button>
+          ))}
+        </span>
       </div>
-      <div
-        ref={box}
-        onScroll={(e) => {
-          const el = e.currentTarget;
-          stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-        }}
-        role="log"
-        aria-label="Live log"
-        className="max-h-72 overflow-auto rounded-lg border border-line bg-black/50 px-3 py-2 font-mono text-[11px] leading-5"
-      >
-        {pages.map((p, i) => {
-          const problems = pageProblems(p);
-          const path = (() => {
-            try {
-              const u = new URL(p.finalUrl);
-              return (u.pathname + u.search) || "/";
-            } catch {
-              return p.finalUrl;
-            }
-          })();
-          const tone = !p.ok ? "text-status-critical" : problems.length ? "text-status-warning" : "text-status-good";
-          return (
-            <div key={`${i}-${p.url}`} className="flex gap-3 whitespace-nowrap">
-              <span className="text-subtle tabular-nums">
-                [{String(i + 1).padStart(width, " ")}/{total ?? "?"}]
-              </span>
-              <span className={`tabular-nums ${p.status === null || p.status >= 400 ? "text-status-critical" : "text-muted"}`}>{p.status ?? "---"}</span>
-              <span className="w-12 shrink-0 text-right text-muted tabular-nums">{p.loadMs != null ? formatMs(p.loadMs) : "-"}</span>
-              <span className="w-72 shrink-0 truncate text-ink" title={p.finalUrl}>
-                {path}
-              </span>
-              <span className={tone}>{problems.length ? `${p.ok ? "⚠" : "✕"} ${problems.join(" · ")}` : "✓ OK"}</span>
-            </div>
-          );
-        })}
+
+      <div className="overflow-x-auto">
+        <div className="min-w-[56rem]">
+          {/* Column headers */}
+          <div className={`${grid} border-b border-line px-3 py-1 text-[10px] tracking-[0.12em] text-subtle uppercase`}>
+            <span>Time</span>
+            <span>#</span>
+            <span>Code</span>
+            <span className="text-right">Load</span>
+            <span>Phone</span>
+            <span>Page</span>
+            <span>Result · click a line for details</span>
+          </div>
+
+          <div
+            ref={box}
+            onScroll={(e) => {
+              const el = e.currentTarget;
+              stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+            }}
+            role="log"
+            aria-label="Live log"
+            className="max-h-[30rem] overflow-y-auto py-1 leading-5"
+          >
+            {shown.length === 0 && <div className="px-3 py-1 text-subtle">{filter === "all" ? "Waiting for the first page…" : "Nothing here so far."}</div>}
+            {shown.map(({ n, page: p, problems }) => {
+              const tone = !p.ok ? "text-status-critical" : problems.length ? "text-status-warning" : "text-status-good";
+              const details = problemDetails(p);
+              return (
+                <button
+                  key={`${n}-${p.url}`}
+                  type="button"
+                  onClick={() => onOpen(p)}
+                  title={`${p.finalUrl} · click for details`}
+                  className={`block w-full px-3 text-left hover:bg-white/5 ${problems.length ? "bg-white/[0.02]" : ""}`}
+                >
+                  <span className={`${grid} whitespace-nowrap`}>
+                    <span className="text-subtle tabular-nums">{clock(p.at)}</span>
+                    <span className="text-subtle tabular-nums">
+                      [{String(n).padStart(width, " ")}/{total ?? "?"}]
+                    </span>
+                    <span className={`tabular-nums ${p.status === null || p.status >= 400 ? "text-status-critical" : "text-muted"}`}>{p.status ?? "---"}</span>
+                    <span className={`text-right tabular-nums ${(p.loadMs ?? 0) > 8000 ? "text-status-warning" : "text-muted"}`}>{p.loadMs != null ? formatMs(p.loadMs) : "–"}</span>
+                    <PhoneCell page={p} />
+                    <span className="truncate text-ink">{pathOf(p.finalUrl)}</span>
+                    <span className={`truncate ${tone}`}>{problems.length ? `${p.ok ? "⚠" : "✕"} ${problems.join(" · ")}` : "✓ OK"}</span>
+                  </span>
+                  {details.length > 0 && (
+                    <span className="mb-1 block pl-[calc(4.5rem+4rem+2.5rem+3rem+4.5rem+3.75rem)] text-[10.5px] leading-4">
+                      {details.map((d, i) => (
+                        <span key={i} className="block truncate text-muted">
+                          <span className="text-subtle">└ {d.label}:</span> {d.text}
+                        </span>
+                      ))}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </div>
     </div>
   );
+}
+
+/** The phone result in one word. */
+function PhoneCell({ page: p }: { page: VisitPage }) {
+  const m = p.mobile;
+  if (m === undefined) return <span className="text-subtle">–</span>;
+  if (m === null) return <span className="text-subtle">not run</span>;
+  if (!m.ok) return <span className="text-status-critical">✕ failed</span>;
+  if (m.overflowPx > OVERFLOW_PX) return <span className="text-status-critical">✕ wide</span>;
+  if (!m.viewportTag || m.brokenImages.length) return <span className="text-status-warning">⚠ check</span>;
+  return <span className="text-status-good">✓ ok</span>;
+}
+
+/** The first example of each problem on a page, shown under its console line. */
+function problemDetails(p: VisitPage): { label: string; text: string }[] {
+  const out: { label: string; text: string }[] = [];
+  const more = (n: number) => (n > 1 ? `  (+${n - 1} more)` : "");
+  if (!p.ok && p.error) out.push({ label: "Error", text: p.error });
+  if (p.consoleErrors.length) out.push({ label: "JS error", text: p.consoleErrors[0] + more(p.consoleErrors.length) });
+  if (p.failedRequests.length) out.push({ label: "Failed file", text: p.failedRequests[0] + more(p.failedRequests.length) });
+  if (p.scroll?.brokenImages.length) out.push({ label: "Broken image", text: p.scroll.brokenImages[0] + more(p.scroll.brokenImages.length) });
+  if (p.stillLoading?.length) out.push({ label: "Still loading", text: p.stillLoading[0] + more(p.stillLoading.length) });
+  if (p.clickable === false && p.note) out.push({ label: "Link", text: p.note });
+  const m = p.mobile;
+  if (m && !m.ok) out.push({ label: "Phone", text: m.error ?? "didn't load" });
+  if (m?.ok && m.overflowPx > OVERFLOW_PX) out.push({ label: "Phone", text: `page is ${m.overflowPx}px wider than the screen (scrolls sideways)` });
+  if (m?.ok && !m.viewportTag) out.push({ label: "Phone", text: "no viewport tag (may show a tiny desktop page)" });
+  if (m?.brokenImages.length) out.push({ label: "Phone image", text: m.brokenImages[0] + more(m.brokenImages.length) });
+  if (p.menus?.mobile && !p.menus.mobile.opened) out.push({ label: "Phone menu", text: p.menus.mobile.note ?? "didn't open" });
+  return out;
+}
+
+function pathOf(url: string) {
+  try {
+    const u = new URL(url);
+    return u.pathname + u.search || "/";
+  } catch {
+    return url;
+  }
+}
+
+function clock(ms: number) {
+  return new Date(ms).toLocaleTimeString("en-GB", { hour12: false });
 }
 
 function Progress({ done, total, running, elapsedMs }: { done: number; total: number; running: boolean; elapsedMs: number }) {
@@ -366,10 +487,6 @@ function Results({ report, pages }: { report: VisitReport | null; pages: VisitPa
   const scrolled = pages.filter((p) => p.scroll);
   const images = scrolled.reduce((n, p) => n + p.scroll!.images, 0);
   const brokenImages = scrolled.reduce((n, p) => n + p.scroll!.brokenImages.length, 0);
-  const [view, setView] = useState<"cards" | "list">("cards");
-  const [openPage, setOpenPage] = useState<VisitPage | null>(null);
-  // Screenshots turned off: no picture areas in the results, so they stay compact.
-  const hasShots = pages.some((p) => p.screenshot || p.mobile?.screenshot);
   const exit = report?.exit;
 
   return (
@@ -397,7 +514,7 @@ function Results({ report, pages }: { report: VisitReport | null; pages: VisitPa
                 ))}
               </ul>
               {report.issues.length > ISSUES_SHOWN && (
-                <div className="mt-1 text-xs">…and {report.issues.length - ISSUES_SHOWN} more. Use the Problems filter below, or Copy summary.</div>
+                <div className="mt-1 text-xs">…and {report.issues.length - ISSUES_SHOWN} more. Use the Problems filter in the live log, or Copy summary.</div>
               )}
             </Notice>
           )}
@@ -429,41 +546,6 @@ function Results({ report, pages }: { report: VisitReport | null; pages: VisitPa
         />
       </div>
 
-      {pages.length > 0 && (
-        <Panel
-          title={"All pages visited · " + pages.length + (report?.discovery ? " of " + (report.discovery.total + 1) : "")}
-          actions={
-            <div className="flex rounded-lg bg-canvas/60 p-0.5" role="radiogroup" aria-label="View">
-              {(["cards", "list"] as const).map((v) => (
-                <button
-                  key={v}
-                  type="button"
-                  role="radio"
-                  aria-checked={view === v}
-                  onClick={() => setView(v)}
-                  className={"inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition " + (view === v ? "bg-surface-2 text-ink ring-1 ring-line-strong" : "text-muted hover:text-ink")}
-                >
-                  {v === "cards" ? <LayoutGrid className="size-3.5" /> : <List className="size-3.5" />}
-                  {v === "cards" ? "Cards" : "List"}
-                </button>
-              ))}
-            </div>
-          }
-          bodyClassName=""
-        >
-          {view === "cards" ? (
-            <VisitPageCards pages={pages} onOpen={setOpenPage} showShots={hasShots} />
-          ) : (
-            <VisitPagesTable pages={pages} onOpen={setOpenPage} showShots={hasShots} />
-          )}
-        </Panel>
-      )}
-
-      {openPage && (
-        <DetailDialog onClose={() => setOpenPage(null)}>
-          <PageCard page={openPage} heading={openPage.kind === "start" ? "Start page" : (openPage.title ?? "Page")} scroll={openPage.scroll} large />
-        </DetailDialog>
-      )}
     </div>
   );
 }
