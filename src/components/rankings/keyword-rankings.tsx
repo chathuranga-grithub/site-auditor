@@ -6,7 +6,7 @@
 
 import { useMemo, useRef, useState, type FormEvent } from "react";
 import { Check, Copy, Download, Loader2, Search } from "lucide-react";
-import { COUNTRIES, POPULAR_COUNTRIES, findCountry } from "@/lib/countries";
+import { COUNTRIES, DEFAULT_COUNTRY, POPULAR_COUNTRIES, findCountry } from "@/lib/countries";
 import { downloadRankingsExcel } from "@/lib/excel-report";
 import { RESULT_COUNTS, type ApiError, type PageSeo, type ResultCount, type SerpResponse } from "@/lib/rankings-types";
 import { SEO_CHECKS, checksPassed, isAnalyzable, median } from "@/lib/rankings-checks";
@@ -17,7 +17,7 @@ import { RankDetail, RankTable, formatMs, type AnalysisState } from "./rank-resu
 const ANALYZE_CONCURRENCY = 5;
 
 export function KeywordRankings() {
-  const [country, setCountry] = useState("LK");
+  const [country, setCountry] = useState(DEFAULT_COUNTRY);
   const [keyword, setKeyword] = useState("");
   const [count, setCount] = useState<ResultCount>(10);
   const [phase, setPhase] = useState<"idle" | "searching" | "analyzing" | "done">("idle");

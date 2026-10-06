@@ -7,8 +7,11 @@ export interface Country {
   name: string;
 }
 
+/** Selected when the tool opens. */
+export const DEFAULT_COUNTRY = "VN";
+
 /** Shown first in the picker. */
-export const POPULAR_COUNTRIES = ["LK", "IN", "MY", "GB", "AE", "US", "AU", "CA", "SG", "SA", "QA"];
+export const POPULAR_COUNTRIES = ["VN", "LK", "IN", "MY", "GB", "AE", "US", "AU", "CA", "SG", "SA", "QA"];
 
 /** [code, name], sorted by name. */
 const LIST: [string, string][] = [
