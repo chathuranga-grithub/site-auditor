@@ -2,8 +2,8 @@
 
 // Results table (one row per ranking page) and the detail panel for the selected page.
 
-import { CircleCheck, CircleX, ExternalLink, Loader2, X } from "lucide-react";
-import type { ReactNode } from "react";
+import { Check, CircleCheck, CircleX, Copy, ExternalLink, Loader2, X } from "lucide-react";
+import { useState, type MouseEvent, type ReactNode } from "react";
 import type { AnalysisState, PageSeo, SerpResult } from "@/lib/rankings-types";
 import { SEO_CHECKS, checksPassed, isAnalyzable } from "@/lib/rankings-checks";
 import { friendlyError } from "@/lib/report";
@@ -50,6 +50,12 @@ export function RankTable({
                 <td className="px-4 py-2.5 align-top font-mono text-sm font-semibold text-ink tabular-nums">{r.position}</td>
                 <td className="px-4 py-2.5 align-top">
                   <div className="font-mono text-xs text-ink">{r.domain}</div>
+                  <div className="mt-0.5 flex min-w-0 items-center gap-1">
+                    <span className="truncate font-mono text-[11px] text-link" title={r.url}>
+                      {r.url}
+                    </span>
+                    <CopyUrlButton url={r.url} />
+                  </div>
                   <div className="mt-0.5 line-clamp-1 text-xs text-muted">{r.title}</div>
                 </td>
                 {page ? (
@@ -109,6 +115,7 @@ export function RankDetail({
             {result.url}
             <ExternalLink className="size-3 shrink-0" />
           </a>
+          <CopyUrlButton url={result.url} />
           {result.snippet && <p className="mt-2 text-sm text-muted">{result.snippet}</p>}
         </div>
         <button
@@ -170,6 +177,34 @@ export function RankDetail({
         </div>
       )}
     </div>
+  );
+}
+
+/** Copies one result URL; shows a check for a moment. Doesn't open the row details. */
+function CopyUrlButton({ url }: { url: string }) {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+
+  async function copy(e: MouseEvent) {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(url);
+      setState("copied");
+    } catch {
+      setState("failed");
+    }
+    setTimeout(() => setState("idle"), 1500);
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      aria-label={state === "copied" ? "URL copied" : "Copy URL"}
+      title={state === "copied" ? "Copied" : state === "failed" ? "Copy failed" : "Copy URL"}
+      className="inline-grid size-6 shrink-0 place-items-center rounded-md text-subtle transition hover:bg-surface-2 hover:text-ink"
+    >
+      {state === "copied" ? <Check className="size-3.5 text-status-good" /> : <Copy className="size-3.5" />}
+    </button>
   );
 }
 
