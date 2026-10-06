@@ -1,10 +1,10 @@
-// POST /api/visit-test  body: { url, proxyApiUrl?, mobile? (default true), screenshots? (default true) }
+// POST /api/visit-test  body: { url, proxyApiUrl?, mobile? (default true) }
 // Local only: visits every page of the site in a real browser through a proxy (src/lib/visit-runner.ts) and
 // streams progress as newline-delimited JSON (VisitEvent per line). One test at a time.
 
 import { ProxyWaitError } from "@/lib/proxy-api";
 import { isBlockedHost, parseSiteUrl } from "@/lib/url";
-import type { VisitEvent, VisitPage } from "@/lib/visit-types";
+import type { VisitEvent } from "@/lib/visit-types";
 
 export const runtime = "nodejs";
 // A full-site run can take a while; this route only runs locally, where there is no limit.
@@ -18,7 +18,7 @@ export async function POST(request: Request) {
   }
   if (running) return Response.json({ error: "A visit test is already running. Wait for it to finish." }, { status: 409 });
 
-  let body: { url?: unknown; proxyApiUrl?: unknown; mobile?: unknown; screenshots?: unknown };
+  let body: { url?: unknown; proxyApiUrl?: unknown; mobile?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -36,7 +36,6 @@ export async function POST(request: Request) {
 
   // Phone check is on unless turned off.
   const mobile = body.mobile !== false;
-  const screenshots = body.screenshots !== false;
 
   running = true;
   const encoder = new TextEncoder();
@@ -53,15 +52,8 @@ export async function POST(request: Request) {
         // Loaded only when a test runs: the browser library isn't available on Vercel, and loading it
         // at the top made this whole route fail there (even the "local only" answer).
         const { runVisitTest } = await import("@/lib/visit-runner");
-        const report = await runVisitTest({ url: site.toString(), proxyApiUrl, mobile, screenshots, signal: request.signal, send });
-        // Screenshots were already streamed with each page; leaving them out avoids sending megabytes twice.
-        const strip = (p: VisitPage): VisitPage => ({
-          ...p,
-          screenshot: undefined,
-          mobile: p.mobile && { ...p.mobile, screenshot: undefined },
-          menus: p.menus && { ...p.menus, mobile: p.menus.mobile && { ...p.menus.mobile, screenshot: undefined } },
-        });
-        send({ type: "done", report: { ...report, start: report.start && strip(report.start), pages: report.pages.map(strip) } });
+        const report = await runVisitTest({ url: site.toString(), proxyApiUrl, mobile, signal: request.signal, send });
+        send({ type: "done", report });
       } catch (err) {
         if (err instanceof ProxyWaitError) send({ type: "wait", seconds: err.waitSec });
         else send({ type: "error", message: err instanceof Error ? err.message : String(err) });

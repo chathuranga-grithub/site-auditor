@@ -63,8 +63,6 @@ export interface VisitPage {
   stillLoading?: string[];
   /** Same-site files (images, scripts, CSS…) that failed or returned 4xx/5xx. */
   failedRequests: string[];
-  /** JPEG data URL of the visible screen: start page and pages with problems only. */
-  screenshot?: string;
   error?: string;
 }
 
@@ -82,14 +80,12 @@ export interface MobileCheck {
   viewportTag: boolean;
   images: number;
   brokenImages: string[];
-  /** Small JPEG data URL of the phone screen. */
-  screenshot?: string;
 }
 
 /** Menu check, done once on the start page (WordPress uses the same menu on every page). */
 export interface MenuCheck {
   /** Phone: the ☰ button. null when the phone check is off or the page didn't open on a phone. */
-  mobile: { buttonFound: boolean; opened: boolean; linksShown: number; note?: string; screenshot?: string } | null;
+  mobile: { buttonFound: boolean; opened: boolean; linksShown: number; note?: string } | null;
 }
 
 export interface ScrollResult {
@@ -125,8 +121,6 @@ export interface VisitReport {
   cancelled: boolean;
   /** Whether each page was also checked on a phone screen. */
   mobileChecked: boolean;
-  /** Whether screenshots were taken (off = lighter, faster run with the same checks). */
-  screenshots: boolean;
 }
 
 /** How many internal pages the test found, and where. */

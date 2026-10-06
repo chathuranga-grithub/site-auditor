@@ -38,18 +38,14 @@ const PAGE_SCROLL = { stepWaitMs: 200, maxSteps: 30, settleMs: 500 };
 const MOBILE_SCROLL = { stepWaitMs: 150, maxSteps: 25, settleMs: 300 };
 /** Phone check: how long to wait for the full load (the desktop check already reported slow files). */
 const MOBILE_LOAD_WAIT = 15_000;
-/** An Android phone (most visitors in Vietnam), at 1x pixels so screenshots stay small; the layout is the same. */
+/** An Android phone (most visitors in Vietnam), at 1x pixels; the layout is the same as on the real phone. */
 const PHONE = { ...devices["Pixel 7"], deviceScaleFactor: 1 };
-/** Width of phone screenshots shown in the results. */
-const PHONE_THUMB_WIDTH = 200;
 
 export interface VisitOptions {
   url: string;
   proxyApiUrl: string;
   /** Also open every page on a phone-sized screen, and test the phone menu. */
   mobile: boolean;
-  /** Take screenshots. Off: the same checks, but faster and much lighter on memory. */
-  screenshots: boolean;
   signal: AbortSignal;
   send: (e: VisitEvent) => void;
 }
@@ -62,7 +58,7 @@ interface Target {
   note?: string;
 }
 
-export async function runVisitTest({ url, proxyApiUrl, mobile, screenshots, signal, send }: VisitOptions): Promise<VisitReport> {
+export async function runVisitTest({ url, proxyApiUrl, mobile, signal, send }: VisitOptions): Promise<VisitReport> {
   const report: VisitReport = {
     url,
     startedAt: new Date().toISOString(),
@@ -79,7 +75,6 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, screenshots, sign
     issues: [],
     cancelled: false,
     mobileChecked: mobile,
-    screenshots,
   };
   const stopped = () => {
     if (signal.aborted) report.cancelled = true;
@@ -131,10 +126,10 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, screenshots, sign
     // The sitemap is read through the proxy too, so every request to the site comes from there.
     const sitemap = readSitemap(new URL(url).origin, proxiedFetcher(context)).catch(() => null);
 
-    // 3. Start page: open, scroll, screenshot
+    // 3. Start page: open and scroll
     send({ type: "step", message: `Opening ${url}…` });
     const page = await context.newPage();
-    const start = await checkPage(page, url, "start", () => page.goto(url, { waitUntil: "domcontentloaded" }), START_SCROLL, screenshots ? "full" : null);
+    const start = await checkPage(page, url, "start", () => page.goto(url, { waitUntil: "domcontentloaded" }), START_SCROLL);
     report.start = start;
     report.scroll = start.scroll ?? null;
     send({ type: "page", page: start });
@@ -145,7 +140,6 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, screenshots, sign
     send({ type: "step", message: "Finding all internal pages (sitemap and start-page links)…" });
     const siteHost = new URL(start.finalUrl).hostname;
     const links = await startPageLinks(page, start.finalUrl, siteHost);
-    const shrink = screenshots ? await makeThumbnailer(context) : null;
 
     await page.close().catch(() => {});
 
@@ -154,9 +148,9 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, screenshots, sign
       send({ type: "step", message: "Checking the start page on a phone and its menu button (☰)…" });
       const menus: MenuCheck = { mobile: null };
       const ptab = await phone.newPage();
-      start.mobile = await checkMobile(ptab, start.finalUrl, shrink);
+      start.mobile = await checkMobile(ptab, start.finalUrl);
       menus.mobile = start.mobile.ok
-        ? await mobileMenu(ptab, shrink).catch(() => ({ buttonFound: false, opened: false, linksShown: 0, note: "The menu check failed." }))
+        ? await mobileMenu(ptab).catch(() => ({ buttonFound: false, opened: false, linksShown: 0, note: "The menu check failed." }))
         : null;
       await ptab.close().catch(() => {});
       start.menus = menus;
@@ -204,11 +198,11 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, screenshots, sign
         active++;
         if (tab.isClosed()) tab = await context.newPage();
         const referer = t.foundIn === "start page" ? start.finalUrl : undefined;
-        const result = await checkPage(tab, t.href, "internal", () => tab.goto(t.href, { waitUntil: "domcontentloaded", referer }), PAGE_SCROLL, shrink);
+        const result = await checkPage(tab, t.href, "internal", () => tab.goto(t.href, { waitUntil: "domcontentloaded", referer }), PAGE_SCROLL);
         if (result.ok && isInternal(result.finalUrl, siteHost)) addFound(await pageLinks(tab, siteHost).catch(() => []));
         if (phone && result.ok && !stopped()) {
           if (!ptab || ptab.isClosed()) ptab = await phone.newPage();
-          result.mobile = await checkMobile(ptab, result.finalUrl, shrink);
+          result.mobile = await checkMobile(ptab, result.finalUrl);
         } else if (phone) result.mobile = null; // didn't open on desktop, so not tried on a phone
         active--;
         if (stopped()) break;
@@ -343,29 +337,6 @@ function proxiedFetcher(context: BrowserContext): SitemapFetcher {
   };
 }
 
-type Thumbnailer = (jpeg: Buffer, width?: number) => Promise<string>;
-
-const THUMB_WIDTH = 480;
-
-/** Shrinks screenshots to THUMB_WIDTH in a blank tab (no network, no site code), as a JPEG data URL. */
-async function makeThumbnailer(context: BrowserContext): Promise<Thumbnailer> {
-  const helper = await context.newPage();
-  return (jpeg, width = THUMB_WIDTH) =>
-    helper.evaluate(
-      async ({ src, width }) => {
-        const img = new Image();
-        img.src = src;
-        await img.decode();
-        const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = Math.round((img.height * width) / img.width);
-        canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height);
-        return canvas.toDataURL("image/jpeg", 0.6);
-      },
-      { src: `data:image/jpeg;base64,${jpeg.toString("base64")}`, width },
-    );
-}
-
 /** Opens one page, scrolls to the bottom and records status, timing, errors and images. */
 async function checkPage(
   page: Page,
@@ -373,8 +344,6 @@ async function checkPage(
   kind: VisitPage["kind"],
   navigate: () => Promise<{ status(): number } | null>,
   scrollOpts: typeof PAGE_SCROLL,
-  /** "full": full-size screenshot; a thumbnailer: full size only for pages with problems; null: no screenshot. */
-  shots: "full" | Thumbnailer | null,
 ): Promise<VisitPage> {
   const consoleErrors: string[] = [];
   const failedRequests: string[] = [];
@@ -426,13 +395,6 @@ async function checkPage(
     if (!result.ok) result.error = `The page returned HTTP ${result.status ?? "no response"}.`;
 
     result.scroll = await scrollPage(page, scrollOpts).catch(() => null);
-    // Screenshots (unless turned off): full size where someone needs to look closely (start page,
-    // pages with problems); a small one for the rest, so hundreds of pages stay light.
-    if (shots) {
-      await page.waitForTimeout(400); // let the top of the page repaint after scrolling back up
-      const jpeg = await page.screenshot({ type: "jpeg", quality: 55 });
-      result.screenshot = shots === "full" || hasProblem(result) ? `data:image/jpeg;base64,${jpeg.toString("base64")}` : await shots(jpeg).catch(() => undefined);
-    }
   } catch (err) {
     result.error = friendly(err);
   } finally {
@@ -445,17 +407,6 @@ async function checkPage(
     page.off("requestfailed", onDone);
   }
   return result;
-}
-
-function hasProblem(p: VisitPage): boolean {
-  return (
-    !p.ok ||
-    p.consoleErrors.length > 0 ||
-    p.failedRequests.length > 0 ||
-    !!p.scroll?.brokenImages.length ||
-    (p.loadMs ?? 0) > SLOW_MS ||
-    !!p.stillLoading
-  );
 }
 
 async function scrollPage(page: Page, { stepWaitMs, maxSteps, settleMs }: typeof PAGE_SCROLL): Promise<ScrollResult> {
@@ -533,8 +484,7 @@ async function startPageLinks(page: Page, pageUrl: string, siteHost: string): Pr
 }
 
 /** Opens the page on a phone: does it load, fit the screen, have the viewport tag, load its images? */
-/** shrink: null = no screenshot. */
-async function checkMobile(page: Page, url: string, shrink: Thumbnailer | null): Promise<MobileCheck> {
+async function checkMobile(page: Page, url: string): Promise<MobileCheck> {
   const out: MobileCheck = { ok: false, status: null, overflowPx: 0, viewportTag: false, images: 0, brokenImages: [] };
   try {
     const res = await page.goto(url, { waitUntil: "domcontentloaded" });
@@ -559,10 +509,6 @@ async function checkMobile(page: Page, url: string, shrink: Thumbnailer | null):
     });
     out.overflowPx = m.overflow;
     out.viewportTag = m.viewportTag;
-    if (shrink) {
-      await page.waitForTimeout(300);
-      out.screenshot = await shrink(await page.screenshot({ type: "jpeg", quality: 60 }), PHONE_THUMB_WIDTH).catch(() => undefined);
-    }
   } catch (err) {
     out.error = friendly(err);
   }
@@ -570,7 +516,7 @@ async function checkMobile(page: Page, url: string, shrink: Thumbnailer | null):
 }
 
 /** On a phone: finds the menu button (☰), taps it and checks the menu opens with links. */
-async function mobileMenu(page: Page, shrink: Thumbnailer | null): Promise<NonNullable<MenuCheck["mobile"]>> {
+async function mobileMenu(page: Page): Promise<NonNullable<MenuCheck["mobile"]>> {
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.waitForTimeout(300);
   const toggles = page.locator(
@@ -618,8 +564,7 @@ async function mobileMenu(page: Page, shrink: Thumbnailer | null): Promise<NonNu
   const expanded = (await toggle.getAttribute("aria-expanded").catch(() => null)) === "true";
   const shown = Math.max(0, after - before);
   const opened = shown >= 3 || (expanded && shown > 0);
-  const screenshot = shrink ? await shrink(await page.screenshot({ type: "jpeg", quality: 60 }), PHONE_THUMB_WIDTH).catch(() => undefined) : undefined;
-  return { buttonFound: true, opened, linksShown: shown, note: opened ? undefined : "The menu button was tapped, but no menu links appeared.", screenshot };
+  return { buttonFound: true, opened, linksShown: shown, note: opened ? undefined : "The menu button was tapped, but no menu links appeared." };
 }
 
 /** Safe internal links on the page a tab is showing. */

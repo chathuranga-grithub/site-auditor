@@ -82,15 +82,14 @@ The third tool, at `/visit-test`. It checks that **every page of a company site 
    - links found on every page it visits, so pages missing from the sitemap, and sites with no sitemap, are still covered.
 6. **Opens every page once, 3 at a time.** It scrolls each page to the bottom and records its status, load time, JavaScript errors, failed files and broken images. A progress bar shows "Page N of M".
 7. Checks that each visible link on the start page can be clicked by a visitor (not hidden or covered).
-8. **Phone check** (on by default; switch to "Desktop only" to skip it). Every page is opened again on an Android phone screen (412px wide, touch). It checks the page opens, fits the screen (no sideways scrolling), has the viewport tag, and loads its images, and takes a phone screenshot.
-9. **Phone menu:** on the start page, finds the menu button (☰), taps it and checks the menu opens with links (screenshot of the open menu). Done once, because WordPress uses the same menu on every page.
+8. **Phone check** (on by default; switch to "Desktop only" to skip it). Every page is opened again on an Android phone screen (412px wide, touch). It checks the page opens, fits the screen (no sideways scrolling), has the viewport tag, and loads its images.
+9. **Phone menu:** on the start page, finds the menu button (☰), taps it and checks the menu opens with links. Done once, because WordPress uses the same menu on every page.
 10. Checks the proxy IP again at the end, to catch a proxy that changed IP or country during the test.
 
-The report has a pass/fail checklist and a list of problems.
-- **Cards** (24 per page): each page with its desktop screenshot, a phone screenshot in the corner, and a row of icons for every check done on it. Click a card for the details: large screenshots and a "What was checked" list with PASS / WARN / FAIL for each step.
-- **List** (50 per page): small desktop and phone screenshots per row, search, sorting and filters (Problems, Didn't load, Slow, Broken images, Phone problems).
-- Both views are split into pages (Previous, 1 2 3 …, Next).
-- Pages with problems and the start page get a full-size screenshot, the rest a small one, so even 500 pages stay light.
+**What you see:**
+- **Live console** while it runs: a summary (pages checked, OK / warnings / failed, average load, elapsed), then one line per page: time, number, HTTP code, load time, phone result, page, result. The first JavaScript error, failed file, broken image or phone problem is shown under the line. Filters: All / Problems / Failed. Click a line for everything about that page.
+- **At the end:** a pass/fail checklist, the list of problems, and Copy summary.
+- No screenshots are taken, so even 500 pages stay fast and light.
 
 **Run it:**
 1. Run `npm run dev`, then open http://localhost:3000/visit-test.

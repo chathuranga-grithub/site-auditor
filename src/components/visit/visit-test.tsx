@@ -5,7 +5,7 @@
 
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Check, CircleCheck, CircleMinus, CircleX, Copy, Globe, KeyRound, Loader2, Camera, CameraOff, Monitor, Smartphone, Play, Square, Timer, TriangleAlert } from "lucide-react";
+import { Check, CircleCheck, CircleMinus, CircleX, Copy, Globe, KeyRound, Loader2, Monitor, Smartphone, Play, Square, Timer, TriangleAlert } from "lucide-react";
 import {
   buildChecklist,
   checklistHeadline,
@@ -16,8 +16,8 @@ import {
   type CheckStatus,
   type ChecklistItem,
 } from "@/lib/visit-checklist";
-import { MAX_PAGES, OVERFLOW_PX, type Discovery, type ScrollResult, type VisitEvent, type VisitPage, type VisitReport } from "@/lib/visit-types";
-import { Notice, Panel, StatTile, StatusCode, Tag, UrlLink, buttonClass } from "@/components/ui/primitives";
+import { MAX_PAGES, OVERFLOW_PX, type Discovery, type VisitEvent, type VisitPage, type VisitReport } from "@/lib/visit-types";
+import { Notice, Panel, StatusCode, UrlLink, buttonClass } from "@/components/ui/primitives";
 import { ACTIVITY_STYLE, DetailDialog } from "./visit-dialog";
 
 /** Problems listed in the notice before "and N more". */
@@ -29,7 +29,6 @@ export function VisitTest() {
   const [url, setUrl] = useState(() => searchParams.get("url") ?? "");
   const [proxyApi, setProxyApi] = useState("");
   const [mobile, setMobile] = useState(true);
-  const [screenshots, setScreenshots] = useState(true);
   const [env, setEnv] = useState<{ local: boolean; savedProxyApi: boolean } | null>(null);
   const [running, setRunning] = useState(false);
   const [steps, setSteps] = useState<string[]>([]);
@@ -81,7 +80,7 @@ export function VisitTest() {
       const res = await fetch("/api/visit-test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, proxyApiUrl: proxyApi, mobile, screenshots }),
+        body: JSON.stringify({ url, proxyApiUrl: proxyApi, mobile }),
         signal: controller.signal,
       });
       if (!res.ok || !res.body) {
@@ -144,22 +143,15 @@ export function VisitTest() {
 
   return (
     <div className="mx-auto w-full max-w-7xl space-y-5 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
-      <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+      <header>
         <div>
           <div className="font-mono text-[10px] tracking-[0.2em] text-subtle uppercase">Tools / Visit Test</div>
           <h1 className="mt-1 text-2xl font-semibold tracking-tight sm:text-3xl">
             Visit <span className="text-gradient">Test</span>
           </h1>
           <p className="mt-1 max-w-2xl text-sm text-muted">
-            Open one of our sites in a real browser through a Vietnam proxy. It finds every internal page (sitemap and
-            start-page links), opens and scrolls each one, and checks it works for visitors there.
+            Visits every internal page of one of our sites through a Vietnam proxy, on desktop and phone, and logs what works and what doesn&apos;t.
           </p>
-        </div>
-        <div className="flex flex-wrap gap-1.5">
-          <Tag>runs on this computer</Tag>
-          <Tag>every page once</Tag>
-          <Tag>desktop + phone</Tag>
-          <Tag>internal pages only</Tag>
         </div>
       </header>
 
@@ -170,7 +162,7 @@ export function VisitTest() {
         </Notice>
       )}
 
-      <form onSubmit={handleRun} className="glass grid gap-2 rounded-xl p-2 lg:grid-cols-[1.2fr_1fr_auto_auto_auto]">
+      <form onSubmit={handleRun} className="glass grid gap-2 rounded-xl p-2 lg:grid-cols-[1.2fr_1fr_auto_auto]">
         <label className="relative block">
           <span className="sr-only">Website URL</span>
           <Globe className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-subtle" />
@@ -219,19 +211,6 @@ export function VisitTest() {
             </button>
           ))}
         </div>
-        <button
-          type="button"
-          aria-pressed={screenshots}
-          onClick={() => setScreenshots((v) => !v)}
-          disabled={running}
-          title={screenshots ? "Screenshots on. Turn off for a faster, lighter test (all checks still run)." : "Screenshots off: faster and lighter, all checks still run. Turn on to see each page."}
-          className={`inline-flex h-10 items-center justify-center gap-1.5 rounded-lg px-3 text-xs font-medium whitespace-nowrap transition disabled:opacity-60 ${
-            screenshots ? "bg-canvas/60 text-ink" : "bg-canvas/60 text-muted ring-1 ring-line-strong"
-          }`}
-        >
-          {screenshots ? <Camera className="size-3.5" /> : <CameraOff className="size-3.5" />}
-          {screenshots ? "Screenshots on" : "Screenshots off"}
-        </button>
         {running ? (
           <button type="button" onClick={() => abortRef.current?.abort()} className={buttonClass.danger}>
             <Square className="size-3.5 fill-current" />
@@ -277,7 +256,7 @@ export function VisitTest() {
 
       {openPage && (
         <DetailDialog onClose={() => setOpenPage(null)}>
-          <PageCard page={openPage} heading={openPage.kind === "start" ? "Start page" : (openPage.title ?? "Page")} scroll={openPage.scroll} large />
+          <PageDetails page={openPage} heading={openPage.kind === "start" ? "Start page" : (openPage.title ?? "Page")} />
         </DetailDialog>
       )}
     </div>
@@ -481,12 +460,6 @@ function discoveryMessage(d: Discovery) {
 }
 
 function Results({ report, pages }: { report: VisitReport | null; pages: VisitPage[] }) {
-  const start = pages.find((p) => p.kind === "start") ?? null;
-  const okPages = pages.filter((p) => p.ok).length;
-  const jsPages = pages.filter((p) => p.consoleErrors.length).length;
-  const scrolled = pages.filter((p) => p.scroll);
-  const images = scrolled.reduce((n, p) => n + p.scroll!.images, 0);
-  const brokenImages = scrolled.reduce((n, p) => n + p.scroll!.brokenImages.length, 0);
   const exit = report?.exit;
 
   return (
@@ -521,30 +494,6 @@ function Results({ report, pages }: { report: VisitReport | null; pages: VisitPa
           <CopySummary report={report} />
         </div>
       )}
-
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
-        <StatTile
-          label="Visitor location"
-          value={exit?.country ?? "—"}
-          detail={exit ? [exit.city, exit.countryCode].filter(Boolean).join(", ") : "checking…"}
-          severity={exit ? (exit.countryCode === "VN" ? "good" : "warning") : undefined}
-        />
-        <StatTile label="IP / network" value={<span className="text-base">{exit?.ip ?? "—"}</span>} detail={exit?.org ?? (report?.proxy?.reused ? "previous proxy reused" : "")} />
-        <StatTile
-          label="Pages OK"
-          value={`${okPages}/${pages.length}`}
-          detail="start + internal"
-          severity={pages.length ? (okPages === pages.length ? "good" : "serious") : undefined}
-        />
-        <StatTile label="Start page load" value={start?.loadMs != null ? formatMs(start.loadMs) : "—"} detail={start?.ttfbMs != null ? `first byte ${formatMs(start.ttfbMs)}` : ""} />
-        <StatTile label="JS errors" value={jsPages} detail={`pages with errors, of ${pages.length}`} severity={jsPages ? "warning" : pages.length ? "good" : undefined} />
-        <StatTile
-          label="Images"
-          value={scrolled.length ? `${images - brokenImages}/${images}` : "—"}
-          detail={scrolled.length ? (brokenImages ? `${brokenImages} broken` : "all pages, after scrolling") : "all pages"}
-          severity={scrolled.length ? (brokenImages ? "warning" : "good") : undefined}
-        />
-      </div>
 
     </div>
   );
@@ -597,31 +546,8 @@ function Checklist({ report }: { report: VisitReport }) {
   );
 }
 
-function PageCard({
-  page,
-  heading,
-  scroll,
-  large = false,
-  onOpen,
-}: {
-  page: VisitPage;
-  heading: string;
-  scroll?: ScrollResult | null;
-  /** In the details popup: big screenshots side by side, details below. */
-  large?: boolean;
-  /** Clicking a screenshot opens the details popup. */
-  onOpen?: () => void;
-}) {
-  const phone = page.mobile?.screenshot;
-  const menu = page.menus?.mobile?.screenshot;
-  const anyShot = !!(page.screenshot || phone || menu);
-  const desktop = page.screenshot ? (
-    // eslint-disable-next-line @next/next/no-img-element -- data URL screenshot
-    <img src={page.screenshot} alt={`Desktop screenshot of ${page.title ?? page.url}`} className="block w-full" />
-  ) : (
-    <div className="grid aspect-video place-items-center text-xs text-subtle">No screenshot</div>
-  );
-
+/** Everything about one page (opened from a console line): what was checked, and every error. */
+function PageDetails({ page, heading }: { page: VisitPage; heading: string }) {
   return (
     <Panel
       title={heading}
@@ -631,87 +557,30 @@ function PageCard({
           {page.loadMs != null && <span>{formatMs(page.loadMs)}</span>}
         </span>
       }
-      bodyClassName={`grid gap-5 p-4 ${large || !anyShot ? "" : "md:grid-cols-[minmax(0,17rem)_1fr] xl:grid-cols-[minmax(0,24rem)_1fr]"}`}
+      bodyClassName="space-y-3 p-4 text-sm"
     >
-      {!anyShot ? null : large ? (
-        <div className="flex items-start gap-3">
-          <figure className="min-w-0 flex-1">
-            <div className="overflow-hidden rounded-lg border border-line bg-black/30">{desktop}</div>
-            <figcaption className="mt-1 text-center font-mono text-[10px] text-subtle">Desktop</figcaption>
-          </figure>
-          {phone && <PhoneShot src={phone} label="Phone" />}
-          {menu && <PhoneShot src={menu} label="Phone menu open" />}
-        </div>
-      ) : (
-        // Screenshots grouped: desktop on top, phone views side by side below it.
-        <div className="space-y-3">
-          <figure>
-            <button
-              type="button"
-              onClick={onOpen}
-              disabled={!onOpen}
-              title={onOpen ? "Open bigger screenshots" : undefined}
-              className="block w-full overflow-hidden rounded-lg border border-line bg-black/30 transition enabled:hover:border-line-strong"
-            >
-              {desktop}
-            </button>
-            <figcaption className="mt-1 font-mono text-[10px] text-subtle">Desktop</figcaption>
-          </figure>
-          {(phone || menu) && (
-            <div className="flex gap-3">
-              {phone && <PhoneShot src={phone} label="Phone" size="md" onClick={onOpen} />}
-              {menu && <PhoneShot src={menu} label="Phone menu open" size="md" onClick={onOpen} />}
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="min-w-0 space-y-3 text-sm">
-        <div className="space-y-1">
-          <div className="font-medium break-words text-ink">{page.title ?? "(no title)"}</div>
-          <UrlLink href={page.finalUrl} full />
-          {page.linkText && <div className="text-xs text-muted">Link text: &ldquo;{page.linkText}&rdquo;</div>}
-          {page.kind === "internal" && (
-            <div className="text-xs">
-              <span className="text-muted">
-                {page.foundIn === "another page" ? "Found through a link on another page" : `Found in the ${page.foundIn ?? "sitemap"}`}
-              </span>
-              {page.note && <span className="text-muted"> · {page.note}</span>}
-            </div>
-          )}
-          {page.error && (
-            <div className="flex gap-1.5 text-xs text-status-serious">
-              <TriangleAlert className="mt-0.5 size-3.5 shrink-0" /> {page.error}
-            </div>
-          )}
-        </div>
-        <ActivityList items={pageActivities(page)} />
-        <Details title="Still loading after 30s" items={page.stillLoading ?? []} />
-        <Details title="JavaScript errors" items={page.consoleErrors} />
-        <Details title="Files that failed to load" items={page.failedRequests} />
-        {scroll && <Details title="Broken images" items={scroll.brokenImages} />}
-        {page.mobile && <Details title="Broken images on a phone" items={page.mobile.brokenImages} />}
+      <div className="space-y-1">
+        <div className="font-medium break-words text-ink">{page.title ?? "(no title)"}</div>
+        <UrlLink href={page.finalUrl} full />
+        {page.kind === "internal" && (
+          <div className="text-xs text-muted">
+            {page.foundIn === "another page" ? "Found through a link on another page" : `Found in the ${page.foundIn ?? "sitemap"}`}
+            {page.note && <> · {page.note}</>}
+          </div>
+        )}
+        {page.error && (
+          <div className="flex gap-1.5 text-xs text-status-serious">
+            <TriangleAlert className="mt-0.5 size-3.5 shrink-0" /> {page.error}
+          </div>
+        )}
       </div>
+      <ActivityList items={pageActivities(page)} />
+      <Details title="Still loading after 30s" items={page.stillLoading ?? []} />
+      <Details title="JavaScript errors" items={page.consoleErrors} />
+      <Details title="Files that failed to load" items={page.failedRequests} />
+      <Details title="Broken images" items={page.scroll?.brokenImages ?? []} />
+      <Details title="Broken images on a phone" items={page.mobile?.brokenImages ?? []} />
     </Panel>
-  );
-}
-
-function PhoneShot({ src, label, size = "lg", onClick }: { src: string; label: string; size?: "md" | "lg"; onClick?: () => void }) {
-  const img = (
-    // eslint-disable-next-line @next/next/no-img-element -- data URL screenshot
-    <img src={src} alt={`${label} screenshot`} className="block w-full rounded-lg border border-line bg-black/30" />
-  );
-  return (
-    <figure className={`shrink-0 ${size === "md" ? "w-28" : "w-28 sm:w-36"}`}>
-      {onClick ? (
-        <button type="button" onClick={onClick} title="Open bigger screenshots" className="block w-full rounded-lg transition hover:opacity-90">
-          {img}
-        </button>
-      ) : (
-        img
-      )}
-      <figcaption className="mt-1 text-center font-mono text-[10px] text-subtle">{label}</figcaption>
-    </figure>
   );
 }
 
