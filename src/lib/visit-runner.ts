@@ -9,7 +9,10 @@ import { readSitemap, type SitemapFetcher } from "./sitemap";
 import { isBlockedHost, isInternal, normalizeUrl, shouldSkipCrawl } from "./url";
 import { EXPECTED_COUNTRY, MAX_PAGES, type Discovery, type ExitInfo, type ScrollResult, type VisitEvent, type VisitPage, type VisitReport } from "./visit-types";
 
+/** How long a page may take to show its content (through the proxy) before it counts as not loading. */
 const NAV_TIMEOUT = 45_000;
+/** After the content shows, how long to wait for every file to finish before calling it "still loading". */
+const LOAD_WAIT = 30_000;
 /** Pages open at the same time. Kept low so a small site and the proxy aren't overloaded. */
 const CONCURRENCY = 3;
 /** This many proxy failures in a row means the proxy has expired or died: stop the run. */
@@ -104,7 +107,7 @@ export async function runVisitTest({ url, proxyApiUrl, signal, send }: VisitOpti
     // 3. Start page: open, scroll, screenshot
     send({ type: "step", message: `Opening ${url}…` });
     const page = await context.newPage();
-    const start = await checkPage(page, url, "start", () => page.goto(url, { waitUntil: "load" }), START_SCROLL, null);
+    const start = await checkPage(page, url, "start", () => page.goto(url, { waitUntil: "domcontentloaded" }), START_SCROLL, null);
     report.start = start;
     report.scroll = start.scroll ?? null;
     send({ type: "page", page: start });
@@ -158,7 +161,7 @@ export async function runVisitTest({ url, proxyApiUrl, signal, send }: VisitOpti
         active++;
         if (tab.isClosed()) tab = await context.newPage();
         const referer = t.foundIn === "start page" ? start.finalUrl : undefined;
-        const result = await checkPage(tab, t.href, "internal", () => tab.goto(t.href, { waitUntil: "load", referer }), PAGE_SCROLL, shrink);
+        const result = await checkPage(tab, t.href, "internal", () => tab.goto(t.href, { waitUntil: "domcontentloaded", referer }), PAGE_SCROLL, shrink);
         if (result.ok && isInternal(result.finalUrl, siteHost)) addFound(await pageLinks(tab, siteHost).catch(() => []));
         active--;
         if (stopped()) break;
@@ -339,23 +342,37 @@ async function checkPage(
     const why = r.failure()?.errorText ?? "";
     if (!/ERR_ABORTED/.test(why) && isInternal(r.url(), siteHost) && failedRequests.length < 30) failedRequests.push(`${why} ${r.url()}`);
   };
+  // Files still downloading, to name the ones that keep a page from finishing.
+  const pending = new Map<object, string>();
+  const onRequest = (r: { url(): string; resourceType(): string }) => pending.set(r, `${r.resourceType()} ${r.url()}`);
+  const onDone = (r: object) => pending.delete(r);
   page.on("console", onConsole);
   page.on("pageerror", onPageError);
   page.on("response", onResponse);
   page.on("requestfailed", onFailed);
+  page.on("request", onRequest);
+  page.on("requestfinished", onDone);
+  page.on("requestfailed", onDone);
 
   const result: VisitPage = { kind, url, finalUrl: url, status: null, title: null, loadMs: null, ttfbMs: null, ok: false, consoleErrors, failedRequests, scroll: null };
   try {
+    // navigate() resolves once the page's content is there (DOMContentLoaded). Many working sites
+    // then keep loading a widget, tracker or video for a long time, so the full "load" is waited
+    // for separately and a page that never finishes is a warning, not a failure.
     const res = await navigate();
-    await page.waitForLoadState("load", { timeout: NAV_TIMEOUT }).catch(() => {});
     result.status = res?.status() ?? null;
+    const loaded = await page
+      .waitForLoadState("load", { timeout: LOAD_WAIT })
+      .then(() => true)
+      .catch(() => false);
+    if (!loaded) result.stillLoading = [...pending.values()].filter((u) => !u.includes(" data:")).slice(0, 5).map((u) => u.slice(0, 200));
     result.finalUrl = page.url();
     result.title = (await page.title().catch(() => "")) || null;
     const t = await page.evaluate(() => {
       const n = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
-      return n ? { load: n.loadEventEnd || n.duration, ttfb: n.responseStart } : null;
+      return n ? { load: n.loadEventEnd, ttfb: n.responseStart } : null;
     });
-    result.loadMs = t ? Math.round(t.load) : null;
+    result.loadMs = t && t.load > 0 ? Math.round(t.load) : null;
     result.ttfbMs = t ? Math.round(t.ttfb) : null;
     result.ok = result.status !== null && result.status < 400;
     if (!result.ok) result.error = `The page returned HTTP ${result.status ?? "no response"}.`;
@@ -373,12 +390,22 @@ async function checkPage(
     page.off("pageerror", onPageError);
     page.off("response", onResponse);
     page.off("requestfailed", onFailed);
+    page.off("request", onRequest);
+    page.off("requestfinished", onDone);
+    page.off("requestfailed", onDone);
   }
   return result;
 }
 
 function hasProblem(p: VisitPage): boolean {
-  return !p.ok || p.consoleErrors.length > 0 || p.failedRequests.length > 0 || !!p.scroll?.brokenImages.length || (p.loadMs ?? 0) > SLOW_MS;
+  return (
+    !p.ok ||
+    p.consoleErrors.length > 0 ||
+    p.failedRequests.length > 0 ||
+    !!p.scroll?.brokenImages.length ||
+    (p.loadMs ?? 0) > SLOW_MS ||
+    !!p.stillLoading
+  );
 }
 
 async function scrollPage(page: Page, { stepWaitMs, maxSteps, settleMs }: typeof PAGE_SCROLL): Promise<ScrollResult> {
@@ -521,6 +548,10 @@ function findIssues(r: VisitReport): string[] {
     const name = p.kind === "start" ? "Start page" : p.url;
     if (!p.ok) issues.push(`${name}: ${p.error ?? "didn't load"}`);
     if (p.loadMs && p.loadMs > SLOW_MS) issues.push(`${name}: slow (${(p.loadMs / 1000).toFixed(1)}s to load)`);
+    if (p.stillLoading) {
+      const files = p.stillLoading.map((f) => f.replace(/^\w+ /, "")).slice(0, 2).join(", ");
+      issues.push(`${name}: the page showed, but files were still loading after ${LOAD_WAIT / 1000}s${files ? ` (${files})` : ""}`);
+    }
     if (p.consoleErrors.length) issues.push(`${name}: ${p.consoleErrors.length} JavaScript error(s)`);
     if (p.failedRequests.length) issues.push(`${name}: ${p.failedRequests.length} file(s) failed to load`);
     if (p.scroll?.brokenImages.length) issues.push(`${name}: ${p.scroll.brokenImages.length} image(s) didn't load`);
@@ -535,7 +566,7 @@ const PROXY_ERROR = "The proxy refused or dropped the connection.";
 function friendly(err: unknown): string {
   const m = err instanceof Error ? err.message : String(err);
   if (/ERR_PROXY|ERR_TUNNEL|proxy/i.test(m)) return PROXY_ERROR;
-  if (/Timeout|timed out/i.test(m)) return "The page took too long to load.";
+  if (/Timeout|timed out/i.test(m)) return `Nothing showed within ${NAV_TIMEOUT / 1000}s (the site or the proxy is too slow).`;
   if (/ERR_NAME_NOT_RESOLVED/.test(m)) return "The domain couldn't be found.";
   if (/ERR_CONNECTION/.test(m)) return "Couldn't connect to the site.";
   return m.split("\n")[0].slice(0, 200);

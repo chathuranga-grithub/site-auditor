@@ -52,6 +52,11 @@ export interface VisitPage {
   /** Scrolled to the bottom and checked images (null when the page didn't load). */
   scroll?: ScrollResult | null;
   consoleErrors: string[];
+  /**
+   * The page showed, but these files (e.g. a chat widget, tracker or video) were still loading
+   * 30s later, so the browser never reported it fully loaded. A warning: visitors can use the page.
+   */
+  stillLoading?: string[];
   /** Same-site files (images, scripts, CSS…) that failed or returned 4xx/5xx. */
   failedRequests: string[];
   /** JPEG data URL of the visible screen: start page and pages with problems only. */

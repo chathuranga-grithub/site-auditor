@@ -468,6 +468,7 @@ function PageCard({ page, heading, scroll, large = false }: { page: VisitPage; h
             {scroll.brokenImages.length ? `, ${scroll.brokenImages.length} broken` : ""}.
           </div>
         )}
+        <Details title="Still loading after 30s" items={page.stillLoading ?? []} />
         <Details title="JavaScript errors" items={page.consoleErrors} />
         <Details title="Files that failed to load" items={page.failedRequests} />
         {scroll && <Details title="Broken images" items={scroll.brokenImages} />}

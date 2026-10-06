@@ -63,7 +63,8 @@ export function buildChecklist(r: VisitReport): ChecklistItem[] {
     add("speed", "Start page speed", "skip", notRun);
   } else {
     add("start", "Start page opens", start.ok ? "pass" : "fail", start.ok ? `HTTP ${start.status} · ${start.title ?? start.finalUrl}` : (start.error ?? "Didn't load"));
-    if (start.loadMs == null) add("speed", "Start page speed", start.ok ? "warn" : "skip", start.ok ? "Load time not available" : notRun);
+    if (start.ok && start.stillLoading) add("speed", "Start page speed", "warn", "The page showed, but files were still loading after 30s (see the start page details)");
+    else if (start.loadMs == null) add("speed", "Start page speed", start.ok ? "warn" : "skip", start.ok ? "Load time not available" : notRun);
     else add("speed", "Start page speed", start.loadMs < SLOW_MS ? "pass" : "warn", `${seconds(start.loadMs)} to load (under ${SLOW_MS / 1000}s is good)`);
   }
 
@@ -98,7 +99,9 @@ export function buildChecklist(r: VisitReport): ChecklistItem[] {
     add("images", "Images load", "skip", notRun);
   } else {
     const slow = loaded.filter((p) => (p.loadMs ?? 0) > SLOW_PAGE_MS);
-    add("slow", "Pages load fast", slow.length ? "warn" : "pass", slow.length ? `${slow.length} page(s) took over ${SLOW_PAGE_MS / 1000}s` : `All under ${SLOW_PAGE_MS / 1000}s`);
+    const stuck = loaded.filter((p) => p.stillLoading);
+    const parts = [slow.length ? `${slow.length} page(s) took over ${SLOW_PAGE_MS / 1000}s` : "", stuck.length ? `${stuck.length} page(s) still loading files after 30s` : ""].filter(Boolean);
+    add("slow", "Pages load fast", parts.length ? "warn" : "pass", parts.length ? parts.join(" · ") : `All under ${SLOW_PAGE_MS / 1000}s`);
     const scrolled = loaded.filter((p) => p.scroll);
     const bottom = scrolled.filter((p) => p.scroll!.reachedBottom).length;
     add("scroll", "Scrolled to the bottom", bottom === scrolled.length ? "pass" : "warn", `${bottom} of ${scrolled.length} page(s)${bottom < scrolled.length ? " · the rest are very long or endless" : ""}`);
@@ -181,6 +184,7 @@ export function pageProblems(p: VisitPage): string[] {
   const out: string[] = [];
   if (!p.ok) out.push(p.error ?? "Didn't load");
   if ((p.loadMs ?? 0) > SLOW_PAGE_MS) out.push(`Slow (${seconds(p.loadMs!)})`);
+  if (p.ok && p.stillLoading) out.push("Still loading files after 30s");
   if (p.scroll?.brokenImages.length) out.push(`${p.scroll.brokenImages.length} broken image(s)`);
   if (p.failedRequests.length) out.push(`${p.failedRequests.length} failed file(s)`);
   if (p.consoleErrors.length) out.push(`${p.consoleErrors.length} JS error(s)`);
