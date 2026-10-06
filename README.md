@@ -112,6 +112,17 @@ The third tool, at `/visit-test`. It checks that **every page of a company site 
 
 **On Vercel:** the tool is disabled, because there's no browser there and the provider would likely reject Vercel's IPs.
 
+## Proxy Check (runs on your computer only)
+
+The fourth tool, at `/proxy-check`. It tests the **rotating residential proxy service itself** over 15, 30, 45 or 60 minutes. It never visits our sites.
+
+Each time the provider gives a new IP (following its "wait N seconds" timing), it checks through that proxy:
+- where the IP really is (country, city), using ipinfo.io or api.country.is;
+- the network: **residential** (Viettel, VNPT, FPT…) or **datacenter** (hosting / cloud), guessed from the ISP name;
+- whether it connects, and how fast (a tiny request to `gstatic.com/generate_204`).
+
+You get a live table, one row per IP: new IP, wait, failed, or repeat. The summary shows IPs received (unique / repeats), % in Vietnam, % residential, average and slowest speed, failures, and how often it really rotates. Copy summary shares it. No browser is used, so it's light.
+
 ## How it works
 
 To stay within Vercel's function time limits, the crawl runs in the **browser**, and each server call does only a small amount of work:

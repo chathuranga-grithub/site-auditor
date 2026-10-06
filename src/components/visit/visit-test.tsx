@@ -212,12 +212,14 @@ export function VisitTest() {
           ))}
         </div>
         {running ? (
-          <button type="button" onClick={() => abortRef.current?.abort()} className={buttonClass.danger}>
+          // Separate keys: otherwise React reuses one <button>, and the click that stops the run
+          // lands on the "start" (submit) button it turns into, starting a new run.
+          <button key="stop" type="button" onClick={() => abortRef.current?.abort()} className={buttonClass.danger}>
             <Square className="size-3.5 fill-current" />
             Stop
           </button>
         ) : (
-          <button type="submit" disabled={waitLeft > 0 || !!notLocal} className={buttonClass.primary}>
+          <button key="start" type="submit" disabled={waitLeft > 0 || !!notLocal} className={buttonClass.primary}>
             {waitLeft > 0 ? <Timer className="size-4" /> : <Play className="size-3.5 fill-current" />}
             {waitLeft > 0 ? formatWait(waitLeft) : "Run test"}
           </button>
