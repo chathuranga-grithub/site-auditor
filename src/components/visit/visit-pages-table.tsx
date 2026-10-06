@@ -1,13 +1,17 @@
 "use client";
 
-// Visit Test list view: every page with a small screenshot, search, problem filters and sorting.
+// Visit Test list view: every page with small desktop and phone screenshots, its checks, search,
+// problem filters, sorting and page-by-page navigation.
 
 import { useMemo } from "react";
 import { CircleCheck, TriangleAlert } from "lucide-react";
-import { pageProblems } from "@/lib/visit-checklist";
+import { pageActivities, pageProblems } from "@/lib/visit-checklist";
 import type { VisitPage } from "@/lib/visit-types";
 import { DataTable, type Column, type QuickFilter } from "@/components/ui/data-table";
 import { StatusCode, UrlLink } from "@/components/ui/primitives";
+import { ActivityIcons } from "./visit-page-cards";
+
+const PAGE_SIZE = 50;
 
 interface Row {
   n: number;
@@ -23,17 +27,25 @@ const thumbColumn = (onOpen: (page: VisitPage) => void): Column<Row> => ({
       type="button"
       onClick={() => onOpen(r.page)}
       aria-label={`Details for ${r.page.title ?? r.page.url}`}
-      className={`block h-[54px] w-24 overflow-hidden rounded border bg-black/30 transition hover:border-line-strong ${r.problems.length ? "border-status-warning/50" : "border-line"}`}
+      className="flex items-stretch gap-1 rounded transition hover:opacity-90"
     >
-      {r.page.screenshot ? (
-        // eslint-disable-next-line @next/next/no-img-element -- data URL screenshot
-        <img src={r.page.screenshot} alt="" loading="lazy" className="size-full object-cover object-top" />
-      ) : (
-        <span className="grid size-full place-items-center text-[10px] text-subtle">none</span>
+      <span className={`block h-[54px] w-24 overflow-hidden rounded border bg-black/30 ${r.problems.length ? "border-status-warning/50" : "border-line"}`}>
+        {r.page.screenshot ? (
+          // eslint-disable-next-line @next/next/no-img-element -- data URL screenshot
+          <img src={r.page.screenshot} alt="" loading="lazy" className="size-full object-cover object-top" />
+        ) : (
+          <span className="grid size-full place-items-center text-[10px] text-subtle">none</span>
+        )}
+      </span>
+      {r.page.mobile?.screenshot && (
+        <span className="block h-[54px] w-[27px] overflow-hidden rounded border border-line bg-black/30" title="Phone view">
+          {/* eslint-disable-next-line @next/next/no-img-element -- data URL screenshot */}
+          <img src={r.page.mobile.screenshot} alt="" loading="lazy" className="size-full object-cover object-top" />
+        </span>
       )}
     </button>
   ),
-  className: "w-28",
+  className: "w-36",
 });
 
 const COLUMNS: Column<Row>[] = [
@@ -82,18 +94,22 @@ const COLUMNS: Column<Row>[] = [
   },
   {
     id: "result",
-    header: "Result",
-    cell: (r) =>
-      r.problems.length ? (
-        <span className="flex gap-1.5 text-xs text-status-warning">
-          <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-          {r.problems.join(" · ")}
-        </span>
-      ) : (
-        <span className="inline-flex items-center gap-1.5 text-xs text-status-good">
-          <CircleCheck className="size-3.5" aria-hidden /> OK
-        </span>
-      ),
+    header: "Result / checks",
+    cell: (r) => (
+      <div className="space-y-1.5">
+        {r.problems.length ? (
+          <span className="flex gap-1.5 text-xs text-status-warning">
+            <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+            {r.problems.join(" · ")}
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1.5 text-xs text-status-good">
+            <CircleCheck className="size-3.5" aria-hidden /> OK
+          </span>
+        )}
+        <ActivityIcons items={pageActivities(r.page)} />
+      </div>
+    ),
     sortValue: (r) => r.problems.length,
     className: "w-64",
   },
@@ -104,6 +120,7 @@ const FILTERS: QuickFilter<Row>[] = [
   { id: "errors", label: "Didn't load", test: (r) => !r.page.ok },
   { id: "slow", label: "Slow", test: (r) => (r.page.loadMs ?? 0) > 8000 },
   { id: "images", label: "Broken images", test: (r) => !!r.page.scroll?.brokenImages.length },
+  { id: "phone", label: "Phone problems", test: (r) => r.problems.some((p) => p.startsWith("Phone")) },
 ];
 
 export function VisitPagesTable({ pages, onOpen }: { pages: VisitPage[]; onOpen: (page: VisitPage) => void }) {
@@ -117,6 +134,8 @@ export function VisitPagesTable({ pages, onOpen }: { pages: VisitPage[]; onOpen:
       searchText={(r) => `${r.page.url} ${r.page.finalUrl} ${r.page.title ?? ""}`}
       filters={FILTERS}
       empty="No pages visited yet."
+      pageSize={PAGE_SIZE}
+      paged
     />
   );
 }

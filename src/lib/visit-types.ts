@@ -49,6 +49,10 @@ export interface VisitPage {
   clickable?: boolean;
   linkText?: string;
   note?: string;
+  /** Phone check; undefined when it was turned off. */
+  mobile?: MobileCheck | null;
+  /** Start page only. */
+  menus?: MenuCheck;
   /** Scrolled to the bottom and checked images (null when the page didn't load). */
   scroll?: ScrollResult | null;
   consoleErrors: string[];
@@ -62,6 +66,30 @@ export interface VisitPage {
   /** JPEG data URL of the visible screen: start page and pages with problems only. */
   screenshot?: string;
   error?: string;
+}
+
+/** A page wider than the phone screen by more than this lets visitors scroll sideways. */
+export const OVERFLOW_PX = 8;
+
+/** The same page opened again on a phone-sized screen (touch, phone browser). */
+export interface MobileCheck {
+  ok: boolean;
+  status: number | null;
+  error?: string;
+  /** How far the page is wider than the phone screen (0 = fits). Over a few pixels, visitors scroll sideways. */
+  overflowPx: number;
+  /** <meta name="viewport" content="width=device-width…">: without it phones show a tiny desktop page. */
+  viewportTag: boolean;
+  images: number;
+  brokenImages: string[];
+  /** Small JPEG data URL of the phone screen. */
+  screenshot?: string;
+}
+
+/** Menu check, done once on the start page (WordPress uses the same menu on every page). */
+export interface MenuCheck {
+  /** Phone: the ☰ button. null when the phone check is off or the page didn't open on a phone. */
+  mobile: { buttonFound: boolean; opened: boolean; linksShown: number; note?: string; screenshot?: string } | null;
 }
 
 export interface ScrollResult {
@@ -95,6 +123,8 @@ export interface VisitReport {
   /** Plain-language problems found, empty when everything is fine. */
   issues: string[];
   cancelled: boolean;
+  /** Whether each page was also checked on a phone screen. */
+  mobileChecked: boolean;
 }
 
 /** How many internal pages the test found, and where. */

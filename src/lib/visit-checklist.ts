@@ -2,7 +2,7 @@
 // Pure function of the report, so the page and "Copy summary" show the same thing.
 
 import { isInternal } from "./url";
-import { EXPECTED_COUNTRY, type Discovery, type VisitPage, type VisitReport } from "./visit-types";
+import { EXPECTED_COUNTRY, OVERFLOW_PX, type Discovery, type MenuCheck, type MobileCheck, type VisitPage, type VisitReport } from "./visit-types";
 
 export type CheckStatus = "pass" | "warn" | "fail" | "skip";
 
@@ -115,6 +115,23 @@ export function buildChecklist(r: VisitReport): ChecklistItem[] {
     );
   }
 
+  // Phones and menus
+  if (!r.mobileChecked) add("phone", "Works on phones", "skip", "Phone check was turned off");
+  else {
+    const checked = all.filter((p) => p.mobile);
+    const bad = checked.filter((p) => mobileProblems(p.mobile!).length);
+    add(
+      "phone",
+      "Works on phones",
+      !checked.length ? "skip" : bad.length ? "fail" : "pass",
+      !checked.length ? notRun : bad.length ? `${bad.length} of ${checked.length} page(s) have phone problems` : `All ${checked.length} page(s) open and fit the phone screen`,
+    );
+  }
+  const menus = start?.menus;
+  if (!r.mobileChecked) add("menu-phone", "Phone menu (☰) opens", "skip", "Phone check was turned off");
+  else if (!menus?.mobile) add("menu-phone", "Phone menu (☰) opens", "skip", notRun);
+  else add("menu-phone", "Phone menu (☰) opens", ...phoneMenuStatus(menus.mobile));
+
   // 11. Start-page links a visitor can click
   const shown = pages.filter((p) => p.clickable !== undefined);
   const clickable = shown.filter((p) => p.clickable).length;
@@ -190,7 +207,84 @@ export function pageProblems(p: VisitPage): string[] {
   if (p.consoleErrors.length) out.push(`${p.consoleErrors.length} JS error(s)`);
   if (p.clickable === false) out.push("Link not clickable");
   if (p.ok && p.scroll && !p.scroll.reachedBottom) out.push("Couldn't scroll to the bottom");
+  if (p.mobile) out.push(...mobileProblems(p.mobile));
+  if (p.menus) {
+    if (p.menus.mobile && phoneMenuStatus(p.menus.mobile)[0] !== "pass") out.push("Phone menu doesn't open");
+  }
   return out;
+}
+
+function mobileProblems(m: MobileCheck): string[] {
+  if (!m.ok) return [`Phone: ${m.error ?? "didn't load"}`];
+  const out: string[] = [];
+  if (m.overflowPx > OVERFLOW_PX) out.push(`Phone: scrolls sideways (+${m.overflowPx}px)`);
+  if (!m.viewportTag) out.push("Phone: no viewport tag");
+  if (m.brokenImages.length) out.push(`Phone: ${m.brokenImages.length} broken image(s)`);
+  return out;
+}
+
+function phoneMenuStatus(m: NonNullable<MenuCheck["mobile"]>): [CheckStatus, string] {
+  if (m.opened) return ["pass", `Opens and shows ${m.linksShown} link(s)`];
+  return [m.buttonFound ? "fail" : "warn", m.note ?? "Didn't open"];
+}
+
+/**
+ * Everything the test did on one page, in order, with its result. Shown in the page details,
+ * as icons on the cards and list, and in Copy summary.
+ */
+export function pageActivities(p: VisitPage): ChecklistItem[] {
+  const items: ChecklistItem[] = [];
+  const add = (id: string, label: string, status: CheckStatus, detail: string) => items.push({ id, label, status, detail });
+  const notRun = "Not run (the page didn't open)";
+
+  add("open", "Opened", p.ok ? "pass" : "fail", p.ok ? `HTTP ${p.status}${p.loadMs != null ? ` · ${seconds(p.loadMs)}` : ""}` : (p.error ?? "Didn't load"));
+  if (!p.ok) {
+    for (const [id, label] of [
+      ["loaded", "Fully loaded"],
+      ["scroll", "Scrolled to the bottom"],
+      ["images", "Images"],
+    ])
+      add(id, label, "skip", notRun);
+  } else {
+    add(
+      "loaded",
+      "Fully loaded",
+      p.stillLoading ? "warn" : (p.loadMs ?? 0) > SLOW_PAGE_MS ? "warn" : "pass",
+      p.stillLoading ? `Still loading ${p.stillLoading.length} file(s) after 30s` : (p.loadMs ?? 0) > SLOW_PAGE_MS ? `Slow: ${seconds(p.loadMs!)}` : "All files loaded",
+    );
+    const s = p.scroll;
+    add("scroll", "Scrolled to the bottom", !s ? "skip" : s.reachedBottom ? "pass" : "warn", !s ? "Couldn't scroll" : s.reachedBottom ? `${s.steps} steps · ${s.pageHeight.toLocaleString()}px tall` : "Stopped partway (very long or endless page)");
+    add(
+      "images",
+      "Images",
+      !s ? "skip" : s.brokenImages.length ? "fail" : "pass",
+      !s ? "Not checked" : s.images === 0 ? "No images" : s.brokenImages.length ? `${s.brokenImages.length} of ${s.images} broken` : `${s.imagesLoaded} of ${s.images} loaded`,
+    );
+  }
+  add("js", "JavaScript", p.consoleErrors.length ? "warn" : "pass", p.consoleErrors.length ? `${p.consoleErrors.length} error(s)` : "No errors");
+  add("files", "Files", p.failedRequests.length ? "fail" : "pass", p.failedRequests.length ? `${p.failedRequests.length} failed` : "None failed");
+  if (p.clickable !== undefined) add("clickable", "Link on the start page clickable", p.clickable ? "pass" : "warn", p.clickable ? "A visitor can click it" : (p.note ?? "Not clickable"));
+
+  // Phone (undefined = phone check turned off; null = not run because the page didn't open)
+  if (p.mobile === null) add("phone-open", "Phone: opened", "skip", notRun);
+  if (p.mobile) {
+    const m = p.mobile;
+    add("phone-open", "Phone: opened", m.ok ? "pass" : "fail", m.ok ? `HTTP ${m.status}` : (m.error ?? "Didn't load"));
+    if (m.ok) {
+      add("phone-fit", "Phone: fits the screen", m.overflowPx > OVERFLOW_PX ? "fail" : "pass", m.overflowPx > OVERFLOW_PX ? `Scrolls sideways (${m.overflowPx}px too wide)` : "No sideways scrolling");
+      add("phone-viewport", "Phone: viewport tag", m.viewportTag ? "pass" : "warn", m.viewportTag ? "Set for phones" : "Missing: phones may show a tiny desktop page");
+      add(
+        "phone-images",
+        "Phone: images",
+        m.brokenImages.length ? "fail" : "pass",
+        m.images === 0 ? "No images" : m.brokenImages.length ? `${m.brokenImages.length} of ${m.images} broken` : `All ${m.images} loaded`,
+      );
+    }
+  }
+
+  // Phone menu (start page only)
+  if (p.menus?.mobile) add("menu-phone", "Phone menu (☰)", ...phoneMenuStatus(p.menus.mobile));
+  return items;
 }
 
 function sum<T>(xs: T[], f: (x: T) => number) {

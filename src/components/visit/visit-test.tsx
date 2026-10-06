@@ -5,11 +5,20 @@
 
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Check, CircleCheck, CircleMinus, CircleX, Copy, Globe, KeyRound, LayoutGrid, List, Loader2, Play, Square, Timer, TriangleAlert } from "lucide-react";
-import { buildChecklist, checklistHeadline, checklistTotals, discoverySources, type CheckStatus } from "@/lib/visit-checklist";
+import { Check, CircleCheck, CircleMinus, CircleX, Copy, Globe, KeyRound, LayoutGrid, List, Loader2, Monitor, Smartphone, Play, Square, Timer, TriangleAlert } from "lucide-react";
+import {
+  buildChecklist,
+  checklistHeadline,
+  checklistTotals,
+  discoverySources,
+  pageActivities,
+  pageProblems,
+  type CheckStatus,
+  type ChecklistItem,
+} from "@/lib/visit-checklist";
 import { MAX_PAGES, type Discovery, type ScrollResult, type VisitEvent, type VisitPage, type VisitReport } from "@/lib/visit-types";
 import { Notice, Panel, StatTile, StatusCode, Tag, UrlLink, buttonClass } from "@/components/ui/primitives";
-import { DetailDialog, VisitPageCards } from "./visit-page-cards";
+import { ACTIVITY_STYLE, DetailDialog, VisitPageCards } from "./visit-page-cards";
 import { VisitPagesTable } from "./visit-pages-table";
 
 /** Problems listed in the notice before "and N more". */
@@ -20,6 +29,7 @@ export function VisitTest() {
   const searchParams = useSearchParams();
   const [url, setUrl] = useState(() => searchParams.get("url") ?? "");
   const [proxyApi, setProxyApi] = useState("");
+  const [mobile, setMobile] = useState(true);
   const [env, setEnv] = useState<{ local: boolean; savedProxyApi: boolean } | null>(null);
   const [running, setRunning] = useState(false);
   const [steps, setSteps] = useState<string[]>([]);
@@ -72,7 +82,7 @@ export function VisitTest() {
       const res = await fetch("/api/visit-test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, proxyApiUrl: proxyApi }),
+        body: JSON.stringify({ url, proxyApiUrl: proxyApi, mobile }),
         signal: controller.signal,
       });
       if (!res.ok || !res.body) {
@@ -105,7 +115,8 @@ export function VisitTest() {
         setSteps((s) => [...s, e.message]);
         break;
       case "page":
-        setPages((p) => [...p, e.page]);
+        // The start page is sent again once its phone check is done: replace it, don't add it twice.
+        setPages((p) => (e.page.kind === "start" && p.some((x) => x.kind === "start") ? p.map((x) => (x.kind === "start" ? e.page : x)) : [...p, e.page]));
         setTiming((t) => ({ ...t, last: Date.now() }));
         break;
       case "scroll":
@@ -148,6 +159,7 @@ export function VisitTest() {
         <div className="flex flex-wrap gap-1.5">
           <Tag>runs on this computer</Tag>
           <Tag>every page once</Tag>
+          <Tag>desktop + phone</Tag>
           <Tag>internal pages only</Tag>
         </div>
       </header>
@@ -159,7 +171,7 @@ export function VisitTest() {
         </Notice>
       )}
 
-      <form onSubmit={handleRun} className="glass grid gap-2 rounded-xl p-2 lg:grid-cols-[1.2fr_1fr_auto]">
+      <form onSubmit={handleRun} className="glass grid gap-2 rounded-xl p-2 lg:grid-cols-[1.2fr_1fr_auto_auto]">
         <label className="relative block">
           <span className="sr-only">Website URL</span>
           <Globe className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-subtle" />
@@ -189,6 +201,25 @@ export function VisitTest() {
             className="h-10 w-full rounded-lg border border-transparent bg-canvas/60 pr-3 pl-10 font-mono text-base text-ink outline-none placeholder:text-subtle focus:border-accent/60 focus:ring-2 focus:ring-accent/20 disabled:opacity-60 sm:text-sm"
           />
         </label>
+        <div className="flex h-10 rounded-lg bg-canvas/60 p-1" role="radiogroup" aria-label="Devices">
+          {([true, false] as const).map((m) => (
+            <button
+              key={String(m)}
+              type="button"
+              role="radio"
+              aria-checked={mobile === m}
+              onClick={() => setMobile(m)}
+              disabled={running}
+              title={m ? "Check every page on a desktop and on a phone (takes about twice as long)" : "Check every page on a desktop only (faster)"}
+              className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 text-xs font-medium whitespace-nowrap transition ${
+                mobile === m ? "bg-surface-2 text-ink ring-1 ring-line-strong" : "text-muted hover:text-ink"
+              }`}
+            >
+              {m ? <Smartphone className="size-3.5" /> : <Monitor className="size-3.5" />}
+              {m ? "Desktop + phone" : "Desktop only"}
+            </button>
+          ))}
+        </div>
         {running ? (
           <button type="button" onClick={() => abortRef.current?.abort()} className={buttonClass.danger}>
             <Square className="size-3.5 fill-current" />
@@ -433,21 +464,23 @@ function PageCard({ page, heading, scroll, large = false }: { page: VisitPage; h
       }
       bodyClassName={`grid gap-4 p-4 ${large ? "" : "sm:grid-cols-[minmax(0,14rem)_1fr]"}`}
     >
-      {page.screenshot ? (
-        <button
-          type="button"
-          onClick={() => !large && setBig((b) => !b)}
-          title={big ? "Smaller" : "Bigger"}
-          className={`overflow-hidden rounded-lg border border-line bg-black/30 ${big ? "sm:col-span-2" : ""} ${large ? "cursor-default" : ""}`}
-        >
-          {/* eslint-disable-next-line @next/next/no-img-element -- data URL screenshot */}
-          <img src={page.screenshot} alt={`Screenshot of ${page.title ?? page.url}`} className="block w-full" />
-        </button>
-      ) : (
-        <div className="grid aspect-video place-items-center rounded-lg border border-dashed border-line text-xs text-subtle">
-          No screenshot
-        </div>
-      )}
+      <div className={`flex items-start gap-3 ${big ? "sm:col-span-2" : ""}`}>
+        {page.screenshot ? (
+          <button
+            type="button"
+            onClick={() => !large && setBig((v) => !v)}
+            title={large ? "Desktop view" : big ? "Smaller" : "Bigger"}
+            className={`min-w-0 flex-1 overflow-hidden rounded-lg border border-line bg-black/30 ${large ? "cursor-default" : ""}`}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element -- data URL screenshot */}
+            <img src={page.screenshot} alt={`Desktop screenshot of ${page.title ?? page.url}`} className="block w-full" />
+          </button>
+        ) : (
+          <div className="grid aspect-video min-w-0 flex-1 place-items-center rounded-lg border border-dashed border-line text-xs text-subtle">No screenshot</div>
+        )}
+        {(large || big) && page.mobile?.screenshot && <PhoneShot src={page.mobile.screenshot} label="Phone" />}
+        {(large || big) && page.menus?.mobile?.screenshot && <PhoneShot src={page.menus.mobile.screenshot} label="Phone menu open" />}
+      </div>
 
       <div className="min-w-0 space-y-2 text-sm">
         <div className="font-medium break-words text-ink">{page.title ?? "(no title)"}</div>
@@ -475,12 +508,54 @@ function PageCard({ page, heading, scroll, large = false }: { page: VisitPage; h
             {scroll.brokenImages.length ? `, ${scroll.brokenImages.length} broken` : ""}.
           </div>
         )}
+        {!large && !big && (page.mobile?.screenshot || page.menus?.mobile?.screenshot) && (
+          <div className="flex gap-2">
+            {page.mobile?.screenshot && <PhoneShot src={page.mobile.screenshot} label="Phone" small />}
+            {page.menus?.mobile?.screenshot && <PhoneShot src={page.menus.mobile.screenshot} label="Phone menu open" small />}
+          </div>
+        )}
+        <ActivityList items={pageActivities(page)} />
         <Details title="Still loading after 30s" items={page.stillLoading ?? []} />
         <Details title="JavaScript errors" items={page.consoleErrors} />
         <Details title="Files that failed to load" items={page.failedRequests} />
         {scroll && <Details title="Broken images" items={scroll.brokenImages} />}
+        {page.mobile && <Details title="Broken images on a phone" items={page.mobile.brokenImages} />}
       </div>
     </Panel>
+  );
+}
+
+function PhoneShot({ src, label, small = false }: { src: string; label: string; small?: boolean }) {
+  return (
+    <figure className={`shrink-0 ${small ? "w-16" : "w-28 sm:w-36"}`}>
+      {/* eslint-disable-next-line @next/next/no-img-element -- data URL screenshot */}
+      <img src={src} alt={`${label} screenshot`} className="block w-full rounded-lg border border-line bg-black/30" />
+      <figcaption className="mt-1 text-center font-mono text-[10px] text-subtle">{label}</figcaption>
+    </figure>
+  );
+}
+
+/** "What was checked" on one page: every step with PASS / WARN / FAIL. */
+function ActivityList({ items }: { items: ChecklistItem[] }) {
+  return (
+    <div className="rounded-lg border border-line">
+      <div className="border-b border-line px-3 py-1.5 font-mono text-[10px] tracking-[0.14em] text-subtle uppercase">
+        What was checked · {items.filter((i) => i.status === "pass").length}/{items.length} passed
+      </div>
+      <ul className="divide-y divide-line">
+        {items.map((i) => {
+          const S = ACTIVITY_STYLE[i.status];
+          return (
+            <li key={i.id} className="grid grid-cols-[1rem_minmax(0,9.5rem)_1fr_auto] items-start gap-2 px-3 py-1.5 text-xs">
+              <S.icon className={`mt-0.5 size-3.5 ${S.color}`} aria-hidden />
+              <span className="text-ink">{i.label}</span>
+              <span className="min-w-0 break-words text-muted">{i.detail}</span>
+              <span className={`font-mono text-[10px] font-semibold ${S.color}`}>{S.text}</span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
 
@@ -513,7 +588,10 @@ function CopySummary({ report }: { report: VisitReport }) {
       "",
       ...(report.issues.length ? ["Problems:", ...report.issues.map((i) => `- ${i}`), ""] : []),
       "Pages:",
-      ...all.map((p) => `${p.ok ? "OK " : "ERR"} ${p.status ?? "---"}  ${p.loadMs != null ? formatMs(p.loadMs) : "-"}  ${p.finalUrl}`),
+      ...all.map((p) => {
+        const problems = pageProblems(p);
+        return `${problems.length ? "!! " : "OK "} ${p.status ?? "---"}  ${p.loadMs != null ? formatMs(p.loadMs) : "-"}  ${p.finalUrl}${problems.length ? `  (${problems.join("; ")})` : ""}`;
+      }),
     ];
     await navigator.clipboard.writeText(lines.join("\n")).catch(() => {});
     setCopied(true);

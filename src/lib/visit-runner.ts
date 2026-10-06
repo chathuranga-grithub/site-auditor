@@ -3,11 +3,23 @@
 // external links or ads), then opens each page once, scrolls it and checks it loads cleanly.
 // This is a QA check that the site works for a visitor in that location, not a traffic tool.
 
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
+import { chromium, devices, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { getProxyOrReuse } from "./proxy-api";
 import { readSitemap, type SitemapFetcher } from "./sitemap";
 import { isBlockedHost, isInternal, normalizeUrl, shouldSkipCrawl } from "./url";
-import { EXPECTED_COUNTRY, MAX_PAGES, type Discovery, type ExitInfo, type ScrollResult, type VisitEvent, type VisitPage, type VisitReport } from "./visit-types";
+import {
+  EXPECTED_COUNTRY,
+  MAX_PAGES,
+  OVERFLOW_PX,
+  type Discovery,
+  type ExitInfo,
+  type MenuCheck,
+  type MobileCheck,
+  type ScrollResult,
+  type VisitEvent,
+  type VisitPage,
+  type VisitReport,
+} from "./visit-types";
 
 /** How long a page may take to show its content (through the proxy) before it counts as not loading. */
 const NAV_TIMEOUT = 45_000;
@@ -23,10 +35,19 @@ const RISKY_LINK = /(log-?out|sign-?out|wp-admin|wp-login|\/login|\/cart|\/check
 
 const START_SCROLL = { stepWaitMs: 350, maxSteps: 40, settleMs: 800 };
 const PAGE_SCROLL = { stepWaitMs: 200, maxSteps: 30, settleMs: 500 };
+const MOBILE_SCROLL = { stepWaitMs: 150, maxSteps: 25, settleMs: 300 };
+/** Phone check: how long to wait for the full load (the desktop check already reported slow files). */
+const MOBILE_LOAD_WAIT = 15_000;
+/** An Android phone (most visitors in Vietnam), at 1x pixels so screenshots stay small; the layout is the same. */
+const PHONE = { ...devices["Pixel 7"], deviceScaleFactor: 1 };
+/** Width of phone screenshots shown in the results. */
+const PHONE_THUMB_WIDTH = 200;
 
 export interface VisitOptions {
   url: string;
   proxyApiUrl: string;
+  /** Also open every page on a phone-sized screen, and test the phone menu. */
+  mobile: boolean;
   signal: AbortSignal;
   send: (e: VisitEvent) => void;
 }
@@ -39,7 +60,7 @@ interface Target {
   note?: string;
 }
 
-export async function runVisitTest({ url, proxyApiUrl, signal, send }: VisitOptions): Promise<VisitReport> {
+export async function runVisitTest({ url, proxyApiUrl, mobile, signal, send }: VisitOptions): Promise<VisitReport> {
   const report: VisitReport = {
     url,
     startedAt: new Date().toISOString(),
@@ -55,6 +76,7 @@ export async function runVisitTest({ url, proxyApiUrl, signal, send }: VisitOpti
     stopReason: null,
     issues: [],
     cancelled: false,
+    mobileChecked: mobile,
   };
   const stopped = () => {
     if (signal.aborted) report.cancelled = true;
@@ -86,6 +108,8 @@ export async function runVisitTest({ url, proxyApiUrl, signal, send }: VisitOpti
       ignoreHTTPSErrors: false,
     });
     context.setDefaultNavigationTimeout(NAV_TIMEOUT);
+    const phone = mobile ? await browser.newContext({ ...PHONE, locale: "vi-VN", timezoneId: "Asia/Ho_Chi_Minh" }) : null;
+    phone?.setDefaultNavigationTimeout(NAV_TIMEOUT);
 
     // 2. Where does the visit really come from? Checked inside the proxied browser and compared
     // with this computer's own IP. Wrong or unknown location: stop before opening any page.
@@ -118,7 +142,23 @@ export async function runVisitTest({ url, proxyApiUrl, signal, send }: VisitOpti
     send({ type: "step", message: "Finding all internal pages (sitemap and start-page links)…" });
     const siteHost = new URL(start.finalUrl).hostname;
     const links = await startPageLinks(page, start.finalUrl, siteHost);
+    const shrink = await makeThumbnailer(context);
+
     await page.close().catch(() => {});
+
+    // The start page on a phone, and the phone menu (once: the same menu is on every page)
+    if (phone) {
+      send({ type: "step", message: "Checking the start page on a phone and its menu button (☰)…" });
+      const menus: MenuCheck = { mobile: null };
+      const ptab = await phone.newPage();
+      start.mobile = await checkMobile(ptab, start.finalUrl, shrink);
+      menus.mobile = start.mobile.ok
+        ? await mobileMenu(ptab, shrink).catch(() => ({ buttonFound: false, opened: false, linksShown: 0, note: "The menu check failed." }))
+        : null;
+      await ptab.close().catch(() => {});
+      start.menus = menus;
+      send({ type: "page", page: start });
+    }
     const { targets, discovery } = combineTargets(links, (await sitemap)?.urls ?? null, start, siteHost);
     report.discovery = discovery;
     send({ type: "discovered", discovery });
@@ -145,12 +185,12 @@ export async function runVisitTest({ url, proxyApiUrl, signal, send }: VisitOpti
       if (added) send({ type: "discovered", discovery: { ...discovery } });
     };
 
-    const shrink = await makeThumbnailer(context);
     let next = 0;
     let active = 0;
     let proxyFailures = 0;
     const worker = async () => {
       let tab = await context.newPage();
+      let ptab = phone ? await phone.newPage() : null;
       while (!stopped() && !report.stopReason) {
         if (next >= targets.length) {
           if (active === 0) break;
@@ -163,6 +203,10 @@ export async function runVisitTest({ url, proxyApiUrl, signal, send }: VisitOpti
         const referer = t.foundIn === "start page" ? start.finalUrl : undefined;
         const result = await checkPage(tab, t.href, "internal", () => tab.goto(t.href, { waitUntil: "domcontentloaded", referer }), PAGE_SCROLL, shrink);
         if (result.ok && isInternal(result.finalUrl, siteHost)) addFound(await pageLinks(tab, siteHost).catch(() => []));
+        if (phone && result.ok && !stopped()) {
+          if (!ptab || ptab.isClosed()) ptab = await phone.newPage();
+          result.mobile = await checkMobile(ptab, result.finalUrl, shrink);
+        } else if (phone) result.mobile = null; // didn't open on desktop, so not tried on a phone
         active--;
         if (stopped()) break;
         result.foundIn = t.foundIn;
@@ -178,6 +222,7 @@ export async function runVisitTest({ url, proxyApiUrl, signal, send }: VisitOpti
         send({ type: "page", page: result });
       }
       await tab.close().catch(() => {});
+      await ptab?.close().catch(() => {});
     };
     await Promise.all(Array.from({ length: CONCURRENCY }, worker));
 
@@ -295,14 +340,14 @@ function proxiedFetcher(context: BrowserContext): SitemapFetcher {
   };
 }
 
-type Thumbnailer = (jpeg: Buffer) => Promise<string>;
+type Thumbnailer = (jpeg: Buffer, width?: number) => Promise<string>;
 
 const THUMB_WIDTH = 480;
 
 /** Shrinks screenshots to THUMB_WIDTH in a blank tab (no network, no site code), as a JPEG data URL. */
 async function makeThumbnailer(context: BrowserContext): Promise<Thumbnailer> {
   const helper = await context.newPage();
-  return (jpeg) =>
+  return (jpeg, width = THUMB_WIDTH) =>
     helper.evaluate(
       async ({ src, width }) => {
         const img = new Image();
@@ -314,7 +359,7 @@ async function makeThumbnailer(context: BrowserContext): Promise<Thumbnailer> {
         canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height);
         return canvas.toDataURL("image/jpeg", 0.6);
       },
-      { src: `data:image/jpeg;base64,${jpeg.toString("base64")}`, width: THUMB_WIDTH },
+      { src: `data:image/jpeg;base64,${jpeg.toString("base64")}`, width },
     );
 }
 
@@ -482,6 +527,93 @@ async function startPageLinks(page: Page, pageUrl: string, siteHost: string): Pr
   return links;
 }
 
+/** Opens the page on a phone: does it load, fit the screen, have the viewport tag, load its images? */
+async function checkMobile(page: Page, url: string, shrink: Thumbnailer): Promise<MobileCheck> {
+  const out: MobileCheck = { ok: false, status: null, overflowPx: 0, viewportTag: false, images: 0, brokenImages: [] };
+  try {
+    const res = await page.goto(url, { waitUntil: "domcontentloaded" });
+    out.status = res?.status() ?? null;
+    out.ok = out.status !== null && out.status < 400;
+    if (!out.ok) out.error = `The page returned HTTP ${out.status ?? "no response"}.`;
+    await page.waitForLoadState("load", { timeout: MOBILE_LOAD_WAIT }).catch(() => {});
+    const s = await scrollPage(page, MOBILE_SCROLL).catch(() => null);
+    if (s) {
+      out.images = s.images;
+      out.brokenImages = s.brokenImages;
+    }
+    const m = await page.evaluate(() => {
+      // Sideways scrolling is only possible when neither <html> nor <body> hides horizontal overflow.
+      const clipped = [document.documentElement, document.body].some((el) => !!el && ["hidden", "clip"].includes(getComputedStyle(el).overflowX));
+      const content = document.querySelector('meta[name="viewport"]')?.getAttribute("content") ?? "";
+      return {
+        // clientWidth is the phone screen width (412px); innerWidth grows when the phone zooms out to fit a too-wide page.
+        overflow: clipped ? 0 : Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth),
+        viewportTag: /width\s*=\s*device-width/i.test(content),
+      };
+    });
+    out.overflowPx = m.overflow;
+    out.viewportTag = m.viewportTag;
+    await page.waitForTimeout(300);
+    out.screenshot = await shrink(await page.screenshot({ type: "jpeg", quality: 60 }), PHONE_THUMB_WIDTH).catch(() => undefined);
+  } catch (err) {
+    out.error = friendly(err);
+  }
+  return out;
+}
+
+/** On a phone: finds the menu button (☰), taps it and checks the menu opens with links. */
+async function mobileMenu(page: Page, shrink: Thumbnailer): Promise<NonNullable<MenuCheck["mobile"]>> {
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(300);
+  const toggles = page.locator(
+    'button, [role="button"], a[href="#"], .menu-toggle, .navbar-toggler, .hamburger, [class*="menu-toggle"], [class*="hamburger"], [class*="nav-toggle"], .elementor-menu-toggle',
+  );
+  // Visible near the top of the screen and looks like a menu button (label, class or id).
+  const index = await toggles.evaluateAll((els) => {
+    const hint = /menu|nav|hamburger|toggler|burger|danh m[uụ]c|☰/i;
+    let fallback = -1;
+    for (let i = 0; i < els.length; i++) {
+      const el = els[i] as HTMLElement;
+      const r = el.getBoundingClientRect();
+      if (r.width < 8 || r.height < 8 || r.top < 0 || r.top > 220 || getComputedStyle(el).visibility === "hidden") continue;
+      const text = `${typeof el.className === "string" ? el.className : ""} ${el.id} ${el.getAttribute("aria-label") ?? ""} ${el.getAttribute("aria-controls") ?? ""} ${el.innerText ?? ""}`;
+      if (/search|t[iì]m ki[eế]m|cart|gi[oỏ] h[aà]ng|close|đóng/i.test(text)) continue;
+      if (hint.test(text)) return i;
+      if (fallback < 0 && el.hasAttribute("aria-expanded")) fallback = i;
+    }
+    return fallback;
+  });
+  if (index < 0) return { buttonFound: false, opened: false, linksShown: 0, note: "No menu button (☰) found at the top of the phone screen." };
+
+  const linksOnScreen = () =>
+    page.evaluate(
+      () =>
+        [...document.querySelectorAll("a[href]")].filter((a) => {
+          const r = a.getBoundingClientRect();
+          const cs = getComputedStyle(a);
+          return r.width > 1 && r.height > 1 && r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth && cs.visibility !== "hidden" && Number(cs.opacity) > 0.1;
+        }).length,
+    );
+  const before = await linksOnScreen();
+  const startUrl = page.url();
+  const toggle = toggles.nth(index);
+  try {
+    await toggle.tap({ timeout: 5_000 }).catch(() => toggle.click({ timeout: 5_000 }));
+  } catch {
+    return { buttonFound: true, opened: false, linksShown: 0, note: "The menu button couldn't be tapped (something covers it)." };
+  }
+  await page.waitForTimeout(900);
+  if (normalizeUrl(page.url()) !== normalizeUrl(startUrl)) {
+    return { buttonFound: true, opened: false, linksShown: 0, note: "Tapping the menu button opened another page instead of the menu." };
+  }
+  const after = await linksOnScreen();
+  const expanded = (await toggle.getAttribute("aria-expanded").catch(() => null)) === "true";
+  const shown = Math.max(0, after - before);
+  const opened = shown >= 3 || (expanded && shown > 0);
+  const screenshot = await shrink(await page.screenshot({ type: "jpeg", quality: 60 }), PHONE_THUMB_WIDTH).catch(() => undefined);
+  return { buttonFound: true, opened, linksShown: shown, note: opened ? undefined : "The menu button was tapped, but no menu links appeared.", screenshot };
+}
+
 /** Safe internal links on the page a tab is showing. */
 async function pageLinks(page: Page, siteHost: string): Promise<string[]> {
   const hrefs = await page.$$eval("a[href]", (as) => as.map((a) => (a as HTMLAnchorElement).href));
@@ -556,7 +688,14 @@ function findIssues(r: VisitReport): string[] {
     if (p.failedRequests.length) issues.push(`${name}: ${p.failedRequests.length} file(s) failed to load`);
     if (p.scroll?.brokenImages.length) issues.push(`${name}: ${p.scroll.brokenImages.length} image(s) didn't load`);
     if (p.clickable === false && p.note) issues.push(`${name}: ${p.note}`);
+    const m = p.mobile;
+    if (m && !m.ok) issues.push(`${name} on a phone: ${m.error ?? "didn't load"}`);
+    if (m?.ok && m.overflowPx > OVERFLOW_PX) issues.push(`${name} on a phone: the page is ${m.overflowPx}px wider than the screen, so visitors can scroll sideways`);
+    if (m?.ok && !m.viewportTag) issues.push(`${name} on a phone: no viewport tag, so phones may show a tiny desktop page`);
+    if (m?.brokenImages.length) issues.push(`${name} on a phone: ${m.brokenImages.length} image(s) didn't load`);
   }
+  const menus = r.start?.menus;
+  if (menus?.mobile && !menus.mobile.opened) issues.push(`Phone menu: ${menus.mobile.note ?? "didn't open"}`);
   if (r.scroll && !r.scroll.reachedBottom) issues.push("Start page: couldn't scroll to the bottom (very long or endless page)");
   return issues;
 }
