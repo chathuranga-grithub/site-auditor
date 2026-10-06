@@ -1,6 +1,6 @@
 "use client";
 
-// Visit Test: every page as a card with its screenshot. Click a card for the full details.
+// Visit Test: every page as a card with its screenshot, and the details popup shared with the list view.
 
 import { useEffect, useState, type ReactNode } from "react";
 import { CircleCheck, TriangleAlert, X } from "lucide-react";
@@ -12,10 +12,9 @@ const PAGE_SIZE = 48;
 
 type Filter = "all" | "problems" | "ok";
 
-export function VisitPageCards({ pages, renderDetail }: { pages: VisitPage[]; renderDetail: (page: VisitPage) => ReactNode }) {
+export function VisitPageCards({ pages, onOpen }: { pages: VisitPage[]; onOpen: (page: VisitPage) => void }) {
   const [filter, setFilter] = useState<Filter>("all");
   const [limit, setLimit] = useState(PAGE_SIZE);
-  const [open, setOpen] = useState<VisitPage | null>(null);
 
   const rows = pages.map((page, i) => ({ n: i + 1, page, problems: pageProblems(page) }));
   const counts = { all: rows.length, problems: rows.filter((r) => r.problems.length).length, ok: rows.filter((r) => !r.problems.length).length };
@@ -51,7 +50,7 @@ export function VisitPageCards({ pages, renderDetail }: { pages: VisitPage[]; re
             <li key={n}>
               <button
                 type="button"
-                onClick={() => setOpen(page)}
+                onClick={() => onOpen(page)}
                 className={`group flex h-full w-full flex-col overflow-hidden rounded-lg border bg-surface text-left transition hover:border-line-strong hover:bg-surface-2 ${
                   problems.length ? "border-status-warning/50" : "border-line"
                 }`}
@@ -108,12 +107,11 @@ export function VisitPageCards({ pages, renderDetail }: { pages: VisitPage[]; re
         )}
       </div>
 
-      {open && <DetailDialog onClose={() => setOpen(null)}>{renderDetail(open)}</DetailDialog>}
     </div>
   );
 }
 
-function DetailDialog({ children, onClose }: { children: ReactNode; onClose: () => void }) {
+export function DetailDialog({ children, onClose }: { children: ReactNode; onClose: () => void }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     document.addEventListener("keydown", onKey);

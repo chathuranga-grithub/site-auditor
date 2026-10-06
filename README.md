@@ -84,7 +84,7 @@ The third tool, at `/visit-test`. It checks that **every page of a company site 
 7. Checks that each visible link on the start page can be clicked by a visitor (not hidden or covered).
 8. Checks the proxy IP again at the end, to catch a proxy that changed IP or country during the test.
 
-The report has a pass/fail checklist and a list of problems. Every page is shown as a card with its screenshot (click a card for the full details), with All / Problems / OK filters; switch to Table to search and sort. Pages with problems and the start page get a full-size screenshot, the rest a small one, so even 500 pages stay light.
+The report has a pass/fail checklist and a list of problems. Every page is shown as a card with its screenshot (click a card for the full details), with All / Problems / OK filters; switch to List for a compact view with a small screenshot per row, search and sorting. Pages with problems and the start page get a full-size screenshot, the rest a small one, so even 500 pages stay light.
 
 **Run it:**
 1. Run `npm run dev`, then open http://localhost:3000/visit-test.

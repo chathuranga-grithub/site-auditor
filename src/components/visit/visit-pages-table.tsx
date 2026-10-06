@@ -1,7 +1,8 @@
 "use client";
 
-// Visit Test: every page the test opened, with search, problem filters and sorting.
+// Visit Test list view: every page with a small screenshot, search, problem filters and sorting.
 
+import { useMemo } from "react";
 import { CircleCheck, TriangleAlert } from "lucide-react";
 import { pageProblems } from "@/lib/visit-checklist";
 import type { VisitPage } from "@/lib/visit-types";
@@ -13,6 +14,27 @@ interface Row {
   page: VisitPage;
   problems: string[];
 }
+
+const thumbColumn = (onOpen: (page: VisitPage) => void): Column<Row> => ({
+  id: "shot",
+  header: "",
+  cell: (r) => (
+    <button
+      type="button"
+      onClick={() => onOpen(r.page)}
+      aria-label={`Details for ${r.page.title ?? r.page.url}`}
+      className={`block h-[54px] w-24 overflow-hidden rounded border bg-black/30 transition hover:border-line-strong ${r.problems.length ? "border-status-warning/50" : "border-line"}`}
+    >
+      {r.page.screenshot ? (
+        // eslint-disable-next-line @next/next/no-img-element -- data URL screenshot
+        <img src={r.page.screenshot} alt="" loading="lazy" className="size-full object-cover object-top" />
+      ) : (
+        <span className="grid size-full place-items-center text-[10px] text-subtle">none</span>
+      )}
+    </button>
+  ),
+  className: "w-28",
+});
 
 const COLUMNS: Column<Row>[] = [
   {
@@ -84,12 +106,13 @@ const FILTERS: QuickFilter<Row>[] = [
   { id: "images", label: "Broken images", test: (r) => !!r.page.scroll?.brokenImages.length },
 ];
 
-export function VisitPagesTable({ pages }: { pages: VisitPage[] }) {
+export function VisitPagesTable({ pages, onOpen }: { pages: VisitPage[]; onOpen: (page: VisitPage) => void }) {
   const rows: Row[] = pages.map((page, i) => ({ n: i + 1, page, problems: pageProblems(page) }));
+  const columns = useMemo(() => [COLUMNS[0], thumbColumn(onOpen), ...COLUMNS.slice(1)], [onOpen]);
   return (
     <DataTable
       rows={rows}
-      columns={COLUMNS}
+      columns={columns}
       rowKey={(r) => `${r.n}`}
       searchText={(r) => `${r.page.url} ${r.page.finalUrl} ${r.page.title ?? ""}`}
       filters={FILTERS}

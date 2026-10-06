@@ -9,7 +9,7 @@ import { Check, CircleCheck, CircleMinus, CircleX, Copy, Globe, KeyRound, Layout
 import { buildChecklist, checklistHeadline, checklistTotals, discoverySources, type CheckStatus } from "@/lib/visit-checklist";
 import { MAX_PAGES, type Discovery, type ScrollResult, type VisitEvent, type VisitPage, type VisitReport } from "@/lib/visit-types";
 import { Notice, Panel, StatTile, StatusCode, Tag, UrlLink, buttonClass } from "@/components/ui/primitives";
-import { VisitPageCards } from "./visit-page-cards";
+import { DetailDialog, VisitPageCards } from "./visit-page-cards";
 import { VisitPagesTable } from "./visit-pages-table";
 
 /** Problems listed in the notice before "and N more". */
@@ -271,7 +271,8 @@ function Results({ report, pages, scroll }: { report: VisitReport | null; pages:
   const scrolled = pages.filter((p) => p.scroll);
   const images = scrolled.reduce((n, p) => n + p.scroll!.images, 0);
   const brokenImages = scrolled.reduce((n, p) => n + p.scroll!.brokenImages.length, 0);
-  const [view, setView] = useState<"cards" | "table">("cards");
+  const [view, setView] = useState<"cards" | "list">("cards");
+  const [openPage, setOpenPage] = useState<VisitPage | null>(null);
   const exit = report?.exit;
 
   return (
@@ -338,7 +339,7 @@ function Results({ report, pages, scroll }: { report: VisitReport | null; pages:
           title={"All pages visited · " + pages.length + (report?.discovery ? " of " + (report.discovery.total + 1) : "")}
           actions={
             <div className="flex rounded-lg bg-canvas/60 p-0.5" role="radiogroup" aria-label="View">
-              {(["cards", "table"] as const).map((v) => (
+              {(["cards", "list"] as const).map((v) => (
                 <button
                   key={v}
                   type="button"
@@ -348,7 +349,7 @@ function Results({ report, pages, scroll }: { report: VisitReport | null; pages:
                   className={"inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition " + (view === v ? "bg-surface-2 text-ink ring-1 ring-line-strong" : "text-muted hover:text-ink")}
                 >
                   {v === "cards" ? <LayoutGrid className="size-3.5" /> : <List className="size-3.5" />}
-                  {v === "cards" ? "Cards" : "Table"}
+                  {v === "cards" ? "Cards" : "List"}
                 </button>
               ))}
             </div>
@@ -356,11 +357,17 @@ function Results({ report, pages, scroll }: { report: VisitReport | null; pages:
           bodyClassName=""
         >
           {view === "cards" ? (
-            <VisitPageCards pages={pages} renderDetail={(p) => <PageCard page={p} heading={p.kind === "start" ? "Start page" : (p.title ?? "Page")} scroll={p.scroll} large />} />
+            <VisitPageCards pages={pages} onOpen={setOpenPage} />
           ) : (
-            <VisitPagesTable pages={pages} />
+            <VisitPagesTable pages={pages} onOpen={setOpenPage} />
           )}
         </Panel>
+      )}
+
+      {openPage && (
+        <DetailDialog onClose={() => setOpenPage(null)}>
+          <PageCard page={openPage} heading={openPage.kind === "start" ? "Start page" : (openPage.title ?? "Page")} scroll={openPage.scroll} large />
+        </DetailDialog>
       )}
     </div>
   );
