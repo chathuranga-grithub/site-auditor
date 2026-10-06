@@ -383,7 +383,7 @@ export async function downloadRankingsExcel(data: SerpResponse, analysis: Record
 
   addTableSheet(wb, {
     name: "Rankings",
-    description: `Google top ${data.results.length} for "${data.keyword}" in ${country}, with on-page SEO for each ranking page.`,
+    description: `Google top ${data.results.length} for "${data.keyword}" as a user in ${country} (${data.languageName}), with on-page SEO for each ranking page.`,
     meta: `Searched ${formatDate(data.searchedAt)}  ·  ${data.results.length} results`,
     tabColor: C.accent,
     columns: RANKING_COLUMNS,

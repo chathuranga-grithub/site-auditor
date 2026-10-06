@@ -68,10 +68,10 @@ export function PositionBars({
                   onMouseLeave={() => setHover(null)}
                   onFocus={() => setHover(d.position)}
                   onBlur={() => setHover(null)}
-                  className="group flex h-full flex-1 items-end justify-center px-[10%]"
+                  className="group flex h-full min-w-0 flex-1 items-end justify-center px-0.5 sm:px-1.5"
                 >
                   {d.value === null ? (
-                    <span className="mb-0.5 block h-0 w-full border-t border-dashed border-subtle" />
+                    <span className="mb-0.5 block h-0 w-full max-w-10 border-t border-dashed border-subtle" />
                   ) : (
                     <span
                       className={`block w-full max-w-10 rounded-t-[4px] bg-series-1 transition-opacity ${

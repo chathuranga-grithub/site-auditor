@@ -2,8 +2,10 @@
 // blocked and against its terms). Serper.dev is tried first (2,500 free searches);
 // if it isn't configured or fails (e.g. credits used up), SerpApi (250 free/month) is used.
 // Keys: SERPER_API_KEY, SERPAPI_API_KEY. Each call fetches one page of 10 results = 1 search.
+// To match what a person in that country sees, each search sends the country (gl), the
+// country's search language (hl) and a location inside the country.
 
-import { googleCountryParam } from "./countries";
+import { findCountry, googleCountryParam, searchLanguage, type LanguageChoice } from "./countries";
 import type { SerpResponse, SerpResult } from "./rankings-types";
 
 const TIMEOUT_MS = 15_000;
@@ -18,17 +20,41 @@ export function configuredProviders(): Provider[] {
 }
 
 /** Top `count` organic results, trying each configured provider in order. */
-export async function searchGoogle(keyword: string, country: string, count: number): Promise<SerpResponse> {
+export async function searchGoogle(
+  keyword: string,
+  country: string,
+  count: number,
+  languageChoice: LanguageChoice = "local",
+): Promise<SerpResponse> {
   const providers = configuredProviders();
   if (providers.length === 0) throw new SerpError("Search isn't set up yet: add SERPER_API_KEY or SERPAPI_API_KEY.", 503);
+
+  const language = searchLanguage(country, languageChoice);
+  const params: SearchParams = {
+    q: keyword,
+    gl: googleCountryParam(country),
+    hl: language.hl,
+    location: findCountry(country)?.name ?? country,
+  };
 
   const failures: string[] = [];
   for (const provider of providers) {
     try {
-      const raw = provider === "serper" ? await serper(keyword, country) : await serpapi(keyword, country);
+      const run = (p: SearchParams) => (provider === "serper" ? serper(p) : serpapi(p));
+      // If the provider doesn't recognise the location name, search by country + language only.
+      const raw = await run(params).catch((err: unknown) => {
+        if (err instanceof Error && /location/i.test(err.message)) {
+          params.location = "";
+          return run(params);
+        }
+        throw err;
+      });
       return {
         keyword,
         country,
+        language: language.hl,
+        languageName: language.name,
+        location: params.location || "(country only)",
         provider,
         results: clean(raw).slice(0, count),
         searchedAt: new Date().toISOString(),
@@ -49,6 +75,13 @@ export class SerpError extends Error {
   }
 }
 
+interface SearchParams {
+  q: string;
+  gl: string;
+  hl: string;
+  location: string;
+}
+
 interface RawResult {
   position?: number;
   title?: string;
@@ -56,11 +89,11 @@ interface RawResult {
   snippet?: string;
 }
 
-async function serper(keyword: string, country: string): Promise<RawResult[]> {
+async function serper(p: SearchParams): Promise<RawResult[]> {
   const res = await fetch("https://google.serper.dev/search", {
     method: "POST",
     headers: { "X-API-KEY": process.env.SERPER_API_KEY!, "Content-Type": "application/json" },
-    body: JSON.stringify({ q: keyword, gl: googleCountryParam(country), hl: "en", num: 10 }),
+    body: JSON.stringify({ ...withoutEmpty(p), num: 10 }),
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
   const data = (await res.json().catch(() => ({}))) as { organic?: RawResult[]; message?: string };
@@ -68,13 +101,11 @@ async function serper(keyword: string, country: string): Promise<RawResult[]> {
   return data.organic ?? [];
 }
 
-async function serpapi(keyword: string, country: string): Promise<RawResult[]> {
+async function serpapi(p: SearchParams): Promise<RawResult[]> {
   const url = new URL("https://serpapi.com/search.json");
   url.search = new URLSearchParams({
     engine: "google",
-    q: keyword,
-    gl: googleCountryParam(country),
-    hl: "en",
+    ...withoutEmpty(p),
     num: "10",
     api_key: process.env.SERPAPI_API_KEY!,
   }).toString();
@@ -84,6 +115,10 @@ async function serpapi(keyword: string, country: string): Promise<RawResult[]> {
   if (data.error && !/hasn't returned any results/i.test(data.error)) throw new Error(data.error);
   if (!res.ok && !data.organic_results) throw new Error(`HTTP ${res.status}`);
   return data.organic_results ?? [];
+}
+
+function withoutEmpty(p: SearchParams): Record<string, string> {
+  return Object.fromEntries(Object.entries(p).filter(([, v]) => v !== ""));
 }
 
 /** Keep valid http(s) results, number them 1..n in Google's order. */

@@ -16,6 +16,11 @@ export interface SerpResult {
 export interface SerpResponse {
   keyword: string;
   country: string;
+  /** Google "hl" code the search was made in, e.g. "vi". */
+  language: string;
+  languageName: string;
+  /** Location sent to Google, e.g. "Vietnam". */
+  location: string;
   provider: "serper" | "serpapi";
   results: SerpResult[];
   searchedAt: string;

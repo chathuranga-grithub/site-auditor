@@ -27,7 +27,13 @@ Paste a list into the URL box (one site per line, or separated by commas), or **
 
 ## Keyword Rankings
 
-The second tool, at `/rankings`. Pick a **country** and enter a **keyword** (e.g. `iphone`). It shows the **top 5 or 10 Google results** and analyses each ranking page's on-page SEO.
+The second tool, at `/rankings`. Enter a **keyword** (e.g. `iphone`). It shows the **top 5 or 10 Google results as a person in that country sees them**, and analyses each ranking page's on-page SEO.
+
+- **Country:** for now only **Vietnam** is enabled, via `ENABLED_COUNTRIES` in `src/lib/countries.ts`. The other 194 countries are already listed with their names and search languages, so adding a country back means adding its code there.
+- **Local search:** each search sends Google the country (`gl=vn`), the country's search language (`hl=vi`, Vietnamese) and a location inside the country ("Vietnam").
+  - A **Vietnamese / English** switch lets you check English-language rankings too.
+  - If a location name isn't recognised, the search retries with country and language only.
+- **Check on Google:** opens the same search on Google, so you can compare. Your own location can still change what Google shows you.
 
 - **Charts:** word count by position, response time by position, and an SEO checklist showing how many of the top results pass each check.
 - **The 9 checks:**

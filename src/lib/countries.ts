@@ -10,6 +10,16 @@ export interface Country {
 /** Selected when the tool opens. */
 export const DEFAULT_COUNTRY = "VN";
 
+/**
+ * Countries the tool currently offers. For now only Vietnam; to open more, add their codes
+ * here (every country below already has its name and search language).
+ */
+export const ENABLED_COUNTRIES = ["VN"];
+
+export function isEnabledCountry(code: string): boolean {
+  return ENABLED_COUNTRIES.includes(code.toUpperCase());
+}
+
 /** Shown first in the picker. */
 export const POPULAR_COUNTRIES = ["VN", "LK", "IN", "MY", "GB", "AE", "US", "AU", "CA", "SG", "SA", "QA"];
 
@@ -223,4 +233,100 @@ export function findCountry(code: string): Country | undefined {
 /** Value for Google's "gl" parameter. */
 export function googleCountryParam(code: string): string {
   return code.toUpperCase() === "GB" ? "uk" : code.toLowerCase();
+}
+
+export interface Language {
+  /** Google "hl" code, e.g. "vi". */
+  hl: string;
+  name: string;
+}
+
+const ENGLISH: Language = { hl: "en", name: "English" };
+
+/**
+ * The language most people in a country search Google in. Countries not listed search
+ * in English. (Where English is the everyday search language, e.g. India, Malaysia, the UAE
+ * or Sri Lanka, the local language is English.)
+ */
+const LOCAL_LANGUAGE: Record<string, Language> = {
+  VN: { hl: "vi", name: "Vietnamese" },
+  TH: { hl: "th", name: "Thai" },
+  ID: { hl: "id", name: "Indonesian" },
+  KH: { hl: "km", name: "Khmer" },
+  LA: { hl: "lo", name: "Lao" },
+  MM: { hl: "my", name: "Burmese" },
+  JP: { hl: "ja", name: "Japanese" },
+  KR: { hl: "ko", name: "Korean" },
+  CN: { hl: "zh-CN", name: "Chinese (Simplified)" },
+  TW: { hl: "zh-TW", name: "Chinese (Traditional)" },
+  HK: { hl: "zh-TW", name: "Chinese (Traditional)" },
+  SA: { hl: "ar", name: "Arabic" },
+  QA: { hl: "ar", name: "Arabic" },
+  KW: { hl: "ar", name: "Arabic" },
+  OM: { hl: "ar", name: "Arabic" },
+  BH: { hl: "ar", name: "Arabic" },
+  EG: { hl: "ar", name: "Arabic" },
+  JO: { hl: "ar", name: "Arabic" },
+  IQ: { hl: "ar", name: "Arabic" },
+  MA: { hl: "fr", name: "French" },
+  DZ: { hl: "fr", name: "French" },
+  TN: { hl: "fr", name: "French" },
+  FR: { hl: "fr", name: "French" },
+  CI: { hl: "fr", name: "French" },
+  SN: { hl: "fr", name: "French" },
+  CM: { hl: "fr", name: "French" },
+  ML: { hl: "fr", name: "French" },
+  BF: { hl: "fr", name: "French" },
+  NE: { hl: "fr", name: "French" },
+  TG: { hl: "fr", name: "French" },
+  BJ: { hl: "fr", name: "French" },
+  GA: { hl: "fr", name: "French" },
+  CD: { hl: "fr", name: "French" },
+  CG: { hl: "fr", name: "French" },
+  HT: { hl: "fr", name: "French" },
+  BE: { hl: "fr", name: "French" },
+  DE: { hl: "de", name: "German" },
+  AT: { hl: "de", name: "German" },
+  CH: { hl: "de", name: "German" },
+  ES: { hl: "es", name: "Spanish" },
+  MX: { hl: "es", name: "Spanish" },
+  AR: { hl: "es", name: "Spanish" },
+  CO: { hl: "es", name: "Spanish" },
+  CL: { hl: "es", name: "Spanish" },
+  PE: { hl: "es", name: "Spanish" },
+  IT: { hl: "it", name: "Italian" },
+  PT: { hl: "pt-PT", name: "Portuguese" },
+  BR: { hl: "pt-BR", name: "Portuguese (Brazil)" },
+  NL: { hl: "nl", name: "Dutch" },
+  RU: { hl: "ru", name: "Russian" },
+  UA: { hl: "uk", name: "Ukrainian" },
+  TR: { hl: "tr", name: "Turkish" },
+  PL: { hl: "pl", name: "Polish" },
+  SE: { hl: "sv", name: "Swedish" },
+  NO: { hl: "no", name: "Norwegian" },
+  DK: { hl: "da", name: "Danish" },
+  FI: { hl: "fi", name: "Finnish" },
+  GR: { hl: "el", name: "Greek" },
+  CZ: { hl: "cs", name: "Czech" },
+  RO: { hl: "ro", name: "Romanian" },
+  HU: { hl: "hu", name: "Hungarian" },
+  IL: { hl: "iw", name: "Hebrew" },
+};
+
+export function localLanguage(code: string): Language {
+  return LOCAL_LANGUAGE[code.toUpperCase()] ?? ENGLISH;
+}
+
+/** "local" = the country's own search language; "en" = English. */
+export type LanguageChoice = "local" | "en";
+
+export function searchLanguage(code: string, choice: LanguageChoice): Language {
+  return choice === "en" ? ENGLISH : localLanguage(code);
+}
+
+/** A google.com search URL with the same country + language, for manual comparison. */
+export function googleSearchUrl(keyword: string, code: string, hl: string): string {
+  const u = new URL("https://www.google.com/search");
+  u.search = new URLSearchParams({ q: keyword, gl: googleCountryParam(code), hl, pws: "0" }).toString();
+  return u.toString();
 }

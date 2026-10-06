@@ -5,8 +5,17 @@
 // a graphical comparison report.
 
 import { useMemo, useRef, useState, type FormEvent } from "react";
-import { Check, Copy, Download, Loader2, Search } from "lucide-react";
-import { COUNTRIES, DEFAULT_COUNTRY, POPULAR_COUNTRIES, findCountry } from "@/lib/countries";
+import { Check, Copy, Download, ExternalLink, Globe, Loader2, Search } from "lucide-react";
+import {
+  COUNTRIES,
+  DEFAULT_COUNTRY,
+  ENABLED_COUNTRIES,
+  POPULAR_COUNTRIES,
+  findCountry,
+  googleSearchUrl,
+  localLanguage,
+  type LanguageChoice,
+} from "@/lib/countries";
 import { downloadRankingsExcel } from "@/lib/excel-report";
 import { RESULT_COUNTS, type ApiError, type PageSeo, type ResultCount, type SerpResponse } from "@/lib/rankings-types";
 import { SEO_CHECKS, checksPassed, isAnalyzable, median } from "@/lib/rankings-checks";
@@ -20,6 +29,9 @@ export function KeywordRankings() {
   const [country, setCountry] = useState(DEFAULT_COUNTRY);
   const [keyword, setKeyword] = useState("");
   const [count, setCount] = useState<ResultCount>(10);
+  const [language, setLanguage] = useState<LanguageChoice>("local");
+  const local = localLanguage(country);
+  const hasLocalLanguage = local.hl !== "en";
   const [phase, setPhase] = useState<"idle" | "searching" | "analyzing" | "done">("idle");
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<SerpResponse | null>(null);
@@ -28,7 +40,9 @@ export function KeywordRankings() {
   const runRef = useRef(0);
 
   const busy = phase === "searching" || phase === "analyzing";
-  const popular = POPULAR_COUNTRIES.map((c) => findCountry(c)!).filter(Boolean);
+  const enabled = COUNTRIES.filter((c) => ENABLED_COUNTRIES.includes(c.code));
+  const popular = POPULAR_COUNTRIES.filter((c) => ENABLED_COUNTRIES.includes(c)).map((c) => findCountry(c)!);
+  const singleCountry = enabled.length === 1;
 
   async function handleSearch(e: FormEvent) {
     e.preventDefault();
@@ -51,7 +65,7 @@ export function KeywordRankings() {
       const res = await fetch("/api/serp", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ keyword: q, country, count }),
+        body: JSON.stringify({ keyword: q, country, count, language: hasLocalLanguage ? language : "local" }),
       });
       const body = (await res.json().catch(() => ({ error: `Search failed (${res.status})` }))) as SerpResponse | ApiError;
       if ("error" in body) throw new Error(body.error);
@@ -104,31 +118,41 @@ export function KeywordRankings() {
         </div>
       </header>
 
-      <form onSubmit={handleSearch} className="glass grid gap-2 rounded-xl p-2 md:grid-cols-[13rem_1fr_auto_auto]">
-        <label className="block">
-          <span className="sr-only">Country</span>
-          <select
-            value={country}
-            onChange={(e) => setCountry(e.target.value)}
-            disabled={busy}
-            className="h-10 w-full rounded-lg border border-transparent bg-canvas/60 px-3 text-sm text-ink outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/20 disabled:opacity-60"
+      <form onSubmit={handleSearch} className="glass grid gap-2 rounded-xl p-2 md:grid-cols-[13rem_1fr_auto_auto_auto]">
+        {singleCountry ? (
+          <div
+            className="flex h-10 items-center gap-2 rounded-lg bg-canvas/60 px-3 text-sm text-ink"
+            title="More countries can be added later"
           >
-            <optgroup label="Popular">
-              {popular.map((c) => (
-                <option key={`p-${c.code}`} value={c.code}>
-                  {c.name}
-                </option>
-              ))}
-            </optgroup>
-            <optgroup label="All countries">
-              {COUNTRIES.map((c) => (
-                <option key={c.code} value={c.code}>
-                  {c.name}
-                </option>
-              ))}
-            </optgroup>
-          </select>
-        </label>
+            <Globe className="size-4 text-subtle" aria-hidden />
+            {enabled[0].name}
+          </div>
+        ) : (
+          <label className="block">
+            <span className="sr-only">Country</span>
+            <select
+              value={country}
+              onChange={(e) => setCountry(e.target.value)}
+              disabled={busy}
+              className="h-10 w-full rounded-lg border border-transparent bg-canvas/60 px-3 text-sm text-ink outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/20 disabled:opacity-60"
+            >
+              <optgroup label="Popular">
+                {popular.map((c) => (
+                  <option key={`p-${c.code}`} value={c.code}>
+                    {c.name}
+                  </option>
+                ))}
+              </optgroup>
+              <optgroup label="All countries">
+                {enabled.map((c) => (
+                  <option key={c.code} value={c.code}>
+                    {c.name}
+                  </option>
+                ))}
+              </optgroup>
+            </select>
+          </label>
+        )}
 
         <label className="relative block">
           <span className="sr-only">Keyword</span>
@@ -143,6 +167,29 @@ export function KeywordRankings() {
             className="h-10 w-full rounded-lg border border-transparent bg-canvas/60 pr-3 pl-10 text-base text-ink outline-none placeholder:text-subtle focus:border-accent/60 focus:ring-2 focus:ring-accent/20 disabled:opacity-60 sm:text-sm"
           />
         </label>
+
+        {hasLocalLanguage ? (
+          <div className="flex h-10 rounded-lg bg-canvas/60 p-1" role="radiogroup" aria-label="Search language">
+            {(["local", "en"] as const).map((l) => (
+              <button
+                key={l}
+                type="button"
+                role="radio"
+                aria-checked={language === l}
+                onClick={() => setLanguage(l)}
+                disabled={busy}
+                title={l === "local" ? `Search the way most people in ${findCountry(country)?.name} do` : "Search in English"}
+                className={`flex-1 rounded-md px-3 text-xs font-medium whitespace-nowrap transition ${
+                  language === l ? "bg-surface-2 text-ink ring-1 ring-line-strong" : "text-muted hover:text-ink"
+                }`}
+              >
+                {l === "local" ? local.name : "English"}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="hidden md:block" aria-hidden />
+        )}
 
         <div className="flex h-10 rounded-lg bg-canvas/60 p-1" role="radiogroup" aria-label="Number of results">
           {RESULT_COUNTS.map((n) => (
@@ -173,7 +220,8 @@ export function KeywordRankings() {
       {phase === "searching" && (
         <Panel bodyClassName="flex items-center gap-3 p-5 text-sm text-muted">
           <Loader2 className="size-4 animate-spin text-accent-2" />
-          Getting Google results for &ldquo;{keyword.trim()}&rdquo; in {findCountry(country)?.name}…
+          Searching Google for &ldquo;{keyword.trim()}&rdquo; as a user in {findCountry(country)?.name}
+          {hasLocalLanguage && ` (${language === "local" ? local.name : "English"})`}…
         </Panel>
       )}
 
@@ -239,9 +287,18 @@ function Report({
             </span>
           </span>
           <span>
-            Top {data.results.length} for <span className="text-ink">&ldquo;{data.keyword}&rdquo;</span> in{" "}
-            <span className="text-ink">{countryName}</span>
+            Top {data.results.length} for <span className="text-ink">&ldquo;{data.keyword}&rdquo;</span> as a user in{" "}
+            <span className="text-ink">{countryName}</span> · <span className="text-ink">{data.languageName}</span>
           </span>
+          <a
+            href={googleSearchUrl(data.keyword, data.country, data.language)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-link hover:underline"
+            title="Opens the same search on Google. Your own location can still change what you see."
+          >
+            Check on Google <ExternalLink className="size-3" />
+          </a>
           <span>{new Date(data.searchedAt).toLocaleString()}</span>
         </div>
         {phase === "done" && <ReportActions data={data} analysis={analysis} />}
@@ -348,7 +405,7 @@ function ReportActions({ data, analysis }: { data: SerpResponse; analysis: Recor
 
 function buildSummary(data: SerpResponse, analysis: Record<string, AnalysisState>): string {
   const country = findCountry(data.country)?.name ?? data.country;
-  const lines = [`Google top ${data.results.length} for "${data.keyword}" in ${country}`, new Date(data.searchedAt).toLocaleString("en-GB"), ""];
+  const lines = [`Google top ${data.results.length} for "${data.keyword}" in ${country} (${data.languageName})`, new Date(data.searchedAt).toLocaleString("en-GB"), ""];
   for (const r of data.results) {
     const a = analysis[r.url];
     const p = isAnalyzable(a as PageSeo) ? (a as PageSeo) : null;
