@@ -266,10 +266,66 @@ export function VisitTest() {
           {discovery && discovery.total > 0 && (
             <Progress done={pages.filter((p) => p.kind === "internal").length} total={discovery.total} running={running} elapsedMs={timing.last - timing.start} />
           )}
+          {pages.length > 0 && <LiveLog pages={pages} total={discovery ? discovery.total + 1 : null} />}
         </Panel>
       )}
 
       {(report || pages.length > 0) && <Results report={report} pages={pages} />}
+    </div>
+  );
+}
+
+/** Console-style log: one line per page as it's checked. Follows the newest line unless scrolled up. */
+function LiveLog({ pages, total }: { pages: VisitPage[]; total: number | null }) {
+  const box = useRef<HTMLDivElement>(null);
+  const stick = useRef(true);
+  useEffect(() => {
+    if (stick.current && box.current) box.current.scrollTop = box.current.scrollHeight;
+  }, [pages.length]);
+  const width = String(total ?? pages.length).length;
+
+  return (
+    <div className="mt-4">
+      <div className="mb-1 flex items-center justify-between font-mono text-[10px] tracking-[0.14em] text-subtle uppercase">
+        <span>Live log</span>
+        <span className="tracking-normal normal-case">{pages.length.toLocaleString()} line(s)</span>
+      </div>
+      <div
+        ref={box}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+        }}
+        role="log"
+        aria-label="Live log"
+        className="max-h-72 overflow-auto rounded-lg border border-line bg-black/50 px-3 py-2 font-mono text-[11px] leading-5"
+      >
+        {pages.map((p, i) => {
+          const problems = pageProblems(p);
+          const path = (() => {
+            try {
+              const u = new URL(p.finalUrl);
+              return (u.pathname + u.search) || "/";
+            } catch {
+              return p.finalUrl;
+            }
+          })();
+          const tone = !p.ok ? "text-status-critical" : problems.length ? "text-status-warning" : "text-status-good";
+          return (
+            <div key={`${i}-${p.url}`} className="flex gap-3 whitespace-nowrap">
+              <span className="text-subtle tabular-nums">
+                [{String(i + 1).padStart(width, " ")}/{total ?? "?"}]
+              </span>
+              <span className={`tabular-nums ${p.status === null || p.status >= 400 ? "text-status-critical" : "text-muted"}`}>{p.status ?? "---"}</span>
+              <span className="w-12 shrink-0 text-right text-muted tabular-nums">{p.loadMs != null ? formatMs(p.loadMs) : "-"}</span>
+              <span className="w-72 shrink-0 truncate text-ink" title={p.finalUrl}>
+                {path}
+              </span>
+              <span className={tone}>{problems.length ? `${p.ok ? "⚠" : "✕"} ${problems.join(" · ")}` : "✓ OK"}</span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
