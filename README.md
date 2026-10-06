@@ -65,30 +65,44 @@ Page analysis (`/api/analyze`) uses the same SSRF-safe fetch as Site Audit.
 
 ## Visit Test (runs on your computer only)
 
-The third tool, at `/visit-test`. It checks that a **company site works for a visitor in Vietnam**.
+The third tool, at `/visit-test`. It checks that **every page of a company site works for a visitor in Vietnam**. It works on any site (WordPress or plain PHP).
 
 **What it does:**
 1. Gets a proxy from your proxy provider's API, e.g. ShopLike, which returns `{ status: "success", data: { proxy: "ip:port" } }`.
-2. Opens the site in a real browser (the **Microsoft Edge or Google Chrome installed on the computer**) through that proxy.
-3. Confirms the real exit IP, country and network.
-4. Scrolls the page and checks images load.
-5. **Clicks up to 3, 5 or 10 internal links** like a visitor, and checks each page loads without errors.
+2. Opens a real browser (the **Microsoft Edge or Google Chrome installed on the computer**) through that proxy.
+3. **Proves the visit really uses the proxy, from Vietnam, before opening any page:**
+   - It looks up the visit's IP and country inside the proxied browser (ipinfo.io, with api.country.is as a backup).
+   - It looks up this computer's own IP without the proxy.
+   - The test stops, with no pages opened, if the two IPs are the same (the proxy isn't being used), if the country isn't Vietnam, or if the location can't be confirmed.
+   - This matters because the office connection is in Vietnam too: a country check alone would pass even without the proxy.
+4. Opens the start page, scrolls it and checks its images.
+5. **Finds every internal page:**
+   - the sitemap (Yoast, Rank Math, WordPress core `wp-sitemap.xml`, or the one listed in robots.txt), read through the proxy too;
+   - links on the start page;
+   - links found on every page it visits, so pages missing from the sitemap, and sites with no sitemap, are still covered.
+6. **Opens every page once, 3 at a time.** It scrolls each page to the bottom and records its status, load time, JavaScript errors, failed files and broken images. A progress bar shows "Page N of M".
+7. Checks that each visible link on the start page can be clicked by a visitor (not hidden or covered).
+8. Checks the proxy IP again at the end, to catch a proxy that changed IP or country during the test.
 
-The report includes screenshots, load times, JavaScript errors, failed files, broken images, and a plain-language list of problems.
+The report has a pass/fail checklist, a list of problems, cards with screenshots for the start page and problem pages, and a searchable table of every page.
 
 **Run it:**
 1. Run `npm run dev`, then open http://localhost:3000/visit-test.
 2. Paste the proxy API link, or save it once in `.env.local` as `PROXY_API_URL`. The link and its token stay on the computer.
 
+**How long it takes:** about 2–4 seconds per page with 3 pages at a time, e.g. 5–10 minutes for a 200-page site. Use Stop at any time; the report covers what was done so far.
+
 **Limits:** it's a QA check, not a traffic tool.
-- One visit per click, with no repeats or schedules.
-- At most 10 internal pages per visit.
-- Internal links only: never external links or ads.
+- Each page is opened once per test, with no repeats or schedules.
+- At most 500 pages per test (the proxy is only valid for about 30 minutes).
+- Internal pages only: never external links or ads.
 - No search-engine step.
-- Links that change state or need a login (logout, cart, checkout, wp-admin) are never clicked.
+- Links that change state or need a login (logout, cart, checkout, wp-admin, my-account) are never opened.
+- If 5 pages in a row can't connect through the proxy (e.g. it expired), the test stops and says so.
 
 **How it treats the proxy:**
 - The browser's own background services (Edge/Chrome updates, telemetry, SmartScreen, Bing) are kept off the proxy and blocked, so the proxy carries only the site.
+- When a proxy is set, the browser never falls back to a direct connection: if the proxy fails, the page fails.
 - If the provider says to wait for a new IP (`"Con lai 177 giay de get proxy moi"`), the previous proxy is reused while it's still valid (`proxyTimeout`). Otherwise the page shows a countdown.
 
 **On Vercel:** the tool is disabled, because there's no browser there and the provider would likely reject Vercel's IPs.
@@ -99,7 +113,7 @@ To stay within Vercel's function time limits, the crawl runs in the **browser**,
 
 | Part | Job |
 |---|---|
-| `POST /api/sitemap` | Finds the sitemap (`/sitemap-index.xml`, `/sitemap_index.xml`, `/sitemap.xml`, then `robots.txt`) and returns every page URL |
+| `POST /api/sitemap` | Finds the sitemap (`/sitemap-index.xml`, `/sitemap_index.xml`, `/sitemap.xml`, `/wp-sitemap.xml`, then `robots.txt`; shared code in `src/lib/sitemap.ts`) and returns every page URL |
 | `POST /api/fetch` | Fetches **one** URL and returns its status, final URL, title, noindex flag and internal links |
 | `src/lib/crawler.ts` | Runs in the browser: crawls breadth-first from the homepage, 10 requests at a time, up to 500 HTML pages |
 

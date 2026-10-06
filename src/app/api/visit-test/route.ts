@@ -1,13 +1,14 @@
-// POST /api/visit-test  body: { url, proxyApiUrl?, maxPages }
-// Local only: runs one real-browser visit through a proxy (src/lib/visit-runner.ts) and
+// POST /api/visit-test  body: { url, proxyApiUrl? }
+// Local only: visits every page of the site in a real browser through a proxy (src/lib/visit-runner.ts) and
 // streams progress as newline-delimited JSON (VisitEvent per line). One test at a time.
 
 import { ProxyWaitError } from "@/lib/proxy-api";
 import { isBlockedHost, parseSiteUrl } from "@/lib/url";
 import { runVisitTest } from "@/lib/visit-runner";
-import { PAGE_LIMITS, type VisitEvent } from "@/lib/visit-types";
+import type { VisitEvent } from "@/lib/visit-types";
 
 export const runtime = "nodejs";
+// A full-site run can take a while; this route only runs locally, where there is no limit.
 export const maxDuration = 300;
 
 let running = false;
@@ -18,7 +19,7 @@ export async function POST(request: Request) {
   }
   if (running) return Response.json({ error: "A visit test is already running. Wait for it to finish." }, { status: 409 });
 
-  let body: { url?: unknown; proxyApiUrl?: unknown; maxPages?: unknown };
+  let body: { url?: unknown; proxyApiUrl?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -34,11 +35,6 @@ export async function POST(request: Request) {
     return Response.json({ error: "Paste the proxy API link, or save it as PROXY_API_URL in .env.local." }, { status: 400 });
   }
 
-  const maxPages = Number(body.maxPages);
-  if (!PAGE_LIMITS.includes(maxPages as (typeof PAGE_LIMITS)[number])) {
-    return Response.json({ error: `Pages to visit must be one of ${PAGE_LIMITS.join(", ")}.` }, { status: 400 });
-  }
-
   running = true;
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
@@ -51,7 +47,7 @@ export async function POST(request: Request) {
         }
       };
       try {
-        const report = await runVisitTest({ url: site.toString(), proxyApiUrl, maxPages, signal: request.signal, send });
+        const report = await runVisitTest({ url: site.toString(), proxyApiUrl, signal: request.signal, send });
         send({ type: "done", report });
       } catch (err) {
         if (err instanceof ProxyWaitError) send({ type: "wait", seconds: err.waitSec });

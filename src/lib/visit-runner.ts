@@ -1,36 +1,55 @@
-// Server-only, local only: one real-browser visit to a company site through a proxy.
-// Opens the page, scrolls to the bottom, then clicks up to N internal links (never
-// external links or ads) and checks each page loads cleanly. One visit per run: this is a
-// QA check that the site works for a visitor in that location, not a traffic tool.
+// Server-only, local only: a real-browser visit to every page of a company site through a
+// proxy. Opens the start page, finds all internal pages (sitemap + start-page links, never
+// external links or ads), then opens each page once, scrolls it and checks it loads cleanly.
+// This is a QA check that the site works for a visitor in that location, not a traffic tool.
 
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { getProxyOrReuse } from "./proxy-api";
-import { isInternal, normalizeUrl, shouldSkipCrawl } from "./url";
-import type { ExitInfo, ScrollResult, VisitEvent, VisitPage, VisitReport } from "./visit-types";
+import { readSitemap, type SitemapFetcher } from "./sitemap";
+import { isBlockedHost, isInternal, normalizeUrl, shouldSkipCrawl } from "./url";
+import { EXPECTED_COUNTRY, MAX_PAGES, type Discovery, type ExitInfo, type ScrollResult, type VisitEvent, type VisitPage, type VisitReport } from "./visit-types";
 
 const NAV_TIMEOUT = 45_000;
-/** Links that change state or need a login: never clicked. */
+/** Pages open at the same time. Kept low so a small site and the proxy aren't overloaded. */
+const CONCURRENCY = 3;
+/** This many proxy failures in a row means the proxy has expired or died: stop the run. */
+const PROXY_FAILURES_TO_STOP = 5;
+const SLOW_MS = 8000;
+/** Links that change state or need a login: never opened. */
 const RISKY_LINK = /(log-?out|sign-?out|wp-admin|wp-login|\/login|\/cart|\/checkout|add-to-cart|\/my-account|[?&]action=|\/feed\b|\/wp-json)/i;
+
+const START_SCROLL = { stepWaitMs: 350, maxSteps: 40, settleMs: 800 };
+const PAGE_SCROLL = { stepWaitMs: 200, maxSteps: 30, settleMs: 500 };
 
 export interface VisitOptions {
   url: string;
   proxyApiUrl: string;
-  maxPages: number;
   signal: AbortSignal;
   send: (e: VisitEvent) => void;
 }
 
-export async function runVisitTest({ url, proxyApiUrl, maxPages, signal, send }: VisitOptions): Promise<VisitReport> {
+interface Target {
+  href: string;
+  foundIn: "start page" | "sitemap" | "another page";
+  linkText?: string;
+  clickable?: boolean;
+  note?: string;
+}
+
+export async function runVisitTest({ url, proxyApiUrl, signal, send }: VisitOptions): Promise<VisitReport> {
   const report: VisitReport = {
     url,
     startedAt: new Date().toISOString(),
     finishedAt: "",
     proxy: null,
     exit: null,
+    localIp: null,
+    exitEnd: null,
     start: null,
     scroll: null,
     pages: [],
-    linksFound: 0,
+    discovery: null,
+    stopReason: null,
     issues: [],
     cancelled: false,
   };
@@ -38,6 +57,9 @@ export async function runVisitTest({ url, proxyApiUrl, maxPages, signal, send }:
     if (signal.aborted) report.cancelled = true;
     return signal.aborted;
   };
+
+  // This computer's own IP (no proxy), to prove the test really goes through the proxy.
+  const localIp = publicIpDirect();
 
   // 1. Proxy
   send({ type: "step", message: "Getting a proxy from the proxy API…" });
@@ -49,9 +71,11 @@ export async function runVisitTest({ url, proxyApiUrl, maxPages, signal, send }:
   }
 
   let browser: Browser | null = null;
+  const onAbort = () => browser?.close().catch(() => {});
   try {
     send({ type: "step", message: `Opening a browser through proxy ${proxy.address}…` });
     browser = await launchBrowser({ server, username, password });
+    signal.addEventListener("abort", onAbort, { once: true });
     const context = await browser.newContext({
       viewport: { width: 1366, height: 768 },
       locale: "vi-VN",
@@ -59,49 +83,109 @@ export async function runVisitTest({ url, proxyApiUrl, maxPages, signal, send }:
       ignoreHTTPSErrors: false,
     });
     context.setDefaultNavigationTimeout(NAV_TIMEOUT);
-    const onAbort = () => browser?.close().catch(() => {});
-    signal.addEventListener("abort", onAbort, { once: true });
 
-    // 2. Where does the visit really come from?
-    send({ type: "step", message: "Checking where the visit comes from (IP and country)…" });
+    // 2. Where does the visit really come from? Checked inside the proxied browser and compared
+    // with this computer's own IP. Wrong or unknown location: stop before opening any page.
+    send({ type: "step", message: "Checking the visit really comes from the proxy (IP and country)…" });
     report.exit = await exitLocation(context);
-    send({ type: "proxy", proxy: publicProxy, exit: report.exit });
+    report.localIp = await localIp;
+    send({ type: "proxy", proxy: publicProxy, exit: report.exit, localIp: report.localIp });
     if (stopped()) return finish(report);
+    report.stopReason = exitProblem(report.exit, report.localIp);
+    if (report.stopReason) return finish(report);
+    const exit = report.exit!;
+    send({
+      type: "step",
+      message: `Confirmed: visiting from ${exit.country}${exit.city ? `, ${exit.city}` : ""} (IP ${exit.ip}${report.localIp ? `, not this computer's ${report.localIp}` : ""}).`,
+    });
+    // The sitemap is read through the proxy too, so every request to the site comes from there.
+    const sitemap = readSitemap(new URL(url).origin, proxiedFetcher(context)).catch(() => null);
 
-    // 3. Start page
+    // 3. Start page: open, scroll, screenshot
     send({ type: "step", message: `Opening ${url}…` });
     const page = await context.newPage();
-    const start = await visit(page, url, "start", () => page.goto(url, { waitUntil: "load" }));
+    const start = await checkPage(page, url, "start", () => page.goto(url, { waitUntil: "load" }), START_SCROLL, true);
     report.start = start;
+    report.scroll = start.scroll ?? null;
     send({ type: "page", page: start });
+    if (report.scroll) send({ type: "scroll", scroll: report.scroll });
     if (!start.ok || stopped()) return finish(report);
 
-    // 4. Scroll
-    send({ type: "step", message: "Scrolling down the page…" });
-    report.scroll = await scrollPage(page);
-    send({ type: "scroll", scroll: report.scroll });
+    // 4. Find every internal page
+    send({ type: "step", message: "Finding all internal pages (sitemap and start-page links)…" });
+    const siteHost = new URL(start.finalUrl).hostname;
+    const links = await startPageLinks(page, start.finalUrl, siteHost);
+    await page.close().catch(() => {});
+    const { targets, discovery } = combineTargets(links, (await sitemap)?.urls ?? null, start, siteHost);
+    report.discovery = discovery;
+    send({ type: "discovered", discovery });
     if (stopped()) return finish(report);
 
-    // 5. Internal links
-    const siteHost = new URL(start.finalUrl).hostname;
-    const targets = await pickInternalLinks(page, start.finalUrl, siteHost, maxPages);
-    report.linksFound = targets.found;
-    send({ type: "step", message: `Found ${targets.found} internal links. Visiting ${targets.picked.length}…` });
-
-    for (const [i, link] of targets.picked.entries()) {
-      if (stopped()) break;
-      send({ type: "step", message: `Page ${i + 1} of ${targets.picked.length}: ${link.href}` });
-      if (normalizeUrl(page.url()) !== normalizeUrl(start.finalUrl)) {
-        await page.goto(start.finalUrl, { waitUntil: "load" }).catch(() => {});
+    // 5. Visit every page, a few at a time. Internal links found on each page are added to the
+    // queue, so pages missing from the sitemap (or sites with no sitemap) are still covered.
+    const seen = new Set(targets.map((t) => normalizeUrl(t.href)!));
+    seen.add(normalizeUrl(start.url)!);
+    seen.add(normalizeUrl(start.finalUrl)!);
+    const addFound = (hrefs: string[]) => {
+      let added = false;
+      for (const href of hrefs) {
+        const key = normalizeUrl(href);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        if (targets.length < MAX_PAGES) {
+          targets.push({ href, foundIn: "another page" });
+          discovery.fromLinks++;
+          discovery.total++;
+        } else discovery.leftOut++;
+        added = true;
       }
-      const result = await clickInternalLink(page, link, start.finalUrl);
-      report.pages.push(result);
-      send({ type: "page", page: result });
+      if (added) send({ type: "discovered", discovery: { ...discovery } });
+    };
+
+    let next = 0;
+    let active = 0;
+    let proxyFailures = 0;
+    const worker = async () => {
+      let tab = await context.newPage();
+      while (!stopped() && !report.stopReason) {
+        if (next >= targets.length) {
+          if (active === 0) break;
+          await new Promise((r) => setTimeout(r, 200)); // another tab may still find new pages
+          continue;
+        }
+        const t = targets[next++];
+        active++;
+        if (tab.isClosed()) tab = await context.newPage();
+        const referer = t.foundIn === "start page" ? start.finalUrl : undefined;
+        const result = await checkPage(tab, t.href, "internal", () => tab.goto(t.href, { waitUntil: "load", referer }), PAGE_SCROLL, false);
+        if (result.ok && isInternal(result.finalUrl, siteHost)) addFound(await pageLinks(tab, siteHost).catch(() => []));
+        active--;
+        if (stopped()) break;
+        result.foundIn = t.foundIn;
+        if (t.linkText) result.linkText = t.linkText;
+        if (t.clickable !== undefined) result.clickable = t.clickable;
+        if (t.note) result.note = t.note;
+
+        proxyFailures = result.error === PROXY_ERROR ? proxyFailures + 1 : 0;
+        if (proxyFailures >= PROXY_FAILURES_TO_STOP && !report.stopReason) {
+          report.stopReason = `The proxy stopped working (${PROXY_FAILURES_TO_STOP} pages in a row couldn't connect), so the test stopped. It may have expired: run the test again for a new proxy.`;
+        }
+        report.pages.push(result);
+        send({ type: "page", page: result });
+      }
+      await tab.close().catch(() => {});
+    };
+    await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+
+    // 6. Same IP and country at the end?
+    if (!stopped() && targets.length) {
+      send({ type: "step", message: "Checking the proxy IP again…" });
+      report.exitEnd = await exitLocation(context);
     }
-    signal.removeEventListener("abort", onAbort);
   } catch (err) {
     if (!stopped()) throw err;
   } finally {
+    signal.removeEventListener("abort", onAbort);
     await browser?.close().catch(() => {});
   }
   return finish(report);
@@ -113,6 +197,7 @@ export async function runVisitTest({ url, proxyApiUrl, maxPages, signal, send }:
  */
 const BROWSER_BACKGROUND_HOSTS = [
   "edge.microsoft.com",
+  "edge-consumer-static.azureedge.net",
   "www.bing.com",
   "*.smartscreen.microsoft.com",
   "*.events.data.microsoft.com",
@@ -140,33 +225,80 @@ async function launchBrowser(proxy: { server: string; username?: string; passwor
   throw new Error("No browser found. Install Microsoft Edge or Google Chrome on this computer.");
 }
 
-async function exitLocation(context: BrowserContext): Promise<ExitInfo | null> {
-  const page = await context.newPage();
-  try {
-    const res = await page.goto("https://ipinfo.io/json", { timeout: 20_000 });
-    const j = (await res?.json()) as Record<string, string> | undefined;
-    if (!j?.ip) return null;
-    const names = new Intl.DisplayNames(["en"], { type: "region" });
-    return {
-      ip: j.ip,
-      countryCode: j.country ?? null,
-      country: j.country ? (names.of(j.country) ?? j.country) : null,
-      city: j.city ?? null,
-      org: j.org ?? null,
-    };
-  } catch {
-    return null;
-  } finally {
-    await page.close().catch(() => {});
-  }
+/** IP lookup services, tried in order. Both return { ip, country (2-letter code) }. */
+const IP_SERVICES = ["https://ipinfo.io/json", "https://api.country.is/"];
+
+function toExitInfo(j: Record<string, string> | undefined): ExitInfo | null {
+  if (!j?.ip) return null;
+  const names = new Intl.DisplayNames(["en"], { type: "region" });
+  return {
+    ip: j.ip,
+    countryCode: j.country ?? null,
+    country: j.country ? (names.of(j.country) ?? j.country) : null,
+    city: j.city ?? null,
+    org: j.org ?? null,
+  };
 }
 
-/** Runs one navigation and records status, timing, errors and a screenshot. */
-async function visit(
+/** Where the visit comes from, looked up inside the proxied browser. */
+async function exitLocation(context: BrowserContext): Promise<ExitInfo | null> {
+  for (const service of IP_SERVICES) {
+    const page = await context.newPage();
+    try {
+      const res = await page.goto(service, { timeout: 20_000 });
+      const info = toExitInfo((await res?.json()) as Record<string, string> | undefined);
+      if (info) return info;
+    } catch {
+      /* try the next service */
+    } finally {
+      await page.close().catch(() => {});
+    }
+  }
+  return null;
+}
+
+/** This computer's own public IP, without the proxy. */
+async function publicIpDirect(): Promise<string | null> {
+  for (const service of IP_SERVICES) {
+    try {
+      const res = await fetch(service, { signal: AbortSignal.timeout(10_000), headers: { accept: "application/json" } });
+      const ip = ((await res.json()) as { ip?: string }).ip;
+      if (ip) return ip;
+    } catch {
+      /* try the next service */
+    }
+  }
+  return null;
+}
+
+/** Why the test must not continue from this IP, or null when it's the right country through the proxy. */
+function exitProblem(exit: ExitInfo | null, localIp: string | null): string | null {
+  if (!exit) return "Couldn't confirm the proxy's IP and country, so no pages were opened (the results might not be from the right country). Run the test again.";
+  if (localIp && exit.ip === localIp) return `The visit used this computer's own IP (${exit.ip}), not the proxy, so no pages were opened.`;
+  if (exit.countryCode !== EXPECTED_COUNTRY) {
+    const where = new Intl.DisplayNames(["en"], { type: "region" }).of(EXPECTED_COUNTRY);
+    return `The proxy's IP (${exit.ip}) is in ${exit.country ?? "an unknown country"}, not ${where}, so no pages were opened. Get a ${where} proxy and run again.`;
+  }
+  return null;
+}
+
+/** Downloads through the browser context, so it uses the same proxy as the visit. */
+function proxiedFetcher(context: BrowserContext): SitemapFetcher {
+  return async (url, accept) => {
+    if (isBlockedHost(new URL(url).hostname)) throw new Error(`Blocked address: ${url}`);
+    const res = await context.request.get(url, { headers: { accept }, timeout: 20_000, maxRedirects: 5 });
+    return { ok: res.ok(), finalUrl: res.url(), text: () => res.text() };
+  };
+}
+
+/** Opens one page, scrolls to the bottom and records status, timing, errors and images. */
+async function checkPage(
   page: Page,
   url: string,
   kind: VisitPage["kind"],
   navigate: () => Promise<{ status(): number } | null>,
+  scrollOpts: typeof PAGE_SCROLL,
+  alwaysScreenshot: boolean,
 ): Promise<VisitPage> {
   const consoleErrors: string[] = [];
   const failedRequests: string[] = [];
@@ -187,7 +319,7 @@ async function visit(
   page.on("response", onResponse);
   page.on("requestfailed", onFailed);
 
-  const result: VisitPage = { kind, url, finalUrl: url, status: null, title: null, loadMs: null, ttfbMs: null, ok: false, consoleErrors, failedRequests };
+  const result: VisitPage = { kind, url, finalUrl: url, status: null, title: null, loadMs: null, ttfbMs: null, ok: false, consoleErrors, failedRequests, scroll: null };
   try {
     const res = await navigate();
     await page.waitForLoadState("load", { timeout: NAV_TIMEOUT }).catch(() => {});
@@ -202,8 +334,13 @@ async function visit(
     result.ttfbMs = t ? Math.round(t.ttfb) : null;
     result.ok = result.status !== null && result.status < 400;
     if (!result.ok) result.error = `The page returned HTTP ${result.status ?? "no response"}.`;
-    await page.waitForTimeout(600); // let late content paint before the screenshot
-    result.screenshot = `data:image/jpeg;base64,${(await page.screenshot({ type: "jpeg", quality: 55 })).toString("base64")}`;
+
+    result.scroll = await scrollPage(page, scrollOpts).catch(() => null);
+    // Screenshots only where someone needs to look: the start page and pages with problems.
+    if (alwaysScreenshot || hasProblem(result)) {
+      await page.waitForTimeout(400); // let the top of the page repaint after scrolling back up
+      result.screenshot = `data:image/jpeg;base64,${(await page.screenshot({ type: "jpeg", quality: 55 })).toString("base64")}`;
+    }
   } catch (err) {
     result.error = friendly(err);
   } finally {
@@ -215,18 +352,22 @@ async function visit(
   return result;
 }
 
-async function scrollPage(page: Page): Promise<ScrollResult> {
+function hasProblem(p: VisitPage): boolean {
+  return !p.ok || p.consoleErrors.length > 0 || p.failedRequests.length > 0 || !!p.scroll?.brokenImages.length || (p.loadMs ?? 0) > SLOW_MS;
+}
+
+async function scrollPage(page: Page, { stepWaitMs, maxSteps, settleMs }: typeof PAGE_SCROLL): Promise<ScrollResult> {
   let steps = 0;
   let reachedBottom = false;
-  for (; steps < 40; steps++) {
+  for (; steps < maxSteps; steps++) {
     reachedBottom = await page.evaluate(() => {
       window.scrollBy(0, Math.round(window.innerHeight * 0.85));
       return window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 4;
     });
-    await page.waitForTimeout(350);
+    await page.waitForTimeout(stepWaitMs);
     if (reachedBottom) break;
   }
-  await page.waitForTimeout(800); // let lazy images finish
+  await page.waitForTimeout(settleMs); // let lazy images finish
   const img = await page.evaluate(() => {
     const all = [...document.images].filter((i) => i.currentSrc || i.src);
     const broken = all.filter((i) => i.complete && i.naturalWidth === 0).map((i) => i.currentSrc || i.src);
@@ -236,69 +377,101 @@ async function scrollPage(page: Page): Promise<ScrollResult> {
   return { steps: steps + 1, pageHeight: img.height, reachedBottom, images: img.total, imagesLoaded: img.loaded, brokenImages: img.broken };
 }
 
-interface LinkTarget {
+interface StartLink {
   href: string;
   text: string;
+  clickable?: boolean;
+  note?: string;
 }
 
-async function pickInternalLinks(page: Page, pageUrl: string, siteHost: string, max: number) {
+/**
+ * Internal links on the start page. Each visible link gets a trial click (Playwright checks it
+ * is visible, stable and not covered, without actually clicking), so the start page doesn't
+ * have to be reloaded before every page.
+ */
+async function startPageLinks(page: Page, pageUrl: string, siteHost: string): Promise<StartLink[]> {
   const raw = await page.$$eval("a[href]", (as) =>
-    as.map((a) => {
+    as.map((a, index) => {
       const el = a as HTMLAnchorElement;
-      const visible = !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
-      return { href: el.href, text: (el.innerText || el.getAttribute("aria-label") || el.title || "").trim().replace(/\s+/g, " ").slice(0, 80), visible, target: el.target };
+      // 1px links are screen-reader helpers ("skip to content"), not something a visitor clicks.
+      const r = el.getBoundingClientRect();
+      const visible = r.width > 1 && r.height > 1;
+      return { index, href: el.href, text: (el.innerText || el.getAttribute("aria-label") || el.title || "").trim().replace(/\s+/g, " ").slice(0, 80), visible };
     }),
   );
   const self = normalizeUrl(pageUrl);
-  const seen = new Set<string>();
-  const candidates: (LinkTarget & { visible: boolean })[] = [];
+  const byKey = new Map<string, { href: string; text: string; visibleIndex: number }>();
   for (const l of raw) {
-    if (!/^https?:/i.test(l.href) || !isInternal(l.href, siteHost) || shouldSkipCrawl(l.href) || RISKY_LINK.test(l.href)) continue;
+    if (!isSafeInternal(l.href, siteHost)) continue;
     const key = normalizeUrl(l.href);
-    if (!key || key === self || seen.has(key)) continue;
-    seen.add(key);
-    candidates.push({ href: l.href, text: l.text, visible: l.visible });
+    if (!key || key === self) continue;
+    const seen = byKey.get(key);
+    if (!seen) byKey.set(key, { href: l.href, text: l.text, visibleIndex: l.visible ? l.index : -1 });
+    else if (seen.visibleIndex < 0 && l.visible) Object.assign(seen, { visibleIndex: l.index, text: l.text || seen.text });
   }
-  // Prefer links a visitor can actually see and click.
-  const ordered = [...candidates.filter((c) => c.visible), ...candidates.filter((c) => !c.visible)];
-  return { found: candidates.length, picked: ordered.slice(0, max).map(({ href, text }) => ({ href, text })) };
+
+  const anchors = page.locator("a[href]");
+  const links: StartLink[] = [];
+  for (const l of byKey.values()) {
+    const link: StartLink = { href: l.href, text: l.text };
+    if (l.visibleIndex < 0) {
+      link.note = "The link is in a hidden menu or not shown on screen.";
+    } else {
+      try {
+        await anchors.nth(l.visibleIndex).click({ trial: true, timeout: 2_000 });
+        link.clickable = true;
+      } catch (err) {
+        link.clickable = false;
+        link.note = /intercept|cover/i.test(String(err)) ? "Something on the page covers this link, so a visitor can't click it." : "A visitor can't click this link (not visible or not stable).";
+      }
+    }
+    links.push(link);
+  }
+  return links;
 }
 
-/** Click the link like a visitor; if it can't be clicked (hidden, covered), open it directly and say so. */
-async function clickInternalLink(page: Page, link: LinkTarget, startUrl: string): Promise<VisitPage> {
-  const index = await page.$$eval(
-    "a[href]",
-    (as, href) => as.findIndex((a) => (a as HTMLAnchorElement).href === href && !!((a as HTMLElement).offsetWidth || (a as HTMLElement).offsetHeight)),
-    link.href,
-  );
+/** Safe internal links on the page a tab is showing. */
+async function pageLinks(page: Page, siteHost: string): Promise<string[]> {
+  const hrefs = await page.$$eval("a[href]", (as) => as.map((a) => (a as HTMLAnchorElement).href));
+  return hrefs.filter((h) => isSafeInternal(h, siteHost));
+}
 
-  let how: VisitPage["how"] = "clicked";
-  let note: string | undefined;
-  const result = await visit(page, link.href, "internal", async () => {
-    if (index >= 0) {
-      const anchor = page.locator("a[href]").nth(index);
-      try {
-        await anchor.evaluate((a) => a.removeAttribute("target")); // stay in this tab
-        await anchor.scrollIntoViewIfNeeded({ timeout: 5_000 });
-        const [response] = await Promise.all([
-          page.waitForNavigation({ waitUntil: "load" }).catch(() => null),
-          anchor.click({ timeout: 8_000 }),
-        ]);
-        if (normalizeUrl(page.url()) !== normalizeUrl(startUrl)) return response;
-        note = "Clicking the link didn't open a new page (it may open a menu or popup), so it was opened directly.";
-      } catch (err) {
-        note = `The link couldn't be clicked (${/intercept|cover/i.test(String(err)) ? "something on the page covers it" : "not clickable"}), so it was opened directly.`;
-      }
-    } else {
-      note = "The link isn't visible on the page, so it was opened directly.";
-    }
-    how = "opened directly";
-    return page.goto(link.href, { waitUntil: "load" });
-  });
-  result.how = how;
-  result.linkText = link.text || undefined;
-  if (note) result.note = note;
-  return result;
+/** Start-page links first (they're what visitors see), then the rest of the sitemap. */
+function combineTargets(links: StartLink[], sitemapUrls: string[] | null, start: VisitPage, siteHost: string) {
+  const skip = new Set([normalizeUrl(start.url), normalizeUrl(start.finalUrl)]);
+  const sitemapKeys = new Set<string>();
+  const sitemapTargets: Target[] = [];
+  for (const u of sitemapUrls ?? []) {
+    if (!isSafeInternal(u, siteHost)) continue;
+    const key = normalizeUrl(u);
+    if (!key || sitemapKeys.has(key)) continue;
+    sitemapKeys.add(key);
+    if (!skip.has(key)) sitemapTargets.push({ href: u, foundIn: "sitemap" });
+  }
+
+  const linkKeys = new Set<string>();
+  const all: Target[] = [];
+  for (const l of links) {
+    const key = normalizeUrl(l.href)!;
+    linkKeys.add(key);
+    all.push({ href: l.href, foundIn: "start page", linkText: l.text || undefined, clickable: l.clickable, note: l.note });
+  }
+  for (const t of sitemapTargets) if (!linkKeys.has(normalizeUrl(t.href)!)) all.push(t);
+
+  const discovery: Discovery = {
+    sitemap: sitemapKeys.size,
+    startPage: links.length,
+    startPageOnly: [...linkKeys].filter((k) => !sitemapKeys.has(k)).length,
+    fromLinks: 0,
+    total: Math.min(all.length, MAX_PAGES),
+    leftOut: Math.max(0, all.length - MAX_PAGES),
+    noSitemap: sitemapUrls === null,
+  };
+  return { targets: all.slice(0, MAX_PAGES), discovery };
+}
+
+function isSafeInternal(href: string, siteHost: string) {
+  return /^https?:/i.test(href) && isInternal(href, siteHost) && !shouldSkipCrawl(href) && !RISKY_LINK.test(href);
 }
 
 function finish(report: VisitReport): VisitReport {
@@ -309,25 +482,34 @@ function finish(report: VisitReport): VisitReport {
 
 function findIssues(r: VisitReport): string[] {
   const issues: string[] = [];
-  if (r.exit && r.exit.countryCode !== "VN") issues.push(`The visit came from ${r.exit.country ?? r.exit.ip}, not Vietnam. Check the proxy.`);
-  if (!r.exit) issues.push("Couldn't confirm the visit's location (IP lookup failed).");
+  if (r.stopReason) issues.push(r.stopReason);
+  if (r.exit && r.exitEnd) {
+    if (r.exitEnd.countryCode !== r.exit.countryCode) {
+      issues.push(`The proxy moved from ${r.exit.country} to ${r.exitEnd.country} during the test, so later pages may show another country's version.`);
+    } else if (r.exitEnd.ip !== r.exit.ip) {
+      issues.push(`The proxy IP changed during the test (${r.exit.ip} to ${r.exitEnd.ip}), still in ${r.exitEnd.country}.`);
+    }
+  }
+  if (r.discovery?.leftOut) issues.push(`The site has more than ${MAX_PAGES} pages; ${r.discovery.leftOut} weren't visited.`);
   const all = [r.start, ...r.pages].filter((p): p is VisitPage => !!p);
   for (const p of all) {
-    const name = p.kind === "start" ? "Start page" : (p.title ?? p.url);
+    const name = p.kind === "start" ? "Start page" : p.url;
     if (!p.ok) issues.push(`${name}: ${p.error ?? "didn't load"}`);
-    if (p.loadMs && p.loadMs > 8000) issues.push(`${name}: slow (${(p.loadMs / 1000).toFixed(1)}s to load)`);
+    if (p.loadMs && p.loadMs > SLOW_MS) issues.push(`${name}: slow (${(p.loadMs / 1000).toFixed(1)}s to load)`);
     if (p.consoleErrors.length) issues.push(`${name}: ${p.consoleErrors.length} JavaScript error(s)`);
     if (p.failedRequests.length) issues.push(`${name}: ${p.failedRequests.length} file(s) failed to load`);
-    if (p.how === "opened directly" && p.note) issues.push(`${name}: ${p.note}`);
+    if (p.scroll?.brokenImages.length) issues.push(`${name}: ${p.scroll.brokenImages.length} image(s) didn't load`);
+    if (p.clickable === false && p.note) issues.push(`${name}: ${p.note}`);
   }
-  if (r.scroll?.brokenImages.length) issues.push(`Start page: ${r.scroll.brokenImages.length} image(s) didn't load`);
   if (r.scroll && !r.scroll.reachedBottom) issues.push("Start page: couldn't scroll to the bottom (very long or endless page)");
   return issues;
 }
 
+const PROXY_ERROR = "The proxy refused or dropped the connection.";
+
 function friendly(err: unknown): string {
   const m = err instanceof Error ? err.message : String(err);
-  if (/ERR_PROXY|ERR_TUNNEL|proxy/i.test(m)) return "The proxy refused or dropped the connection.";
+  if (/ERR_PROXY|ERR_TUNNEL|proxy/i.test(m)) return PROXY_ERROR;
   if (/Timeout|timed out/i.test(m)) return "The page took too long to load.";
   if (/ERR_NAME_NOT_RESOLVED/.test(m)) return "The domain couldn't be found.";
   if (/ERR_CONNECTION/.test(m)) return "Couldn't connect to the site.";

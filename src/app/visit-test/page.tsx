@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import { VisitTest } from "@/components/visit/visit-test";
 
 export const metadata: Metadata = {
@@ -6,5 +7,10 @@ export const metadata: Metadata = {
 };
 
 export default function VisitTestPage() {
-  return <VisitTest />;
+  // Suspense: VisitTest reads ?url= (e.g. from Keyword Rankings) to fill in the site.
+  return (
+    <Suspense>
+      <VisitTest />
+    </Suspense>
+  );
 }

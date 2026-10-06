@@ -1,9 +1,12 @@
-// Shared types for the Visit Test tool (local only): one real-browser visit to a company
-// site through a proxy, with scrolling and a few internal-link clicks, to check the site
-// works for a visitor in that location.
+// Shared types for the Visit Test tool (local only): one real-browser visit to every page
+// of a company site through a proxy, scrolling each page, to check the site works for a
+// visitor in that location.
 
-export const PAGE_LIMITS = [3, 5, 10] as const;
-export type PageLimit = (typeof PAGE_LIMITS)[number];
+/** Safety ceiling on pages per run (the proxy is only valid for about 30 minutes). */
+export const MAX_PAGES = 500;
+
+/** Country the visit must come from. The test stops before visiting pages if it doesn't. */
+export const EXPECTED_COUNTRY = "VN";
 
 /** Proxy returned by the proxy provider's API. */
 export interface ProxyInfo {
@@ -40,14 +43,18 @@ export interface VisitPage {
   /** Time to first byte. */
   ttfbMs: number | null;
   ok: boolean;
-  /** Internal pages: clicked like a visitor, or opened directly because the link couldn't be clicked. */
-  how?: "clicked" | "opened directly";
+  /** Where the page was found: a start-page link, the sitemap, or a link on another visited page. */
+  foundIn?: "start page" | "sitemap" | "another page";
+  /** Start-page links only: whether a visitor can click the link (visible, not covered). */
+  clickable?: boolean;
   linkText?: string;
   note?: string;
+  /** Scrolled to the bottom and checked images (null when the page didn't load). */
+  scroll?: ScrollResult | null;
   consoleErrors: string[];
   /** Same-site files (images, scripts, CSS…) that failed or returned 4xx/5xx. */
   failedRequests: string[];
-  /** JPEG data URL of the visible screen. */
+  /** JPEG data URL of the visible screen: start page and pages with problems only. */
   screenshot?: string;
   error?: string;
 }
@@ -67,23 +74,49 @@ export interface VisitReport {
   startedAt: string;
   finishedAt: string;
   proxy: ProxyInfo | null;
+  /** Where the visit came from, checked inside the proxied browser before any page is opened. */
   exit: ExitInfo | null;
+  /** This computer's own public IP, looked up without the proxy. Must differ from exit.ip. */
+  localIp: string | null;
+  /** Checked again after the last page, to catch the proxy changing IP or country mid-test. */
+  exitEnd: ExitInfo | null;
   start: VisitPage | null;
   scroll: ScrollResult | null;
+  /** Every other internal page, in the order visited. */
   pages: VisitPage[];
-  /** Internal links found on the start page (before picking which to visit). */
-  linksFound: number;
+  discovery: Discovery | null;
+  /** Why the run ended early (other than Stop), e.g. the proxy stopped working. */
+  stopReason: string | null;
   /** Plain-language problems found, empty when everything is fine. */
   issues: string[];
   cancelled: boolean;
 }
 
+/** How many internal pages the test found, and where. */
+export interface Discovery {
+  /** Pages listed in the sitemap (same site, safe to open). */
+  sitemap: number;
+  /** Internal links on the start page. */
+  startPage: number;
+  /** Start-page links that aren't in the sitemap. */
+  startPageOnly: number;
+  /** Found only through links on other visited pages (not in the sitemap or on the start page). */
+  fromLinks: number;
+  /** Pages to visit (all of them, unless over MAX_PAGES). Grows while pages are visited. */
+  total: number;
+  /** Pages left out because the site has more than MAX_PAGES. */
+  leftOut: number;
+  /** True when no sitemap was found (pages are found by following links only). */
+  noSitemap: boolean;
+}
+
 /** Streamed from POST /api/visit-test, one JSON object per line. */
 export type VisitEvent =
   | { type: "step"; message: string }
-  | { type: "proxy"; proxy: ProxyInfo; exit: ExitInfo | null }
+  | { type: "proxy"; proxy: ProxyInfo; exit: ExitInfo | null; localIp: string | null }
   | { type: "page"; page: VisitPage }
   | { type: "scroll"; scroll: ScrollResult }
+  | { type: "discovered"; discovery: Discovery }
   | { type: "done"; report: VisitReport }
   | { type: "error"; message: string }
   /** The proxy provider only allows a new IP after this many seconds. */

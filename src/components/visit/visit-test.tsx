@@ -1,27 +1,40 @@
 "use client";
 
 // Visit Test tool (local only): open a company site in a real browser through a proxy,
-// scroll it and click a few internal pages, then show what a visitor there experiences.
+// find every internal page and open each one, then show what a visitor there experiences.
 
+import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Check, CircleCheck, Copy, Globe, KeyRound, Loader2, Play, Square, Timer, TriangleAlert } from "lucide-react";
-import { PAGE_LIMITS, type PageLimit, type ScrollResult, type VisitEvent, type VisitPage, type VisitReport } from "@/lib/visit-types";
+import { Check, CircleCheck, CircleMinus, CircleX, Copy, Globe, KeyRound, Loader2, Play, Square, Timer, TriangleAlert } from "lucide-react";
+import { buildChecklist, checklistHeadline, checklistTotals, discoverySources, pageProblems, type CheckStatus } from "@/lib/visit-checklist";
+import { MAX_PAGES, type Discovery, type ScrollResult, type VisitEvent, type VisitPage, type VisitReport } from "@/lib/visit-types";
 import { Notice, Panel, StatTile, StatusCode, Tag, UrlLink, buttonClass } from "@/components/ui/primitives";
+import { VisitPagesTable } from "./visit-pages-table";
+
+/** Problem pages shown as cards with a screenshot; the rest are in the table. */
+const PROBLEM_CARDS = 12;
+/** Problems listed in the notice before "and N more". */
+const ISSUES_SHOWN = 15;
 
 export function VisitTest() {
-  const [url, setUrl] = useState("");
+  // ?url= fills in the site, e.g. when opened from a Keyword Rankings result. The test isn't started automatically.
+  const searchParams = useSearchParams();
+  const [url, setUrl] = useState(() => searchParams.get("url") ?? "");
   const [proxyApi, setProxyApi] = useState("");
-  const [maxPages, setMaxPages] = useState<PageLimit>(5);
   const [env, setEnv] = useState<{ local: boolean; savedProxyApi: boolean } | null>(null);
   const [running, setRunning] = useState(false);
   const [steps, setSteps] = useState<string[]>([]);
   const [pages, setPages] = useState<VisitPage[]>([]);
   const [scroll, setScroll] = useState<ScrollResult | null>(null);
+  const [discovery, setDiscovery] = useState<Discovery | null>(null);
+  // Start time and time of the latest page, for the "time left" estimate.
+  const [timing, setTiming] = useState({ start: 0, last: 0 });
   const [report, setReport] = useState<VisitReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [waitUntil, setWaitUntil] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const abortRef = useRef<AbortController | null>(null);
+  const discoveredRef = useRef(false);
 
   useEffect(() => {
     fetch("/api/visit-test")
@@ -48,7 +61,10 @@ export function VisitTest() {
     setSteps([]);
     setPages([]);
     setScroll(null);
+    setDiscovery(null);
+    discoveredRef.current = false;
     setReport(null);
+    setTiming({ start: Date.now(), last: 0 });
     setRunning(true);
     const controller = new AbortController();
     abortRef.current = controller;
@@ -57,7 +73,7 @@ export function VisitTest() {
       const res = await fetch("/api/visit-test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, proxyApiUrl: proxyApi, maxPages }),
+        body: JSON.stringify({ url, proxyApiUrl: proxyApi }),
         signal: controller.signal,
       });
       if (!res.ok || !res.body) {
@@ -91,9 +107,16 @@ export function VisitTest() {
         break;
       case "page":
         setPages((p) => [...p, e.page]);
+        setTiming((t) => ({ ...t, last: Date.now() }));
         break;
       case "scroll":
         setScroll(e.scroll);
+        break;
+      case "discovered":
+        // The first count goes in the step log; later ones (pages found while visiting) only update the progress bar.
+        if (!discoveredRef.current) setSteps((s) => [...s, discoveryMessage(e.discovery)]);
+        discoveredRef.current = true;
+        setDiscovery(e.discovery);
         break;
       case "done":
         setReport(e.report);
@@ -119,14 +142,14 @@ export function VisitTest() {
             Visit <span className="text-gradient">Test</span>
           </h1>
           <p className="mt-1 max-w-2xl text-sm text-muted">
-            Open one of our sites in a real browser through a Vietnam proxy, scroll it and click a few internal pages,
-            to check it works for visitors there.
+            Open one of our sites in a real browser through a Vietnam proxy. It finds every internal page (sitemap and
+            start-page links), opens and scrolls each one, and checks it works for visitors there.
           </p>
         </div>
         <div className="flex flex-wrap gap-1.5">
           <Tag>runs on this computer</Tag>
-          <Tag>1 visit per test</Tag>
-          <Tag>internal links only</Tag>
+          <Tag>every page once</Tag>
+          <Tag>internal pages only</Tag>
         </div>
       </header>
 
@@ -137,7 +160,7 @@ export function VisitTest() {
         </Notice>
       )}
 
-      <form onSubmit={handleRun} className="glass grid gap-2 rounded-xl p-2 lg:grid-cols-[1.2fr_1fr_auto_auto]">
+      <form onSubmit={handleRun} className="glass grid gap-2 rounded-xl p-2 lg:grid-cols-[1.2fr_1fr_auto]">
         <label className="relative block">
           <span className="sr-only">Website URL</span>
           <Globe className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-subtle" />
@@ -167,24 +190,6 @@ export function VisitTest() {
             className="h-10 w-full rounded-lg border border-transparent bg-canvas/60 pr-3 pl-10 font-mono text-base text-ink outline-none placeholder:text-subtle focus:border-accent/60 focus:ring-2 focus:ring-accent/20 disabled:opacity-60 sm:text-sm"
           />
         </label>
-        <div className="flex h-10 rounded-lg bg-canvas/60 p-1" role="radiogroup" aria-label="Internal pages to visit">
-          {PAGE_LIMITS.map((n) => (
-            <button
-              key={n}
-              type="button"
-              role="radio"
-              aria-checked={maxPages === n}
-              onClick={() => setMaxPages(n)}
-              disabled={running}
-              title={`Click up to ${n} internal links`}
-              className={`flex-1 rounded-md px-3 text-xs font-medium whitespace-nowrap transition ${
-                maxPages === n ? "bg-surface-2 text-ink ring-1 ring-line-strong" : "text-muted hover:text-ink"
-              }`}
-            >
-              {n} pages
-            </button>
-          ))}
-        </div>
         {running ? (
           <button type="button" onClick={() => abortRef.current?.abort()} className={buttonClass.danger}>
             <Square className="size-3.5 fill-current" />
@@ -210,7 +215,7 @@ export function VisitTest() {
         <Panel title={running ? "Running" : "Steps"} bodyClassName="p-4">
           <ol className="space-y-1.5 font-mono text-xs">
             {steps.map((s, i) => {
-              const last = i === steps.length - 1 && running;
+              const last = i === steps.length - 1 && running && !discovery;
               return (
                 <li key={i} className={`flex gap-2 ${last ? "text-ink" : "text-muted"}`}>
                   {last ? <Loader2 className="mt-0.5 size-3.5 shrink-0 animate-spin text-accent-2" /> : <Check className="mt-0.5 size-3.5 shrink-0 text-status-good" />}
@@ -219,6 +224,9 @@ export function VisitTest() {
               );
             })}
           </ol>
+          {discovery && discovery.total > 0 && (
+            <Progress done={pages.filter((p) => p.kind === "internal").length} total={discovery.total} running={running} elapsedMs={timing.last - timing.start} />
+          )}
         </Panel>
       )}
 
@@ -227,21 +235,56 @@ export function VisitTest() {
   );
 }
 
+function Progress({ done, total, running, elapsedMs }: { done: number; total: number; running: boolean; elapsedMs: number }) {
+  const pct = Math.round((done / total) * 100);
+  const elapsed = elapsedMs / 1000;
+  const left = done > 2 && running ? Math.round((elapsed / done) * (total - done)) : null;
+  return (
+    <div className="mt-4 space-y-1.5">
+      <div className="flex items-baseline justify-between gap-3 font-mono text-xs">
+        <span className="text-ink">
+          Page {done.toLocaleString()} of {total.toLocaleString()}
+        </span>
+        <span className="text-muted">
+          {pct}%{left !== null && left > 0 ? ` · about ${formatWait(left)} left` : ""}
+        </span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-surface-2" role="progressbar" aria-valuemin={0} aria-valuemax={total} aria-valuenow={done} aria-label="Pages visited">
+        <div className="h-full rounded-full bg-series-1 transition-[width] duration-300" style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function discoveryMessage(d: Discovery) {
+  const found = d.total + d.leftOut;
+  if (!found) return "No other internal pages found on the start page or in a sitemap.";
+  return `Found ${found} internal page${found === 1 ? "" : "s"} (${discoverySources(d)}). ${
+    d.leftOut ? `Visiting the first ${MAX_PAGES}` : "Visiting all of them"
+  }, 3 at a time. Links on each page are followed too, so the total can grow…`;
+}
+
 function Results({ report, pages, scroll }: { report: VisitReport | null; pages: VisitPage[]; scroll: ScrollResult | null }) {
   const start = pages.find((p) => p.kind === "start") ?? null;
   const internal = pages.filter((p) => p.kind === "internal");
   const okPages = pages.filter((p) => p.ok).length;
-  const jsErrors = pages.reduce((n, p) => n + p.consoleErrors.length, 0);
+  const jsPages = pages.filter((p) => p.consoleErrors.length).length;
+  const scrolled = pages.filter((p) => p.scroll);
+  const images = scrolled.reduce((n, p) => n + p.scroll!.images, 0);
+  const brokenImages = scrolled.reduce((n, p) => n + p.scroll!.brokenImages.length, 0);
+  const problemPages = internal.filter((p) => pageProblems(p).length > 0);
   const exit = report?.exit;
 
   return (
     <div className="space-y-5">
+      {report && <Checklist report={report} />}
+
       {report && (
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           {report.issues.length === 0 ? (
             <Notice tone="info" className="flex-1">
               <span className="inline-flex items-center gap-2 font-medium text-ink">
-                <CircleCheck className="size-4 text-status-good" /> No problems found. The site worked for a visitor
+                <CircleCheck className="size-4 text-status-good" /> No problems found. All {pages.length} pages worked for a visitor
                 {exit?.country ? ` in ${exit.country}` : ""}.
               </span>
             </Notice>
@@ -251,11 +294,14 @@ function Results({ report, pages, scroll }: { report: VisitReport | null; pages:
                 {report.issues.length} problem{report.issues.length === 1 ? "" : "s"} found
                 {report.cancelled ? " (test stopped early)" : ""}
               </div>
-              <ul className="mt-1 list-disc space-y-0.5 pl-5">
-                {report.issues.map((i) => (
-                  <li key={i}>{i}</li>
+              <ul className="mt-1 list-disc space-y-0.5 pl-5 break-words">
+                {report.issues.slice(0, ISSUES_SHOWN).map((i, n) => (
+                  <li key={n}>{i}</li>
                 ))}
               </ul>
+              {report.issues.length > ISSUES_SHOWN && (
+                <div className="mt-1 text-xs">…and {report.issues.length - ISSUES_SHOWN} more. Use the Problems filter in the table below, or Copy summary.</div>
+              )}
             </Notice>
           )}
           <CopySummary report={report} />
@@ -277,31 +323,84 @@ function Results({ report, pages, scroll }: { report: VisitReport | null; pages:
           severity={pages.length ? (okPages === pages.length ? "good" : "serious") : undefined}
         />
         <StatTile label="Start page load" value={start?.loadMs != null ? formatMs(start.loadMs) : "—"} detail={start?.ttfbMs != null ? `first byte ${formatMs(start.ttfbMs)}` : ""} />
-        <StatTile label="JS errors" value={jsErrors} detail="all pages" severity={jsErrors ? "warning" : pages.length ? "good" : undefined} />
+        <StatTile label="JS errors" value={jsPages} detail={`pages with errors, of ${pages.length}`} severity={jsPages ? "warning" : pages.length ? "good" : undefined} />
         <StatTile
           label="Images"
-          value={scroll ? `${scroll.imagesLoaded}/${scroll.images}` : "—"}
-          detail={scroll ? (scroll.brokenImages.length ? `${scroll.brokenImages.length} broken` : "loaded after scrolling") : "start page"}
-          severity={scroll ? (scroll.brokenImages.length ? "warning" : "good") : undefined}
+          value={scrolled.length ? `${images - brokenImages}/${images}` : "—"}
+          detail={scrolled.length ? (brokenImages ? `${brokenImages} broken` : "all pages, after scrolling") : "all pages"}
+          severity={scrolled.length ? (brokenImages ? "warning" : "good") : undefined}
         />
       </div>
 
       {start && <PageCard page={start} heading="Start page" scroll={scroll} />}
 
-      {internal.length > 0 && (
+      {problemPages.length > 0 && (
         <div>
           <h2 className="mb-3 font-mono text-[11px] tracking-[0.18em] text-muted uppercase">
-            Internal pages visited · {internal.length}
-            {report ? ` of ${report.linksFound} found` : ""}
+            Pages with problems · {problemPages.length}
+            {problemPages.length > PROBLEM_CARDS ? ` (first ${PROBLEM_CARDS} shown, all are in the table)` : ""}
           </h2>
           <div className="grid gap-4 md:grid-cols-2">
-            {internal.map((p, i) => (
-              <PageCard key={`${p.url}-${i}`} page={p} heading={`Page ${i + 1}`} />
+            {problemPages.slice(0, PROBLEM_CARDS).map((p, i) => (
+              <PageCard key={`${p.url}-${i}`} page={p} heading={p.title ?? "Page"} scroll={p.scroll} />
             ))}
           </div>
         </div>
       )}
+
+      {internal.length > 0 && (
+        <Panel title={`All pages visited · ${pages.length}${report?.discovery ? ` of ${report.discovery.total + 1}` : ""}`} bodyClassName="">
+          <VisitPagesTable pages={pages} />
+        </Panel>
+      )}
     </div>
+  );
+}
+
+const STATUS_TEXT: Record<CheckStatus, string> = { pass: "PASS", warn: "WARN", fail: "FAIL", skip: "NOT RUN" };
+
+const STATUS_STYLE: Record<CheckStatus, { icon: typeof CircleCheck; color: string }> = {
+  pass: { icon: CircleCheck, color: "text-status-good" },
+  warn: { icon: TriangleAlert, color: "text-status-warning" },
+  fail: { icon: CircleX, color: "text-status-critical" },
+  skip: { icon: CircleMinus, color: "text-subtle" },
+};
+
+/** Every step the test performed, marked pass / warning / fail. */
+function Checklist({ report }: { report: VisitReport }) {
+  const items = buildChecklist(report);
+  const t = checklistTotals(items);
+  const overall: CheckStatus = t.fail ? "fail" : t.warn ? "warn" : "pass";
+  const O = STATUS_STYLE[overall];
+  return (
+    <Panel
+      title="Test results"
+      actions={
+        <span className={`inline-flex items-center gap-1.5 text-sm font-medium ${O.color}`}>
+          <O.icon className="size-4" aria-hidden />
+          {checklistHeadline(items)}
+        </span>
+      }
+    >
+      <ol className="divide-y divide-line">
+        {items.map((c, i) => {
+          const S = STATUS_STYLE[c.status];
+          return (
+            <li key={c.id} className="grid grid-cols-[1.5rem_1fr_auto] items-start gap-3 px-4 py-2.5 sm:grid-cols-[1.5rem_14rem_1fr_auto]">
+              <span className="pt-0.5 font-mono text-xs text-subtle tabular-nums">{i + 1}</span>
+              <span className="text-sm text-ink">{c.label}</span>
+              <span className="col-span-2 col-start-2 text-xs break-words text-muted sm:col-span-1 sm:col-start-3 sm:row-start-1 sm:text-sm">
+                {c.detail}
+              </span>
+              <span className={`col-start-3 row-start-1 inline-flex items-center gap-1.5 justify-self-end font-mono text-xs font-semibold ${S.color} sm:col-start-4`}>
+                <S.icon className="size-4" aria-hidden />
+                {STATUS_TEXT[c.status]}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </Panel>
   );
 }
 
@@ -338,11 +437,13 @@ function PageCard({ page, heading, scroll }: { page: VisitPage; heading: string;
         <div className="font-medium break-words text-ink">{page.title ?? "(no title)"}</div>
         <UrlLink href={page.finalUrl} full />
         {page.linkText && <div className="text-xs text-muted">Link text: &ldquo;{page.linkText}&rdquo;</div>}
-        {page.how && (
+        {page.kind === "internal" && (
           <div className="text-xs">
-            <span className={page.how === "clicked" ? "text-status-good" : "text-status-warning"}>
-              {page.how === "clicked" ? "Clicked like a visitor" : "Opened directly"}
+            <span className="text-muted">
+              {page.foundIn === "another page" ? "Found through a link on another page" : `Found in the ${page.foundIn ?? "sitemap"}`}
             </span>
+            {page.clickable === true && <span className="text-status-good"> · link clickable</span>}
+            {page.clickable === false && <span className="text-status-warning"> · link not clickable</span>}
             {page.note && <span className="text-muted"> · {page.note}</span>}
           </div>
         )}
@@ -389,9 +490,12 @@ function CopySummary({ report }: { report: VisitReport }) {
     const lines = [
       `Visit test: ${report.url}`,
       `From: ${report.exit ? `${report.exit.country ?? "?"} · ${report.exit.ip}${report.exit.org ? ` · ${report.exit.org}` : ""}` : "unknown location"}`,
-      `Result: ${report.issues.length ? `${report.issues.length} problem(s)` : "no problems found"}`,
-      ...report.issues.map((i) => `- ${i}`),
+      `Result: ${checklistHeadline(buildChecklist(report))}`,
       "",
+      ...buildChecklist(report).map((c) => `[${STATUS_TEXT[c.status]}] ${c.label}: ${c.detail}`),
+      "",
+      ...(report.issues.length ? ["Problems:", ...report.issues.map((i) => `- ${i}`), ""] : []),
+      "Pages:",
       ...all.map((p) => `${p.ok ? "OK " : "ERR"} ${p.status ?? "---"}  ${p.loadMs != null ? formatMs(p.loadMs) : "-"}  ${p.finalUrl}`),
     ];
     await navigator.clipboard.writeText(lines.join("\n")).catch(() => {});
