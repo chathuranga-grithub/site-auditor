@@ -3,6 +3,7 @@
 // streams progress as newline-delimited JSON (VisitEvent per line). One test at a time.
 
 import { ProxyWaitError } from "@/lib/proxy-api";
+import { proxyApiStatus, resolveProxyApi } from "@/lib/proxy-settings";
 import { isBlockedHost, parseSiteUrl } from "@/lib/url";
 import type { VisitEvent } from "@/lib/visit-types";
 
@@ -29,9 +30,10 @@ export async function POST(request: Request) {
   if (!site || !site.hostname.includes(".")) return Response.json({ error: "Enter the website URL to test." }, { status: 400 });
   if (isBlockedHost(site.hostname)) return Response.json({ error: "That address isn't allowed." }, { status: 403 });
 
-  const proxyApiUrl = (typeof body.proxyApiUrl === "string" && body.proxyApiUrl.trim()) || process.env.PROXY_API_URL || "";
+  // The link sent with the request, else the one saved on this computer, else PROXY_API_URL.
+  const proxyApiUrl = await resolveProxyApi(body.proxyApiUrl);
   if (!proxyApiUrl) {
-    return Response.json({ error: "Paste the proxy API link, or save it as PROXY_API_URL in .env.local." }, { status: 400 });
+    return Response.json({ error: "Paste and save the proxy API link first." }, { status: 400 });
   }
 
   // Phone check is on unless turned off.
@@ -73,5 +75,5 @@ export async function POST(request: Request) {
 
 /** Lets the page know whether a proxy API link is saved in .env.local (never returns the link). */
 export async function GET() {
-  return Response.json({ local: !process.env.VERCEL, savedProxyApi: !!process.env.PROXY_API_URL });
+  return Response.json({ local: !process.env.VERCEL, savedProxyApi: !process.env.VERCEL && (await proxyApiStatus()).saved });
 }

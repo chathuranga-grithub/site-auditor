@@ -5,7 +5,7 @@
 
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Check, CircleCheck, CircleMinus, CircleX, Copy, Globe, KeyRound, Loader2, Monitor, Smartphone, Play, Square, Timer, TriangleAlert } from "lucide-react";
+import { Check, CircleCheck, CircleMinus, CircleX, Copy, Globe, Loader2, Monitor, Smartphone, Play, Square, Timer, TriangleAlert } from "lucide-react";
 import {
   buildChecklist,
   checklistHeadline,
@@ -18,6 +18,7 @@ import {
 } from "@/lib/visit-checklist";
 import { MAX_PAGES, OVERFLOW_PX, type Discovery, type VisitEvent, type VisitPage, type VisitReport } from "@/lib/visit-types";
 import { Notice, Panel, StatusCode, UrlLink, buttonClass } from "@/components/ui/primitives";
+import { ProxyApiField } from "@/components/ui/proxy-api-field";
 import { ACTIVITY_STYLE, DetailDialog } from "./visit-dialog";
 
 /** Problems listed in the notice before "and N more". */
@@ -27,7 +28,6 @@ export function VisitTest() {
   // ?url= fills in the site, e.g. when opened from a Keyword Rankings result. The test isn't started automatically.
   const searchParams = useSearchParams();
   const [url, setUrl] = useState(() => searchParams.get("url") ?? "");
-  const [proxyApi, setProxyApi] = useState("");
   const [mobile, setMobile] = useState(true);
   const [env, setEnv] = useState<{ local: boolean; savedProxyApi: boolean } | null>(null);
   const [running, setRunning] = useState(false);
@@ -80,7 +80,7 @@ export function VisitTest() {
       const res = await fetch("/api/visit-test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, proxyApiUrl: proxyApi, mobile }),
+        body: JSON.stringify({ url, mobile }),
         signal: controller.signal,
       });
       if (!res.ok || !res.body) {
@@ -177,21 +177,7 @@ export function VisitTest() {
             className="h-10 w-full rounded-lg border border-transparent bg-canvas/60 pr-3 pl-10 font-mono text-base text-ink outline-none placeholder:text-subtle focus:border-accent/60 focus:ring-2 focus:ring-accent/20 disabled:opacity-60 sm:text-sm"
           />
         </label>
-        <label className="relative block">
-          <span className="sr-only">Proxy API link</span>
-          <KeyRound className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-subtle" />
-          <input
-            type="password"
-            autoComplete="off"
-            value={proxyApi}
-            onChange={(e) => setProxyApi(e.target.value)}
-            disabled={running}
-            required={!env?.savedProxyApi}
-            placeholder={env?.savedProxyApi ? "Proxy API: using the saved link" : "Proxy API link"}
-            title="The link that returns {status, data: {proxy: 'ip:port'}}. It stays on this computer."
-            className="h-10 w-full rounded-lg border border-transparent bg-canvas/60 pr-3 pl-10 font-mono text-base text-ink outline-none placeholder:text-subtle focus:border-accent/60 focus:ring-2 focus:ring-accent/20 disabled:opacity-60 sm:text-sm"
-          />
-        </label>
+        <ProxyApiField disabled={running} />
         <div className="flex h-10 rounded-lg bg-canvas/60 p-1" role="radiogroup" aria-label="Devices">
           {([true, false] as const).map((m) => (
             <button

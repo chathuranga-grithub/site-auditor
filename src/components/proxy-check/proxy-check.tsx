@@ -5,15 +5,15 @@
 // (residential or datacenter), whether it connects, and how fast it is. It never visits our sites.
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Check, Copy, KeyRound, Play, Square, Timer } from "lucide-react";
+import { Check, Copy, Play, Square, Timer } from "lucide-react";
 import { CHECK_MINUTES, type CheckMinutes, type ProxyCheckResult } from "@/lib/proxy-check-types";
 import { Notice, Panel, StatTile, buttonClass } from "@/components/ui/primitives";
+import { ProxyApiField } from "@/components/ui/proxy-api-field";
 
 /** Retry after an error (seconds). */
 const ERROR_RETRY = 30;
 
 export function ProxyCheck() {
-  const [proxyApi, setProxyApi] = useState("");
   const [minutes, setMinutes] = useState<CheckMinutes>(30);
   const [env, setEnv] = useState<{ local: boolean; savedProxyApi: boolean } | null>(null);
   const [running, setRunning] = useState(false);
@@ -57,7 +57,7 @@ export function ProxyCheck() {
         const res = await fetch("/api/proxy-check", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ proxyApiUrl: proxyApi }),
+          body: JSON.stringify({}),
           signal: controller.signal,
         });
         setChecking(false);
@@ -100,20 +100,7 @@ export function ProxyCheck() {
       {notLocal && <Notice tone="warning">Proxy Check only works when the app runs on a computer (<code>npm run dev</code>), not on the live site.</Notice>}
 
       <form onSubmit={handleStart} className="glass grid gap-2 rounded-xl p-2 lg:grid-cols-[1fr_auto_auto]">
-        <label className="relative block">
-          <span className="sr-only">Proxy API link</span>
-          <KeyRound className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-subtle" />
-          <input
-            type="password"
-            autoComplete="off"
-            value={proxyApi}
-            onChange={(e) => setProxyApi(e.target.value)}
-            disabled={running}
-            required={!env?.savedProxyApi}
-            placeholder={env?.savedProxyApi ? "Proxy API: using the saved link" : "Proxy API link"}
-            className="h-10 w-full rounded-lg border border-transparent bg-canvas/60 pr-3 pl-10 font-mono text-base text-ink outline-none placeholder:text-subtle focus:border-accent/60 focus:ring-2 focus:ring-accent/20 disabled:opacity-60 sm:text-sm"
-          />
-        </label>
+        <ProxyApiField disabled={running} />
         <div className="flex h-10 rounded-lg bg-canvas/60 p-1" role="radiogroup" aria-label="Test length">
           {CHECK_MINUTES.map((m) => (
             <button

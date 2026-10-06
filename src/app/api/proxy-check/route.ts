@@ -3,6 +3,7 @@
 // it). The page calls this repeatedly over the chosen time period.
 
 import { checkProxyOnce } from "@/lib/proxy-check";
+import { proxyApiStatus, resolveProxyApi } from "@/lib/proxy-settings";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -17,14 +18,15 @@ export async function POST(request: Request) {
   } catch {
     return Response.json({ error: "Request body must be JSON." }, { status: 400 });
   }
-  const proxyApiUrl = (typeof body.proxyApiUrl === "string" && body.proxyApiUrl.trim()) || process.env.PROXY_API_URL || "";
+  // The link sent with the request, else the one saved on this computer, else PROXY_API_URL.
+  const proxyApiUrl = await resolveProxyApi(body.proxyApiUrl);
   if (!proxyApiUrl) {
-    return Response.json({ error: "Paste the proxy API link, or save it as PROXY_API_URL in .env.local." }, { status: 400 });
+    return Response.json({ error: "Paste and save the proxy API link first." }, { status: 400 });
   }
   return Response.json(await checkProxyOnce(proxyApiUrl));
 }
 
 /** Lets the page know whether it runs locally and whether a proxy API link is saved (never returns the link). */
 export async function GET() {
-  return Response.json({ local: !process.env.VERCEL, savedProxyApi: !!process.env.PROXY_API_URL });
+  return Response.json({ local: !process.env.VERCEL, savedProxyApi: !process.env.VERCEL && (await proxyApiStatus()).saved });
 }
