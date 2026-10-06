@@ -4,7 +4,6 @@
 
 import { ProxyWaitError } from "@/lib/proxy-api";
 import { isBlockedHost, parseSiteUrl } from "@/lib/url";
-import { runVisitTest } from "@/lib/visit-runner";
 import type { VisitEvent, VisitPage } from "@/lib/visit-types";
 
 export const runtime = "nodejs";
@@ -50,6 +49,9 @@ export async function POST(request: Request) {
         }
       };
       try {
+        // Loaded only when a test runs: the browser library isn't available on Vercel, and loading it
+        // at the top made this whole route fail there (even the "local only" answer).
+        const { runVisitTest } = await import("@/lib/visit-runner");
         const report = await runVisitTest({ url: site.toString(), proxyApiUrl, mobile, signal: request.signal, send });
         // Screenshots were already streamed with each page; leaving them out avoids sending megabytes twice.
         const strip = (p: VisitPage): VisitPage => ({
