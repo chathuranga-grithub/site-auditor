@@ -1,6 +1,6 @@
 // POST /api/visit-test  body: { url, proxyApiUrl?, mobile? (default true) }
 // Local only: visits every page of the site in a real browser through a proxy (src/lib/visit-runner.ts) and
-// streams progress as newline-delimited JSON (VisitEvent per line). One test at a time.
+// streams progress as newline-delimited JSON (VisitEvent per line). Up to MAX_PARALLEL tests at once.
 
 import { ProxyWaitError } from "@/lib/proxy-api";
 import { proxyApiStatus, resolveProxyApi } from "@/lib/proxy-settings";
@@ -11,13 +11,17 @@ export const runtime = "nodejs";
 // A full-site run can take a while; this route only runs locally, where there is no limit.
 export const maxDuration = 300;
 
-let running = false;
+/** Tests running now. Each runs its own browser; more than this at once slows the computer and skews load times. */
+const MAX_PARALLEL = 3;
+let running = 0;
 
 export async function POST(request: Request) {
   if (process.env.VERCEL) {
     return Response.json({ error: "Visit Test runs only on a local computer (it needs a real browser)." }, { status: 501 });
   }
-  if (running) return Response.json({ error: "A visit test is already running. Wait for it to finish." }, { status: 409 });
+  if (running >= MAX_PARALLEL) {
+    return Response.json({ error: `${MAX_PARALLEL} tests are already running on this computer. Wait for one to finish.` }, { status: 429 });
+  }
 
   let body: { url?: unknown; proxyApiUrl?: unknown; mobile?: unknown };
   try {
@@ -39,7 +43,7 @@ export async function POST(request: Request) {
   // Phone check is on unless turned off.
   const mobile = body.mobile !== false;
 
-  running = true;
+  running++;
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
@@ -60,7 +64,7 @@ export async function POST(request: Request) {
         if (err instanceof ProxyWaitError) send({ type: "wait", seconds: err.waitSec });
         else send({ type: "error", message: err instanceof Error ? err.message : String(err) });
       } finally {
-        running = false;
+        running--;
         try {
           controller.close();
         } catch {
