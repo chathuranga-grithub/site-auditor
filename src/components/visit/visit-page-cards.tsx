@@ -4,6 +4,7 @@
 // details popup and check icons shared with the list view.
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { CircleCheck, CircleMinus, CircleX, TriangleAlert, X } from "lucide-react";
 import { pageActivities, pageProblems, type CheckStatus, type ChecklistItem } from "@/lib/visit-checklist";
 import type { VisitPage } from "@/lib/visit-types";
@@ -130,25 +131,122 @@ export const ACTIVITY_STYLE: Record<CheckStatus, { icon: typeof CircleCheck; col
   skip: { icon: CircleMinus, color: "text-subtle", text: "NOT RUN" },
 };
 
-/** One small icon per check done on the page; hover for what it was and how it went. */
+const SEVERITY: CheckStatus[] = ["fail", "warn", "pass"];
+
+/** Short name of what went wrong, shown on a badge when one check in its group fails or warns. */
+const PROBLEM_NAME: Record<string, string> = {
+  open: "didn't open",
+  loaded: "slow to load",
+  scroll: "very long page",
+  images: "broken images",
+  js: "JS errors",
+  files: "failed files",
+  clickable: "link not clickable",
+  "phone-open": "didn't open",
+  "phone-fit": "too wide",
+  "phone-viewport": "no viewport tag",
+  "phone-images": "broken images",
+  "menu-phone": "doesn't open",
+};
+
+const CHECK_GROUPS = [
+  { name: "Desktop", test: (id: string) => !id.startsWith("phone") && id !== "menu-phone", count: true },
+  { name: "Phone", test: (id: string) => id.startsWith("phone"), count: true },
+  { name: "Menu", test: (id: string) => id === "menu-phone", count: false },
+];
+
+/**
+ * The page's checks as labelled badges: "✓ Desktop 6/6", "✕ Phone 3/4 · fits the screen", "✓ Menu".
+ * Each badge has the worst result of its group; hovering shows every check in it.
+ */
 export function ActivityIcons({ items, className = "" }: { items: ChecklistItem[]; className?: string }) {
-  const passed = items.filter((i) => i.status === "pass").length;
+  const groups = CHECK_GROUPS.map((g) => ({ ...g, items: items.filter((i) => g.test(i.id)) })).filter((g) => g.items.length);
   return (
-    <div className={`flex items-center gap-1.5 ${className}`}>
-      <span className="flex flex-wrap items-center gap-0.5" role="list" aria-label="Checks on this page">
-        {items.map((i) => {
-          const S = ACTIVITY_STYLE[i.status];
-          return (
-            <span key={i.id} role="listitem" title={`${i.label}: ${S.text} · ${i.detail}`} aria-label={`${i.label}: ${S.text}`}>
-              <S.icon className={`size-3.5 ${S.color}`} aria-hidden />
+    <div className={`flex flex-wrap items-center gap-1.5 ${className}`} role="list" aria-label="Checks on this page">
+      {groups.map((g) => {
+        const status = SEVERITY.find((s) => g.items.some((i) => i.status === s)) ?? "skip";
+        const S = ACTIVITY_STYLE[status];
+        const passed = g.items.filter((i) => i.status === "pass").length;
+        const bad = g.items.filter((i) => i.status === "fail" || i.status === "warn");
+        const what = status === "skip" ? "not run" : bad.length === 1 ? (PROBLEM_NAME[bad[0].id] ?? "problem") : bad.length > 1 ? `${bad.length} issues` : "";
+        return (
+          <HoverTip key={g.name} content={<GroupTip name={g.name} status={status} items={g.items} />}>
+            <span
+              role="listitem"
+              aria-label={`${g.name}: ${S.text}${what ? `, ${what}` : ""}. ${g.items.map((i) => `${i.label}: ${ACTIVITY_STYLE[i.status].text}`).join(", ")}`}
+              className={`inline-flex max-w-full min-w-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] ${
+                status === "fail" ? "border-status-critical/40 bg-status-critical/10" : status === "warn" ? "border-status-warning/40 bg-status-warning/10" : "border-line"
+              }`}
+            >
+              <S.icon className={`size-3 shrink-0 ${S.color}`} aria-hidden />
+              <span className="text-ink">{g.name}</span>
+              {g.count && status !== "skip" && (
+                <span className="font-mono text-[10px] text-subtle tabular-nums">
+                  {passed}/{g.items.length}
+                </span>
+              )}
+              {what && <span className={`truncate ${S.color}`}>· {what}</span>}
             </span>
+          </HoverTip>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Tooltip body: every check in one group with its result and detail. */
+function GroupTip({ name, status, items }: { name: string; status: CheckStatus; items: ChecklistItem[] }) {
+  const S = ACTIVITY_STYLE[status];
+  return (
+    <div className="w-72">
+      <div className="mb-1.5 flex items-center justify-between font-mono text-[10px] tracking-[0.14em] text-subtle uppercase">
+        <span>{name} checks</span>
+        <span className={S.color}>{S.text}</span>
+      </div>
+      <ul className="space-y-1">
+        {items.map((i) => {
+          const I = ACTIVITY_STYLE[i.status];
+          return (
+            <li key={i.id} className="grid grid-cols-[0.875rem_1fr] gap-x-1.5 text-xs">
+              <I.icon className={`mt-0.5 size-3.5 ${I.color}`} aria-hidden />
+              <span className="text-ink first-letter:uppercase">{i.label.replace(/^Phone: /, "")}</span>
+              <span className="col-start-2 text-[11px] text-muted">{i.detail}</span>
+            </li>
           );
         })}
-      </span>
-      <span className="ml-auto font-mono text-[10px] text-subtle tabular-nums">
-        {passed}/{items.length}
-      </span>
+      </ul>
     </div>
+  );
+}
+
+/**
+ * A styled tooltip shown while hovering its child. Drawn in a layer above the page (fixed position)
+ * so a card's clipped edges never cut it off; placed above the badge, or below it near the top.
+ */
+function HoverTip({ content, children }: { content: ReactNode; children: ReactNode }) {
+  const [box, setBox] = useState<{ left: number; top: number; below: boolean } | null>(null);
+  const show = (e: { currentTarget: HTMLElement }) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const width = 320; // w-72 content + padding + border
+    const left = Math.min(Math.max(8, r.left + r.width / 2 - width / 2), window.innerWidth - width - 8);
+    const below = r.top < 260;
+    setBox({ left, top: below ? r.bottom + 6 : r.top - 6, below });
+  };
+  return (
+    <span className="inline-flex max-w-full min-w-0" onMouseEnter={show} onMouseLeave={() => setBox(null)}>
+      {children}
+      {box &&
+        createPortal(
+          <div
+            role="tooltip"
+            style={{ left: box.left, top: box.top, transform: box.below ? undefined : "translateY(-100%)" }}
+            className="pointer-events-none fixed z-[60] rounded-lg border border-line-strong bg-canvas p-3 text-left shadow-2xl shadow-black/60"
+          >
+            {content}
+          </div>,
+          document.body,
+        )}
+    </span>
   );
 }
 
