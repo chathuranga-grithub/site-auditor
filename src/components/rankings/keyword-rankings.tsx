@@ -114,7 +114,7 @@ export function KeywordRankings() {
         <div className="flex flex-wrap gap-1.5">
           <Tag>Google results</Tag>
           <Tag>top {RESULT_COUNTS.join(" / ")}</Tag>
-          <Tag>1 search credit</Tag>
+          <Tag>1–2 searches</Tag>
         </div>
       </header>
 
@@ -304,8 +304,32 @@ function Report({
         {phase === "done" && <ReportActions data={data} analysis={analysis} />}
       </div>
 
+      {(data.searchesUsed > 1 || data.results.length < data.requested) && (
+        <Notice tone="info">
+          {data.results.length < data.requested
+            ? `Google only returned ${data.results.length} normal results for this keyword (the rest of the page is videos, maps, shopping or similar).`
+            : "Google's first page had fewer than " + data.requested + " normal results, so page 2 was used to complete the list (2 searches)."}
+        </Notice>
+      )}
+      {phase === "done" && pages.length < data.results.length && (
+        <Notice tone="warning">
+          {data.results.length - pages.length} of {data.results.length} pages couldn&apos;t be analysed (for example, the site blocks
+          automated visitors or didn&apos;t respond). They still count in the ranking; their rows show the reason.
+        </Notice>
+      )}
+
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
-        <StatTile label="Results" value={data.results.length} detail={`${pages.length} analysed`} />
+        <StatTile
+          label="Results"
+          value={data.results.length}
+          detail={
+            phase === "analyzing"
+              ? `${pages.length} analysed so far`
+              : pages.length < data.results.length
+                ? `${pages.length} analysed · ${data.results.length - pages.length} couldn't be read`
+                : `all ${pages.length} analysed`
+          }
+        />
         <StatTile label="Avg. words" value={avgWords === null ? "—" : avgWords.toLocaleString()} detail="per page" />
         <StatTile label="Median speed" value={medSpeed === null ? "—" : formatMs(medSpeed)} detail="server response" />
         <StatTile label="HTTPS" value={pct(pages.filter((p) => p.https).length)} detail="of pages" />

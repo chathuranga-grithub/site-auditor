@@ -23,6 +23,10 @@ export interface SerpResponse {
   location: string;
   provider: "serper" | "serpapi";
   results: SerpResult[];
+  /** 1 normally; 2 when page 1 was short and page 2 was fetched to fill the list. */
+  searchesUsed: number;
+  /** How many results were asked for (5 or 10). */
+  requested: number;
   searchedAt: string;
 }
 
