@@ -63,6 +63,36 @@ The second tool, at `/rankings`. Enter a **keyword** (e.g. `iphone`). It shows t
 
 Page analysis (`/api/analyze`) uses the same SSRF-safe fetch as Site Audit.
 
+## Visit Test (runs on your computer only)
+
+The third tool, at `/visit-test`. It checks that a **company site works for a visitor in Vietnam**.
+
+**What it does:**
+1. Gets a proxy from your proxy provider's API, e.g. ShopLike, which returns `{ status: "success", data: { proxy: "ip:port" } }`.
+2. Opens the site in a real browser (the **Microsoft Edge or Google Chrome installed on the computer**) through that proxy.
+3. Confirms the real exit IP, country and network.
+4. Scrolls the page and checks images load.
+5. **Clicks up to 3, 5 or 10 internal links** like a visitor, and checks each page loads without errors.
+
+The report includes screenshots, load times, JavaScript errors, failed files, broken images, and a plain-language list of problems.
+
+**Run it:**
+1. Run `npm run dev`, then open http://localhost:3000/visit-test.
+2. Paste the proxy API link, or save it once in `.env.local` as `PROXY_API_URL`. The link and its token stay on the computer.
+
+**Limits:** it's a QA check, not a traffic tool.
+- One visit per click, with no repeats or schedules.
+- At most 10 internal pages per visit.
+- Internal links only: never external links or ads.
+- No search-engine step.
+- Links that change state or need a login (logout, cart, checkout, wp-admin) are never clicked.
+
+**How it treats the proxy:**
+- The browser's own background services (Edge/Chrome updates, telemetry, SmartScreen, Bing) are kept off the proxy and blocked, so the proxy carries only the site.
+- If the provider says to wait for a new IP (`"Con lai 177 giay de get proxy moi"`), the previous proxy is reused while it's still valid (`proxyTimeout`). Otherwise the page shows a countdown.
+
+**On Vercel:** the tool is disabled, because there's no browser there and the provider would likely reject Vercel's IPs.
+
 ## How it works
 
 To stay within Vercel's function time limits, the crawl runs in the **browser**, and each server call does only a small amount of work:
