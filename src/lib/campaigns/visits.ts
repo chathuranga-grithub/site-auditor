@@ -1,8 +1,9 @@
 // Server-only, local only: each campaign's visit to its site through the proxy (the visit run,
 // src/lib/visit-runner.ts). It runs on the server, not in a browser tab: it starts when a campaign is
 // created or resumed, runs again once a day (src/lib/campaigns/scheduler.ts), and stops when it's
-// paused, stopped or deleted. Each time it's VISITS_PER_DAY runs, one after another, each with a new proxy IP. Every line of its console is kept in memory only (never saved), so
-// any open campaign page can replay it and then follow it live. Restarting the app clears it.
+// paused, stopped or deleted. Each time it's VISITS_PER_DAY runs, one after another, each with a new
+// proxy IP. Every line of its console is kept in memory only (never saved), so any open campaign page
+// can replay it and then follow it live. Restarting the app clears it.
 
 import { ProxyWaitError } from "../proxy-api";
 import { resolveProxyApi } from "../proxy-settings";
