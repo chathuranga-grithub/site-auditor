@@ -22,7 +22,6 @@ export function NewCampaign() {
   const [form, setForm] = useState({
     siteUrl: "",
     keyword: "",
-    pageUrl: "",
     durationDays: "30",
     gscProperty: "",
     ga4Property: "",
@@ -61,18 +60,15 @@ export function NewCampaign() {
       <PageHeader section="New campaign" title="New campaign" intro="Pick a keyword to follow for one of our sites, and set the goals. Results are measured from real visitors every day." />
       <SetupNotice setup={setup} />
 
-      <form onSubmit={submit} className="grid grid-cols-[minmax(0,1fr)] items-start gap-4 lg:grid-cols-[minmax(0,1fr)_19rem]">
+      <form onSubmit={submit} className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(0,1fr)_19rem]">
         <div className="glass divide-y divide-line rounded-xl">
           <Section icon={<Globe className="size-4" />} title="Target" text="The site and the keyword to follow in Google Vietnam.">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[1fr_1fr_1.3fr]">
+            <div className="grid gap-3 md:grid-cols-2">
               <Field label="Website URL">
                 <input className={input} value={form.siteUrl} onChange={set("siteUrl")} placeholder="https://example.vn" required />
               </Field>
               <Field label="Keyword">
                 <input className={input} value={form.keyword} onChange={set("keyword")} placeholder="thiết kế website" required />
-              </Field>
-              <Field label="Page URL (optional)" hint="The page that should rank; needed for time on page" className="md:col-span-2 xl:col-span-1">
-                <input className={input} value={form.pageUrl} onChange={set("pageUrl")} placeholder="https://example.vn/thiet-ke-website" />
               </Field>
             </div>
           </Section>
@@ -102,7 +98,7 @@ export function NewCampaign() {
               <Field label="Weekly click growth %" hint="Real clicks, week over week">
                 <input className={input} type="number" min={0} max={1000} value={form.weeklyGrowthPct} onChange={set("weeklyGrowthPct")} />
               </Field>
-              <Field label="Time on page (s)" hint="From Google Analytics">
+              <Field label="Time on page (s)" hint="From Google Analytics, on the page that ranks">
                 <input className={input} type="number" min={1} max={3600} value={form.targetEngagementSec} onChange={set("targetEngagementSec")} />
               </Field>
             </div>
@@ -129,7 +125,8 @@ function Summary({ form, today, busy, error }: { form: Record<string, string>; t
     ["Search credits", `~${days}–${days * 2} (1–2 a day)`],
   ];
   return (
-    <aside className="glass rounded-xl p-4 lg:sticky lg:top-6">
+    // Same height as the form beside it: details at the top, Start at the bottom.
+    <aside className="glass flex flex-col rounded-xl p-4 sm:p-5">
       <div className="flex items-center gap-2 text-sm font-semibold text-ink">
         <Target className="size-4 text-accent-2" aria-hidden /> Summary
       </div>
@@ -141,20 +138,22 @@ function Summary({ form, today, busy, error }: { form: Record<string, string>; t
           </div>
         ))}
       </dl>
-      {error && (
-        <Notice tone="error" className="mt-3">
-          {error}
-        </Notice>
-      )}
-      <button
-        type="submit"
-        disabled={busy}
-        className="mt-4 inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-gradient-accent text-sm font-semibold text-white shadow-lg shadow-accent/20 transition hover:-translate-y-px disabled:opacity-70"
-      >
-        {busy ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-3.5 fill-current" />}
-        {busy ? "Starting…" : "Start tracking"}
-      </button>
-      <p className="mt-2 text-center text-[11px] text-subtle">The first check runs right away, then every day at 08:00.</p>
+      <div className="mt-auto pt-4">
+        {error && (
+          <Notice tone="error" className="mb-3">
+            {error}
+          </Notice>
+        )}
+        <button
+          type="submit"
+          disabled={busy}
+          className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-gradient-accent text-sm font-semibold text-white shadow-lg shadow-accent/20 transition hover:-translate-y-px disabled:opacity-70"
+        >
+          {busy ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-3.5 fill-current" />}
+          {busy ? "Starting…" : "Start tracking"}
+        </button>
+        <p className="mt-2 text-center text-[11px] text-subtle">The first check runs right away, then every day at 08:00.</p>
+      </div>
     </aside>
   );
 }
