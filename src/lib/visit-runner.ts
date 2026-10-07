@@ -259,7 +259,12 @@ async function launchBrowser(proxy: { server: string; username?: string; passwor
         channel,
         headless: true,
         proxy: { ...proxy, bypass: BROWSER_BACKGROUND_HOSTS.join(",") },
-        args: [`--host-resolver-rules=${BROWSER_BACKGROUND_HOSTS.map((h) => `MAP ${h} ~NOTFOUND`).join(", ")}`],
+        args: [
+          `--host-resolver-rules=${BROWSER_BACKGROUND_HOSTS.map((h) => `MAP ${h} ~NOTFOUND`).join(", ")}`,
+          // WebRTC (video calls, chat widgets) can send UDP straight from this computer, around the
+          // proxy, and show the site our real IP. Only allow it through the proxy.
+          "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+        ],
       });
     } catch {
       /* try the next one */
