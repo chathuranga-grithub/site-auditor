@@ -2,7 +2,16 @@
 
 import { isBlockedHost, parseSiteUrl } from "../url";
 import { NotConfiguredError } from "./db";
-import { DEFAULT_DURATION_DAYS, DEFAULT_TARGET_CTR, MAX_DURATION_DAYS, type NewCampaign } from "./types";
+import {
+  DEFAULT_DAILY_INCREASE_PCT,
+  DEFAULT_DAY1_VISITS,
+  DEFAULT_DURATION_DAYS,
+  DEFAULT_TARGET_CTR,
+  MAX_DAILY_INCREASE_PCT,
+  MAX_DAY1_VISITS,
+  MAX_DURATION_DAYS,
+  type NewCampaign,
+} from "./types";
 
 export function errorResponse(err: unknown) {
   if (err instanceof NotConfiguredError) return Response.json({ error: err.message, notConfigured: true }, { status: 503 });
@@ -33,6 +42,10 @@ export function parseNewCampaign(body: Record<string, unknown>): NewCampaign | s
   // Tracking and Goals are optional for now (the form doesn't send them): defaults, or none.
   const durationDays = optional(body.durationDays) ?? DEFAULT_DURATION_DAYS;
   if (!Number.isInteger(durationDays) || durationDays < 1 || durationDays > MAX_DURATION_DAYS) return `Duration must be 1 to ${MAX_DURATION_DAYS} days.`;
+  const day1Visits = optional(body.day1Visits) ?? DEFAULT_DAY1_VISITS;
+  if (!Number.isInteger(day1Visits) || day1Visits < 1 || day1Visits > MAX_DAY1_VISITS) return `Day 1 visits must be 1 to ${MAX_DAY1_VISITS}.`;
+  const dailyIncreasePct = optional(body.dailyIncreasePct) ?? DEFAULT_DAILY_INCREASE_PCT;
+  if (!(dailyIncreasePct >= 0 && dailyIncreasePct <= MAX_DAILY_INCREASE_PCT)) return `Daily increase must be 0 to ${MAX_DAILY_INCREASE_PCT}%.`;
   const targetCtr = optional(body.targetCtr) ?? DEFAULT_TARGET_CTR;
   if (!(targetCtr > 0 && targetCtr <= 100)) return "Target CTR must be between 0 and 100%.";
   const targetPosition = optional(body.targetPosition);
@@ -46,7 +59,20 @@ export function parseNewCampaign(body: Record<string, unknown>): NewCampaign | s
   const ga4Property = typeof body.ga4Property === "string" && body.ga4Property.trim() ? body.ga4Property.trim() : null;
   if (ga4Property && !/^\d+$/.test(ga4Property)) return "GA4 property ID is numbers only (Admin → Property details).";
 
-  return { siteUrl: site.origin, keyword, pageUrl, durationDays, targetCtr, targetPosition, weeklyGrowthPct, targetEngagementSec, gscProperty, ga4Property };
+  return {
+    siteUrl: site.origin,
+    keyword,
+    pageUrl,
+    durationDays,
+    day1Visits,
+    dailyIncreasePct,
+    targetCtr,
+    targetPosition,
+    weeklyGrowthPct,
+    targetEngagementSec,
+    gscProperty,
+    ga4Property,
+  };
 }
 
 export function parseId(raw: string): number | null {

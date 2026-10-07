@@ -1,5 +1,5 @@
 // Server-only: read a site's sitemap (including WordPress sitemap indexes) and return
-// its page URLs. Shared by /api/sitemap (Site Audit) and Visit Test.
+// its page URLs. Shared by /api/sitemap (Site Audit) and campaign visits.
 
 import * as cheerio from "cheerio";
 import { BlockedUrlError, safeFetch } from "./safe-fetch";
@@ -21,7 +21,7 @@ interface ParsedSitemap {
   pageUrls: string[];
 }
 
-/** How sitemap files are downloaded. Visit Test passes one that goes through its proxy. */
+/** How sitemap files are downloaded. Campaign visits pass one that goes through its proxy. */
 export type SitemapFetcher = (url: string, accept: string) => Promise<{ ok: boolean; finalUrl: string; text: () => Promise<string> }>;
 
 /** Direct download from this server, with the SSRF guard. */

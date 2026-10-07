@@ -1,12 +1,12 @@
-// Server-only, local only: each campaign's visit to its site through the proxy (the Visit Test run,
+// Server-only, local only: each campaign's visit to its site through the proxy (the visit run,
 // src/lib/visit-runner.ts). It runs on the server, not in a browser tab: it starts when a campaign is
-// created or resumed and stops when it's paused, stopped or deleted. Every line of its console is
-// kept, so any open campaign page can replay it and then follow it live; the finished log is saved.
+// created or resumed, runs again once a day (src/lib/campaigns/scheduler.ts), and stops when it's
+// paused, stopped or deleted. Every line of its console is kept in memory only (never saved), so
+// any open campaign page can replay it and then follow it live. Restarting the app clears it.
 
 import { ProxyWaitError } from "../proxy-api";
 import { resolveProxyApi } from "../proxy-settings";
 import type { VisitEvent } from "../visit-types";
-import { getVisitLog, saveVisitLog } from "./db";
 import type { Campaign } from "./types";
 
 /** One console line: the event and when it happened (ms). */
@@ -41,6 +41,20 @@ export function stopCampaignVisit(campaignId: number): void {
   visits.get(campaignId)?.controller.abort();
 }
 
+/** The campaign's visit right now, for the page's heartbeat; null if none since the app started. */
+export function campaignVisitStatus(campaignId: number): { running: boolean; startedAt: number; pages: number; lastEventAt: number | null } | null {
+  const v = visits.get(campaignId);
+  if (!v) return null;
+  const pages = v.events.filter((e) => e.type === "page").length;
+  return { running: v.running, startedAt: v.startedAt, pages, lastEventAt: v.events.at(-1)?.at ?? null };
+}
+
+/** Deleted campaign: stop its visit and forget its log. */
+export function forgetCampaignVisit(campaignId: number): void {
+  stopCampaignVisit(campaignId);
+  visits.delete(campaignId);
+}
+
 async function run(c: Pick<Campaign, "id" | "siteUrl">, v: LiveVisit) {
   const { signal } = v.controller;
   const send = (e: VisitEvent) => {
@@ -73,8 +87,6 @@ async function run(c: Pick<Campaign, "id" | "siteUrl">, v: LiveVisit) {
     v.running = false;
     for (const f of v.listeners) f(null);
     v.listeners.clear();
-    // The campaign may have been deleted meanwhile; then there's nothing to save it to.
-    await saveVisitLog(c.id, new Date(v.startedAt), v.events).catch(() => {});
   }
 }
 
@@ -87,7 +99,7 @@ function sleep(ms: number, signal: AbortSignal) {
 
 /**
  * The campaign's console as newline-delimited JSON: every line so far, then new lines live until
- * the visit ends. With no visit since the app started, the last saved log (or nothing).
+ * the visit ends. Nothing if there's been no visit since the app started.
  */
 export function campaignVisitStream(campaignId: number, signal: AbortSignal): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
@@ -109,11 +121,7 @@ export function campaignVisitStream(campaignId: number, signal: AbortSignal): Re
       };
 
       const v = visits.get(campaignId);
-      if (!v) {
-        const saved = await getVisitLog(campaignId).catch(() => null);
-        (saved ?? []).forEach((e) => write(e as LoggedVisitEvent));
-        return close();
-      }
+      if (!v) return close();
       v.events.forEach(write);
       if (!v.running) return close();
       const follow = (e: LoggedVisitEvent | null) => (e ? write(e) : close());

@@ -5,7 +5,7 @@
 
 import { badRequest, errorResponse, parseId } from "@/lib/campaigns/api";
 import { deleteCampaign, getCampaign, listDays, listNotes, setCampaignStatus } from "@/lib/campaigns/db";
-import { startCampaignVisit, stopCampaignVisit } from "@/lib/campaigns/visits";
+import { forgetCampaignVisit, startCampaignVisit, stopCampaignVisit } from "@/lib/campaigns/visits";
 
 export const runtime = "nodejs";
 
@@ -48,7 +48,7 @@ export async function DELETE(_request: Request, { params }: Ctx) {
   const id = parseId((await params).id);
   if (!id) return badRequest("Invalid campaign id.");
   try {
-    stopCampaignVisit(id);
+    forgetCampaignVisit(id);
     await deleteCampaign(id);
     return Response.json({ ok: true });
   } catch (err) {

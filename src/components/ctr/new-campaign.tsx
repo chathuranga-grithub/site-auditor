@@ -1,15 +1,27 @@
 "use client";
 
-// Auto CTR: the new-campaign form. Target (site, keyword) is all a campaign uses for now.
-// Tracking (duration, data sources) and Goals (CTR, position, click growth, time on page) are kept
-// for later but hidden (SHOW_LATER); they aren't sent, so the server uses its defaults.
+// Auto CTR: the new-campaign form. Target (site, keyword) and Visit plan (duration, day 1 visits,
+// daily increase, compounded) are sent. Tracking (data sources) and Goals (CTR, position, click growth,
+// time on page) are kept for later but hidden (SHOW_LATER); they aren't sent, so the server uses its defaults.
+// Behavior (CTR, mobile share, dwell time) is form fields only: not sent or saved.
 // Laid out to fit one screen: the sections are rows of fields on the left, and a summary of what
 // will be tracked, with the Start button, stays on the right.
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { CalendarRange, Crosshair, Globe, Loader2, Play, Target } from "lucide-react";
-import { DEFAULT_DURATION_DAYS, MAX_DURATION_DAYS, expectedCtr, type CtrSetup } from "@/lib/campaigns/types";
+import { Activity, CalendarRange, Crosshair, Globe, Loader2, Play, Target, TrendingUp } from "lucide-react";
+import {
+  DEFAULT_DAILY_INCREASE_PCT,
+  DEFAULT_DAY1_VISITS,
+  DEFAULT_DURATION_DAYS,
+  MAX_DAILY_INCREASE_PCT,
+  MAX_DAY1_VISITS,
+  MAX_DURATION_DAYS,
+  expectedCtr,
+  plannedVisits,
+  plannedVisitsTotal,
+  type CtrSetup,
+} from "@/lib/campaigns/types";
 import { Notice } from "@/components/ui/primitives";
 import { PageHeader, SetupNotice, api } from "./ui";
 
@@ -26,9 +38,15 @@ export function NewCampaign() {
     siteUrl: "",
     keyword: "",
     durationDays: String(DEFAULT_DURATION_DAYS),
+    day1Visits: String(DEFAULT_DAY1_VISITS),
+    dailyIncreasePct: String(DEFAULT_DAILY_INCREASE_PCT),
     gscProperty: "",
     ga4Property: "",
     targetCtr: "5",
+    behaviorCtr: "5",
+    mobilePct: "70",
+    minDwellSec: "30",
+    maxDwellSec: "120",
     targetPosition: "3",
     weeklyGrowthPct: "10",
     targetEngagementSec: "60",
@@ -48,7 +66,16 @@ export function NewCampaign() {
     setBusy(true);
     setError(null);
     try {
-      const res = await api<{ campaign: { id: number } }>("/api/ctr/campaigns", { method: "POST", body: JSON.stringify({ siteUrl: form.siteUrl, keyword: form.keyword }) });
+      const res = await api<{ campaign: { id: number } }>("/api/ctr/campaigns", {
+        method: "POST",
+        body: JSON.stringify({
+          siteUrl: form.siteUrl,
+          keyword: form.keyword,
+          durationDays: form.durationDays,
+          day1Visits: form.day1Visits,
+          dailyIncreasePct: form.dailyIncreasePct,
+        }),
+      });
       // The visit through the proxy has started on the server; the campaign page shows its console.
       router.push(`/ctr/campaigns/${res.campaign.id}`);
     } catch (err) {
@@ -75,13 +102,42 @@ export function NewCampaign() {
             </div>
           </Section>
 
+          <Section icon={<TrendingUp className="size-4" />} title="Visit plan" text="Configure how visits compound over the campaign duration.">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Field label="Duration (days)" hint={`1 – ${MAX_DURATION_DAYS}, checked daily`}>
+                <input className={input} type="number" min={1} max={MAX_DURATION_DAYS} value={form.durationDays} onChange={set("durationDays")} required />
+              </Field>
+              <Field label="Day 1 Visits" hint={`1 – ${MAX_DAY1_VISITS} visits on the first day`}>
+                <input className={input} type="number" min={1} max={MAX_DAY1_VISITS} value={form.day1Visits} onChange={set("day1Visits")} required />
+              </Field>
+              <Field label="Daily Increase %" hint="Added to the day before, compounded">
+                <input className={input} type="number" min={0} max={MAX_DAILY_INCREASE_PCT} step={0.1} value={form.dailyIncreasePct} onChange={set("dailyIncreasePct")} required />
+              </Field>
+            </div>
+            <EstimatedVisits plan={visitPlan(form)} />
+          </Section>
+
+          <Section icon={<Activity className="size-4" />} title="Behavior" text="CTR, phone share and time on page.">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <Field label="CTR %" hint="0.1 – 100%">
+                <input className={input} type="number" min={0.1} max={100} step={0.1} value={form.behaviorCtr} onChange={set("behaviorCtr")} />
+              </Field>
+              <Field label={`Mobile Traffic · ${form.mobilePct}%`} hint={`Desktop ${100 - Number(form.mobilePct)}%`}>
+                <input className="h-9 w-full cursor-pointer accent-accent" type="range" min={0} max={100} step={5} value={form.mobilePct} onChange={set("mobilePct")} />
+              </Field>
+              <Field label="Min Dwell Time (s)" hint="1 – 3600">
+                <input className={input} type="number" min={1} max={3600} value={form.minDwellSec} onChange={set("minDwellSec")} />
+              </Field>
+              <Field label="Max Dwell Time (s)" hint={Number(form.maxDwellSec) < Number(form.minDwellSec) ? "Must be at least the min" : "1 – 3600"}>
+                <input className={input} type="number" min={Number(form.minDwellSec) || 1} max={3600} value={form.maxDwellSec} onChange={set("maxDwellSec")} />
+              </Field>
+            </div>
+          </Section>
+
           {SHOW_LATER && (
             <>
-              <Section icon={<CalendarRange className="size-4" />} title="Tracking" text="How long to follow it, and where the real numbers come from." later>
-                <div className="grid gap-3 md:grid-cols-[8rem_1fr_1fr]">
-                  <Field label="Duration (days)" hint={`1 – ${MAX_DURATION_DAYS}, checked daily`}>
-                    <input className={input} type="number" min={1} max={MAX_DURATION_DAYS} value={form.durationDays} onChange={set("durationDays")} required />
-                  </Field>
+              <Section icon={<CalendarRange className="size-4" />} title="Tracking" text="Where the real numbers come from." later>
+                <div className="grid gap-3 md:grid-cols-2">
                   <Field label="Search Console property" hint='"sc-domain:example.vn" or "https://example.vn/"'>
                     <input className={input} value={form.gscProperty} onChange={set("gscProperty")} placeholder="sc-domain:example.vn" />
                   </Field>
@@ -123,6 +179,7 @@ function Summary({ form, busy, error }: { form: Record<string, string>; busy: bo
   const rows: [string, ReactNode][] = [
     ["Keyword", form.keyword.trim() || <span className="text-subtle">not set</span>],
     ["Site", site || <span className="text-subtle">not set</span>],
+    ...visitPlanRows(form),
   ];
   return (
     // Same height as the form beside it: details at the top, Start at the bottom.
@@ -150,11 +207,49 @@ function Summary({ form, busy, error }: { form: Record<string, string>; busy: bo
           className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-gradient-accent text-sm font-semibold text-white shadow-lg shadow-accent/20 transition hover:-translate-y-px disabled:opacity-70"
         >
           {busy ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-3.5 fill-current" />}
-          {busy ? "Starting…" : "Start campaign"}
+          {busy ? "Starting…" : "Start Campaign"}
         </button>
         <p className="mt-2 text-center text-[11px] text-subtle">The visit through the proxy starts right away.</p>
       </div>
     </aside>
+  );
+}
+
+/** The visit plan in the Summary: day 1, the last day and the estimated total. */
+function visitPlanRows(form: Record<string, string>): [string, ReactNode][] {
+  const plan = visitPlan(form);
+  if (!plan) return [["Visits", <span key="v" className="text-subtle">check the visit plan</span>]];
+  return [
+    ["Duration", `${plan.days} day${plan.days === 1 ? "" : "s"}`],
+    ["Day 1", `${plan.day1.toLocaleString()} visits`],
+    [`Day ${plan.days}`, `${plan.lastDay.toLocaleString()} visits`],
+    ["Estimated total visits", <span key="t" className="font-semibold">{plan.total.toLocaleString()}</span>],
+  ];
+}
+
+/** The visit plan from the form, or null while a field is invalid. */
+function visitPlan(form: Record<string, string>) {
+  const days = Number(form.durationDays);
+  const day1 = Number(form.day1Visits);
+  const pct = form.dailyIncreasePct.trim() === "" ? NaN : Number(form.dailyIncreasePct);
+  const valid = Number.isInteger(days) && days >= 1 && days <= MAX_DURATION_DAYS && Number.isInteger(day1) && day1 >= 1 && day1 <= MAX_DAY1_VISITS;
+  if (!valid || !(pct >= 0 && pct <= MAX_DAILY_INCREASE_PCT)) return null;
+  return { days, day1, lastDay: plannedVisits(day1, pct, days), total: plannedVisitsTotal(day1, pct, days) };
+}
+
+/** Under the Visit plan fields: the estimated total, from day 1 to the last day. */
+function EstimatedVisits({ plan }: { plan: ReturnType<typeof visitPlan> }) {
+  return (
+    <p className="mt-3 rounded-lg bg-canvas/60 px-3 py-2 text-xs text-muted">
+      {plan ? (
+        <>
+          Estimated total visits: <b className="font-mono text-sm text-ink">{plan.total.toLocaleString()}</b> over {plan.days} day{plan.days === 1 ? "" : "s"} ·{" "}
+          {plan.day1.toLocaleString()} on day 1 → {plan.lastDay.toLocaleString()} on day {plan.days}
+        </>
+      ) : (
+        "Fill in the visit plan to see the estimated total visits."
+      )}
+    </p>
   );
 }
 

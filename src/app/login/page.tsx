@@ -5,7 +5,7 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { ChartSpline, Lock, MousePointerClick, ScanSearch, ShieldCheck, TrendingUp } from "lucide-react";
+import { ChartSpline, Lock, ScanSearch, ShieldCheck, TrendingUp } from "lucide-react";
 import { SESSION_COOKIE, readSessionToken, safeNextPath } from "@/lib/auth/session";
 import { Logo } from "@/components/shell/logo";
 import { LoginForm } from "./login-form";
@@ -83,9 +83,6 @@ function ProductPanel() {
           </Feature>
           <Feature icon={<TrendingUp className="size-4" />} title="Keyword Rankings">
             Who ranks on Google Vietnam, and how their pages compare.
-          </Feature>
-          <Feature icon={<MousePointerClick className="size-4" />} title="Visit Test">
-            Every page checked through a Vietnam proxy, on desktop and phone.
           </Feature>
           <Feature icon={<ChartSpline className="size-4" />} title="Auto CTR">
             Real position, clicks and CTR over time, against goals.

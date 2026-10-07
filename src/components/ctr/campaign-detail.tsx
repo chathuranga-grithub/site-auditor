@@ -2,18 +2,40 @@
 
 // Auto CTR: one campaign. Its visit to the site through the proxy runs on the server while the
 // campaign is active (src/lib/campaigns/visits.ts); this page shows its console and results, the same
-// as Visit Test, live. Then goals vs real numbers, daily charts, change log, daily data.
+// live. Then goals vs real numbers, daily charts, change log, daily data.
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { Loader2, Pause, Play, RefreshCw, Square, Trash2 } from "lucide-react";
+import { ArrowLeft, Loader2, Pause, Play, RefreshCw, Square, Trash2 } from "lucide-react";
 import { summarize } from "@/lib/campaigns/metrics";
 import { todayInVietnam } from "@/lib/campaigns/site";
 import type { Campaign, CampaignDay, CampaignNote } from "@/lib/campaigns/types";
 import { Notice, Panel, StatTile, buttonClass } from "@/components/ui/primitives";
-import { VisitRunView, useVisitRun } from "@/components/visit/visit-test";
+import { VisitRunView, useVisitRun } from "@/components/visit/visit-run";
 import { CONFIRM, CampaignConfirm, isOpen, HealthBadge, LineChart, PageHeader, Progress, StatusBadge, api } from "./ui";
+
+const HEARTBEAT_MS = 5 * 60_000;
+
+interface Heartbeat {
+  status: Campaign["status"];
+  canRunVisits: boolean;
+  visit: { running: boolean; startedAt: number; pages: number; lastEventAt: number | null } | null;
+  at: number;
+}
+
+/** One line for the browser console, e.g. "up · active · visit running 12m, 37 pages, last line 4s ago". */
+function heartbeatText(h: Heartbeat): string {
+  const ago = (ms: number) => (ms < 60_000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60_000)}m`);
+  if (h.status !== "active") return `campaign is ${h.status}`;
+  if (!h.canRunVisits) return "up · active · visits don't run here (not on a computer)";
+  if (!h.visit) return "up · active · no visit since the app started";
+  const v = h.visit;
+  const last = v.lastEventAt ? `, last line ${ago(h.at - v.lastEventAt)} ago` : "";
+  return v.running
+    ? `up · active · visit running ${ago(h.at - v.startedAt)}, ${v.pages} pages${last}`
+    : `up · active · visit finished, ${v.pages} pages${last}`;
+}
 
 interface Detail {
   campaign: Campaign;
@@ -43,6 +65,23 @@ export function CampaignDetail({ id }: { id: number }) {
 
   // The campaign's visit console: what has happened so far, then live while it runs.
   useEffect(() => follow(id), [follow, id]);
+
+  // Heartbeat: while an active campaign is open, ask the server every 5 minutes (and once now)
+  // whether it and its visit are still up, and log the answer to the browser console.
+  const active = data?.campaign.status === "active";
+  useEffect(() => {
+    if (!active) return;
+    const beat = () => {
+      const time = new Date().toLocaleTimeString();
+      api<Heartbeat>(`/api/ctr/campaigns/${id}/heartbeat`).then(
+        (h) => console.log(`[campaign ${id}] ${time} ${heartbeatText(h)}`, h),
+        (e: Error) => console.error(`[campaign ${id}] ${time} server not reachable: ${e.message}`),
+      );
+    };
+    beat();
+    const t = setInterval(beat, HEARTBEAT_MS);
+    return () => clearInterval(t);
+  }, [active, id]);
 
   async function run(label: string, fn: () => Promise<unknown>) {
     setBusy(label);
@@ -280,15 +319,24 @@ export function CampaignDetail({ id }: { id: number }) {
         )}
       </Panel>
 
-      <Link href="/ctr/campaigns" className="inline-block text-sm text-muted hover:text-ink">
-        ← All campaigns
-      </Link>
     </Shell>
   );
 }
 
+/** The page frame, with the way back to the list at the top (also while loading or on an error). */
 function Shell({ children }: { children: React.ReactNode }) {
-  return <div className="mx-auto w-full max-w-7xl space-y-5 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">{children}</div>;
+  return (
+    <div className="mx-auto w-full max-w-7xl space-y-5 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+      <Link
+        href="/ctr/campaigns"
+        className="group inline-flex h-8 items-center gap-1.5 rounded-lg border border-line bg-surface pr-3 pl-2 text-xs font-medium text-muted transition hover:border-line-strong hover:bg-surface-2 hover:text-ink"
+      >
+        <ArrowLeft className="size-3.5 transition group-hover:-translate-x-0.5" aria-hidden />
+        Back to campaigns
+      </Link>
+      {children}
+    </div>
+  );
 }
 
 /** Every day from start to end (inclusive), plus any saved days outside it. */

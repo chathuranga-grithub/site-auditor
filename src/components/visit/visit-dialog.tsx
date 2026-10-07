@@ -1,6 +1,6 @@
 "use client";
 
-// Visit Test: the page details popup, and the PASS / WARN / FAIL styles used in it.
+// Visit console: the page details popup, and the PASS / WARN / FAIL styles used in it.
 
 import { useEffect, type ReactNode } from "react";
 import { CircleCheck, CircleMinus, CircleX, TriangleAlert, X } from "lucide-react";

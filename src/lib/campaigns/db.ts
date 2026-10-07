@@ -47,6 +47,9 @@ const SCHEMA = [
     status TEXT NOT NULL DEFAULT 'active',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
   )`,
+  // Visit plan, added later: older campaigns get the defaults.
+  `ALTER TABLE ctr_campaigns ADD COLUMN IF NOT EXISTS day1_visits INT NOT NULL DEFAULT 10`,
+  `ALTER TABLE ctr_campaigns ADD COLUMN IF NOT EXISTS daily_increase_pct NUMERIC NOT NULL DEFAULT 5`,
   `CREATE TABLE IF NOT EXISTS ctr_days (
     campaign_id INT NOT NULL REFERENCES ctr_campaigns(id) ON DELETE CASCADE,
     day DATE NOT NULL,
@@ -70,12 +73,6 @@ const SCHEMA = [
     day DATE NOT NULL,
     text TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-  )`,
-  // The latest visit's console log, one per campaign (src/lib/campaigns/visits.ts).
-  `CREATE TABLE IF NOT EXISTS ctr_visits (
-    campaign_id INT PRIMARY KEY REFERENCES ctr_campaigns(id) ON DELETE CASCADE,
-    started_at TIMESTAMPTZ NOT NULL,
-    events JSONB NOT NULL DEFAULT '[]'::jsonb
   )`,
 ];
 
@@ -104,6 +101,8 @@ function toCampaign(r: Record<string, unknown>): Campaign {
     pageUrl: (r.page_url as string | null) ?? null,
     country: String(r.country),
     durationDays: Number(r.duration_days),
+    day1Visits: Number(r.day1_visits),
+    dailyIncreasePct: Number(r.daily_increase_pct),
     startDate: isoDay(r.start_date),
     endDate: isoDay(r.end_date),
     targetCtr: Number(r.target_ctr),
@@ -148,8 +147,8 @@ export async function createCampaign(input: NewCampaign, today: string): Promise
   end.setUTCDate(end.getUTCDate() + input.durationDays - 1);
   const rows = await q(
     `INSERT INTO ctr_campaigns (site_url, keyword, page_url, duration_days, start_date, end_date, target_ctr, target_position,
-       weekly_growth_pct, target_engagement_sec, gsc_property, ga4_property)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+       weekly_growth_pct, target_engagement_sec, gsc_property, ga4_property, day1_visits, daily_increase_pct)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
     [
       input.siteUrl,
       input.keyword,
@@ -163,6 +162,8 @@ export async function createCampaign(input: NewCampaign, today: string): Promise
       input.targetEngagementSec ?? null,
       input.gscProperty || null,
       input.ga4Property || null,
+      input.day1Visits,
+      input.dailyIncreasePct,
     ],
   );
   return toCampaign(rows[0]);
@@ -238,22 +239,6 @@ export async function addNote(campaignId: number, day: string, text: string): Pr
   const q = await db();
   const rows = await q(`INSERT INTO ctr_notes (campaign_id, day, text) VALUES ($1,$2,$3) RETURNING *`, [campaignId, day, text]);
   return toNote(rows[0]);
-}
-
-/** Saves the campaign's latest visit log (replacing the previous one). */
-export async function saveVisitLog(campaignId: number, startedAt: Date, events: unknown[]): Promise<void> {
-  const q = await db();
-  await q(
-    `INSERT INTO ctr_visits (campaign_id, started_at, events) VALUES ($1, $2, $3::jsonb)
-     ON CONFLICT (campaign_id) DO UPDATE SET started_at = EXCLUDED.started_at, events = EXCLUDED.events`,
-    [campaignId, startedAt.toISOString(), JSON.stringify(events)],
-  );
-}
-
-export async function getVisitLog(campaignId: number): Promise<unknown[] | null> {
-  const q = await db();
-  const rows = await q(`SELECT events FROM ctr_visits WHERE campaign_id = $1`, [campaignId]);
-  return rows[0] ? (rows[0].events as unknown[]) : null;
 }
 
 export async function listNotes(campaignId: number): Promise<CampaignNote[]> {

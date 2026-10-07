@@ -1,11 +1,10 @@
 "use client";
 
-// Visit Test tool (local only): open a company site in a real browser through a proxy,
-// find every internal page and open each one, then show what a visitor there experiences.
+// A campaign's visit console (local only): the site opened in a real browser through a proxy,
+// every internal page found and opened, and what a visitor there experiences.
 
-import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { Check, CircleCheck, CircleMinus, CircleX, Copy, Globe, Loader2, Monitor, Smartphone, Play, Square, Timer, TriangleAlert } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Check, CircleCheck, CircleMinus, CircleX, Copy, Loader2, TriangleAlert } from "lucide-react";
 import {
   buildChecklist,
   checklistHeadline,
@@ -18,102 +17,19 @@ import {
 } from "@/lib/visit-checklist";
 import { MAX_PAGES, OVERFLOW_PX, type Discovery, type VisitEvent, type VisitPage, type VisitReport } from "@/lib/visit-types";
 import { Notice, Panel, StatusCode, UrlLink, buttonClass } from "@/components/ui/primitives";
-import { ProxyApiStatusChip } from "@/components/ui/proxy-api-field";
 import { ACTIVITY_STYLE, DetailDialog } from "./visit-dialog";
 
 /** Problems listed in the notice before "and N more". */
 const ISSUES_SHOWN = 15;
 
-export function VisitTest() {
-  // ?url= fills in the site, e.g. when opened from a Keyword Rankings result. The test isn't started automatically.
-  const searchParams = useSearchParams();
-  const [url, setUrl] = useState(() => searchParams.get("url") ?? "");
-  const [mobile, setMobile] = useState(true);
-  const run = useVisitRun();
-  const { running, waitLeft, notLocal } = run;
-
-  function handleRun(e: FormEvent) {
-    e.preventDefault();
-    run.start(url, mobile);
-  }
-
-  return (
-    <div className="mx-auto w-full max-w-7xl space-y-5 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
-      <header>
-        <div>
-          <div className="font-mono text-[10px] tracking-[0.2em] text-subtle uppercase">Tools / Visit Test</div>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight sm:text-3xl">
-            Visit <span className="text-gradient">Test</span>
-          </h1>
-          <p className="mt-1 max-w-2xl text-sm text-muted">
-            Visits every internal page of one of our sites through a Vietnam proxy, on desktop and phone, and logs what works and what doesn&apos;t.
-          </p>
-        </div>
-      </header>
-
-      <form onSubmit={handleRun} className="glass grid gap-2 rounded-xl p-2 lg:grid-cols-[1.2fr_1fr_auto_auto]">
-        <label className="relative block">
-          <span className="sr-only">Website URL</span>
-          <Globe className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-subtle" />
-          <input
-            type="text"
-            inputMode="url"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            disabled={running}
-            required
-            placeholder="Company site, e.g. https://example.com"
-            className="h-10 w-full rounded-lg border border-transparent bg-canvas/60 pr-3 pl-10 font-mono text-base text-ink outline-none placeholder:text-subtle focus:border-accent/60 focus:ring-2 focus:ring-accent/20 disabled:opacity-60 sm:text-sm"
-          />
-        </label>
-        <ProxyApiStatusChip />
-        <div className="flex h-10 rounded-lg bg-canvas/60 p-1" role="radiogroup" aria-label="Devices">
-          {([true, false] as const).map((m) => (
-            <button
-              key={String(m)}
-              type="button"
-              role="radio"
-              aria-checked={mobile === m}
-              onClick={() => setMobile(m)}
-              disabled={running}
-              title={m ? "Check every page on a desktop and on a phone (takes about twice as long)" : "Check every page on a desktop only (faster)"}
-              className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 text-xs font-medium whitespace-nowrap transition ${
-                mobile === m ? "bg-surface-2 text-ink ring-1 ring-line-strong" : "text-muted hover:text-ink"
-              }`}
-            >
-              {m ? <Smartphone className="size-3.5" /> : <Monitor className="size-3.5" />}
-              {m ? "Desktop + phone" : "Desktop only"}
-            </button>
-          ))}
-        </div>
-        {running ? (
-          // Separate keys: otherwise React reuses one <button>, and the click that stops the run
-          // lands on the "start" (submit) button it turns into, starting a new run.
-          <button key="stop" type="button" onClick={run.stop} className={buttonClass.danger}>
-            <Square className="size-3.5 fill-current" />
-            Stop
-          </button>
-        ) : (
-          <button key="start" type="submit" disabled={waitLeft > 0 || notLocal} className={buttonClass.primary}>
-            {waitLeft > 0 ? <Timer className="size-4" /> : <Play className="size-3.5 fill-current" />}
-            {waitLeft > 0 ? formatWait(waitLeft) : "Run test"}
-          </button>
-        )}
-      </form>
-
-      <VisitRunView run={run} />
-    </div>
-  );
-}
-
 export type VisitRun = ReturnType<typeof useVisitRun>;
 
 /**
- * One visit test run's console: everything the live log and results need. Either starts a run
- * (Visit Test page) or follows a campaign's run, which the server runs on its own (Auto CTR).
+ * One visit run's console: everything the live log and results need. Follows a campaign's run,
+ * which the server runs on its own (Auto CTR).
  */
 export function useVisitRun() {
-  const [env, setEnv] = useState<{ local: boolean; savedProxyApi: boolean } | null>(null);
+  const [env, setEnv] = useState<{ local: boolean } | null>(null);
   const [running, setRunning] = useState(false);
   const [steps, setSteps] = useState<string[]>([]);
   const [pages, setPages] = useState<LoggedPage[]>([]);
@@ -131,10 +47,10 @@ export function useVisitRun() {
   const genRef = useRef(0);
 
   useEffect(() => {
-    fetch("/api/visit-test")
+    fetch("/api/ctr/visit-env")
       .then((r) => r.json())
       .then(setEnv)
-      .catch(() => setEnv({ local: true, savedProxyApi: false }));
+      .catch(() => setEnv({ local: true }));
   }, []);
 
   // Countdown while the proxy provider makes us wait for a new IP.
@@ -148,8 +64,8 @@ export function useVisitRun() {
   }, [waitUntil]);
   const waitLeft = waitUntil ? Math.max(0, Math.ceil((waitUntil - now) / 1000)) : 0;
 
-  /** Reads a newline-delimited JSON console until it ends. `stoppable`: the page started it, so Stop ends it. */
-  const consume = useCallback(async (request: (signal: AbortSignal) => Promise<Response>, stoppable: boolean) => {
+  /** Reads a newline-delimited JSON console until it ends. */
+  const consume = useCallback(async (request: (signal: AbortSignal) => Promise<Response>) => {
     abortRef.current?.abort();
     const gen = ++genRef.current;
     const current = () => genRef.current === gen;
@@ -219,7 +135,6 @@ export function useVisitRun() {
     } catch (err) {
       if (!current()) return;
       if (!controller.signal.aborted) setError(err instanceof Error ? err.message : String(err));
-      else if (stoppable) setSteps((s) => [...s, "Stopped."]);
     } finally {
       if (current()) {
         setRunning(false);
@@ -228,28 +143,17 @@ export function useVisitRun() {
     }
   }, []);
 
-  /** Visit Test page: runs a test of this site now. */
-  function start(url: string, mobile: boolean) {
-    if (abortRef.current || waitLeft > 0) return;
-    void consume(
-      (signal) => fetch("/api/visit-test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url, mobile }), signal }),
-      true,
-    );
-  }
-
   /** Auto CTR: shows the campaign's visit (all lines so far, then live). Returns a function that stops following. */
   const follow = useCallback(
     (campaignId: number) => {
-      void consume((signal) => fetch(`/api/ctr/campaigns/${campaignId}/visit`, { signal, cache: "no-store" }), false);
+      void consume((signal) => fetch(`/api/ctr/campaigns/${campaignId}/visit`, { signal, cache: "no-store" }));
       return () => abortRef.current?.abort();
     },
     [consume],
   );
 
   return {
-    start,
     follow,
-    stop: () => abortRef.current?.abort(),
     running,
     steps,
     pages,
@@ -264,21 +168,20 @@ export function useVisitRun() {
   };
 }
 
-/** The run's notices, live console and results: the same on the Visit Test page and in a campaign. */
+/** The run's notices, live console and results. */
 export function VisitRunView({ run }: { run: VisitRun }) {
   const { running, steps, pages, discovery, timing, report, error, waitLeft, notLocal, openPage, setOpenPage } = run;
   return (
     <>
       {notLocal && (
         <Notice tone="warning">
-          Visit Test needs a real browser, so it only works when the app runs on a computer (<code>npm run dev</code>), not on the
+          Campaign visits need a real browser, so it only works when the app runs on a computer (<code>npm run dev</code>), not on the
           live site.
         </Notice>
       )}
       {waitLeft > 0 && (
         <Notice tone="info">
-          The proxy provider gives a new IP in <strong className="font-mono">{formatWait(waitLeft)}</strong>. The test can run again then; the button
-          turns back on by itself.
+          The proxy provider gives a new IP in <strong className="font-mono">{formatWait(waitLeft)}</strong>. The visit can run again then.
         </Notice>
       )}
       {error && <Notice tone="error">{error}</Notice>}

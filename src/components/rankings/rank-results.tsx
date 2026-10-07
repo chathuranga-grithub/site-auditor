@@ -2,8 +2,7 @@
 
 // Results table (one row per ranking page) and the detail panel for the selected page.
 
-import { Check, CircleCheck, CircleX, Copy, ExternalLink, Loader2, MousePointerClick, X } from "lucide-react";
-import Link from "next/link";
+import { Check, CircleCheck, CircleX, Copy, ExternalLink, Loader2, X } from "lucide-react";
 import { useState, type MouseEvent, type ReactNode } from "react";
 import type { AnalysisState, PageSeo, SerpResult } from "@/lib/rankings-types";
 import { SEO_CHECKS, checksPassed, isAnalyzable } from "@/lib/rankings-checks";
@@ -58,7 +57,6 @@ export function RankTable({
                       {r.url}
                     </span>
                     <CopyUrlButton url={r.url} />
-                    <VisitTestButton url={r.url} />
                   </div>
                   <div className="mt-0.5 max-w-[26rem] truncate text-xs text-muted" title={r.title}>{r.title}</div>
                 </td>
@@ -121,7 +119,6 @@ export function RankDetail({
           </a>
           <span className="inline-flex align-middle">
             <CopyUrlButton url={result.url} />
-            <VisitTestButton url={result.url} />
           </span>
           {result.snippet && <p className="mt-2 text-sm text-muted">{result.snippet}</p>}
         </div>
@@ -212,26 +209,6 @@ function CopyUrlButton({ url }: { url: string }) {
     >
       {state === "copied" ? <Check className="size-3.5 text-status-good" /> : <Copy className="size-3.5" />}
     </button>
-  );
-}
-
-/**
- * Opens Visit Test with this URL filled in, in a new tab so these results (and the search
- * credit they cost) stay here. Doesn't open the row details.
- */
-function VisitTestButton({ url }: { url: string }) {
-  return (
-    <Link
-      href={`/visit-test?url=${encodeURIComponent(url)}`}
-      target="_blank"
-      rel="noopener"
-      onClick={(e) => e.stopPropagation()}
-      aria-label="Open in Visit Test"
-      title="Open in Visit Test (new tab)"
-      className="inline-grid size-6 shrink-0 place-items-center rounded-md text-subtle transition hover:bg-surface-2 hover:text-ink"
-    >
-      <MousePointerClick className="size-3.5" />
-    </Link>
   );
 }
 

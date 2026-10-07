@@ -1,4 +1,4 @@
-// Shared types for the Visit Test tool (local only): one real-browser visit to every page
+// Shared types for campaign visits (local only): one real-browser visit to every page
 // of a company site through a proxy, scrolling each page, to check the site works for a
 // visitor in that location.
 
@@ -145,7 +145,7 @@ export interface Discovery {
   noSitemap: boolean;
 }
 
-/** Streamed from POST /api/visit-test, one JSON object per line. */
+/** Streamed from GET /api/ctr/campaigns/:id/visit, one JSON object per line. */
 export type VisitEvent =
   | { type: "step"; message: string }
   | { type: "proxy"; proxy: ProxyInfo; exit: ExitInfo | null }

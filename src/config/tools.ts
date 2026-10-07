@@ -6,7 +6,6 @@ import {
   ChartColumnIncreasing,
   LayoutDashboard,
   ListChecks,
-  MonitorSmartphone,
   ScanSearch,
   Target,
   type LucideIcon,
@@ -45,15 +44,6 @@ export const TOOLS: Tool[] = [
     description: "Crawl a site from its sitemap and homepage. Finds orphan pages, broken internal links and redirects.",
     icon: ScanSearch,
     group: "Site health",
-  },
-  {
-    id: "visit",
-    href: "/visit-test",
-    name: "Visit Test",
-    description: "Runs on this computer: visits every page of a company site through a Vietnam proxy, on desktop and phone, and logs what works.",
-    icon: MonitorSmartphone,
-    group: "Site health",
-    badge: "Local",
   },
   {
     id: "rankings",
