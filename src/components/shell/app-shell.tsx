@@ -6,7 +6,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, type ReactNode } from "react";
-import { ChevronDown, LogOut, Menu, ShieldCheck, UserRound, X } from "lucide-react";
+import { ChevronDown, LogOut, Menu, Settings, ShieldCheck, UserRound, X } from "lucide-react";
 import { TOOL_GROUPS, TOOLS } from "@/config/tools";
 import { allowedTools, type ToolId } from "@/lib/auth/permissions";
 import { Logo } from "./logo";
@@ -81,6 +81,7 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
 /** Who is signed in, and Sign out. */
 function UserBox({ user }: { user: ShellUser | null }) {
   const [busy, setBusy] = useState(false);
+  const pathname = usePathname();
   if (!user) return null;
   async function signOut() {
     setBusy(true);
@@ -89,8 +90,21 @@ function UserBox({ user }: { user: ShellUser | null }) {
     // eslint-disable-next-line @next/next/no-location-assign-relative-destination
     window.location.assign("/login");
   }
+  const onSettings = pathname === "/settings";
   return (
-    <div className="mt-auto border-t border-line p-3">
+    <div className="mt-auto space-y-2 border-t border-line p-3">
+      {user.role === "admin" && (
+        <Link
+          href="/settings"
+          aria-current={onSettings ? "page" : undefined}
+          className={`flex items-center gap-3 rounded-lg px-2.5 py-2 text-sm transition-colors ${onSettings ? "bg-surface-2 font-medium text-ink" : "text-muted hover:bg-surface hover:text-ink"}`}
+        >
+          <span className={`grid size-7 place-items-center rounded-md ${onSettings ? "bg-gradient-accent text-white" : "bg-surface-2 ring-1 ring-line"}`}>
+            <Settings className="size-4" aria-hidden />
+          </span>
+          Settings
+        </Link>
+      )}
       <div className="flex items-center gap-3 rounded-xl border border-line bg-surface px-2.5 py-2">
         <span className="grid size-9 shrink-0 place-items-center rounded-full bg-gradient-accent font-semibold text-white uppercase shadow-md shadow-accent/20" aria-hidden>
           {user.username.slice(0, 2)}
@@ -149,7 +163,7 @@ function Nav({ user, onNavigate }: { user: ShellUser | null; onNavigate?: () => 
               return (
                 <li key={href}>
                   <Link
-                    href={href}
+                    href={children?.[0]?.href ?? href}
                     onClick={onNavigate}
                     title={description}
                     aria-current={active && !children ? "page" : undefined}

@@ -18,7 +18,7 @@ import {
 } from "@/lib/visit-checklist";
 import { MAX_PAGES, OVERFLOW_PX, type Discovery, type VisitEvent, type VisitPage, type VisitReport } from "@/lib/visit-types";
 import { Notice, Panel, StatusCode, UrlLink, buttonClass } from "@/components/ui/primitives";
-import { ProxyApiField } from "@/components/ui/proxy-api-field";
+import { ProxyApiStatusChip } from "@/components/ui/proxy-api-field";
 import { ACTIVITY_STYLE, DetailDialog } from "./visit-dialog";
 
 /** Problems listed in the notice before "and N more". */
@@ -177,7 +177,7 @@ export function VisitTest() {
             className="h-10 w-full rounded-lg border border-transparent bg-canvas/60 pr-3 pl-10 font-mono text-base text-ink outline-none placeholder:text-subtle focus:border-accent/60 focus:ring-2 focus:ring-accent/20 disabled:opacity-60 sm:text-sm"
           />
         </label>
-        <ProxyApiField disabled={running} />
+        <ProxyApiStatusChip />
         <div className="flex h-10 rounded-lg bg-canvas/60 p-1" role="radiogroup" aria-label="Devices">
           {([true, false] as const).map((m) => (
             <button

@@ -1,6 +1,6 @@
 // Server-only, local only: the saved proxy API link (with its access token). Kept in a file on this
 // computer (.site-auditor.local.json, git-ignored), never sent back to the browser in full.
-// Used by Visit Test and Proxy Check.
+// Used by Visit Test and Auto CTR.
 
 import { promises as fs } from "node:fs";
 import path from "node:path";

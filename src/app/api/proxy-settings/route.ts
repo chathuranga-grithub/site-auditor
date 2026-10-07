@@ -1,8 +1,16 @@
 // Local only: the saved proxy API link.
-// GET → { local, saved, source, hint }   POST { proxyApiUrl } → save   DELETE → remove
+// GET → { local, saved, source, hint }   POST { proxyApiUrl } → save   DELETE → remove (admins only)
 // The full link is never returned, only a hint (host + last 4 characters).
 
+import { cookies } from "next/headers";
+import { SESSION_COOKIE, readSessionToken } from "@/lib/auth/session";
 import { isValidProxyApi, proxyApiStatus, removeSavedProxyApi, saveProxyApi } from "@/lib/proxy-settings";
+
+/** Changing the link is an admin setting (Settings page). */
+async function notAdmin() {
+  const s = await readSessionToken((await cookies()).get(SESSION_COOKIE)?.value);
+  return s?.role === "admin" ? null : Response.json({ error: "Only an admin can change the proxy link (Settings)." }, { status: 403 });
+}
 
 export const runtime = "nodejs";
 
@@ -15,6 +23,8 @@ export async function GET() {
 
 export async function POST(request: Request) {
   if (process.env.VERCEL) return localOnly();
+  const denied = await notAdmin();
+  if (denied) return denied;
   let body: { proxyApiUrl?: unknown };
   try {
     body = await request.json();
@@ -29,6 +39,8 @@ export async function POST(request: Request) {
 
 export async function DELETE() {
   if (process.env.VERCEL) return localOnly();
+  const denied = await notAdmin();
+  if (denied) return denied;
   await removeSavedProxyApi();
   return Response.json({ local: true, ...(await proxyApiStatus()) });
 }

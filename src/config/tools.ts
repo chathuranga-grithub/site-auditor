@@ -4,7 +4,6 @@
 
 import {
   ChartColumnIncreasing,
-  CirclePlus,
   LayoutDashboard,
   ListChecks,
   MonitorSmartphone,
@@ -31,7 +30,7 @@ export interface Tool {
   group: ToolGroup;
   /** Small tag next to the name, e.g. "Local" for tools that only run on a computer. */
   badge?: string;
-  /** Submenu pages, shown under the tool while one of its pages is open. */
+  /** Submenu pages, shown under the tool while one of its pages is open. The tool link opens the first. */
   children?: ToolPage[];
 }
 
@@ -72,9 +71,8 @@ export const TOOLS: Tool[] = [
     icon: Target,
     group: "Search & growth",
     children: [
-      { href: "/ctr", name: "Dashboard", icon: LayoutDashboard },
       { href: "/ctr/campaigns", name: "Campaigns", icon: ListChecks },
-      { href: "/ctr/new", name: "New campaign", icon: CirclePlus },
+      { href: "/ctr", name: "Dashboard", icon: LayoutDashboard },
     ],
   },
 ];

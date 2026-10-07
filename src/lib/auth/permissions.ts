@@ -13,7 +13,10 @@ const TOOL_PATHS: Record<ToolId, string[]> = {
 };
 
 /** Where each tool starts. */
-export const TOOL_HOME: Record<ToolId, string> = { audit: "/audit", rankings: "/rankings", visit: "/visit-test", ctr: "/ctr" };
+export const TOOL_HOME: Record<ToolId, string> = { audit: "/audit", rankings: "/rankings", visit: "/visit-test", ctr: "/ctr/campaigns" };
+
+/** Pages only admins may open (app settings). */
+const ADMIN_PATHS = ["/settings"];
 
 export function isToolId(v: unknown): v is ToolId {
   return typeof v === "string" && (TOOL_IDS as readonly string[]).includes(v);
@@ -32,6 +35,7 @@ export function allowedTools(user: { role: "admin" | "user"; tools: ToolId[] | n
 
 /** Paths that belong to no tool (login, sign out, …) are open to every signed-in account. */
 export function canUsePath(user: { role: "admin" | "user"; tools: ToolId[] | null }, pathname: string): boolean {
+  if (ADMIN_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`))) return user.role === "admin";
   const tool = toolForPath(pathname);
   return tool === null || allowedTools(user).includes(tool);
 }
