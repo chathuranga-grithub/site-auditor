@@ -1,23 +1,24 @@
 // Server-only, local only: each campaign's visit to its site through the proxy (the visit run,
 // src/lib/visit-runner.ts). It runs on the server, not in a browser tab: it starts when a campaign is
 // created or resumed, runs again once a day (src/lib/campaigns/scheduler.ts), and stops when it's
-// paused, stopped or deleted. Each time it's VISITS_PER_DAY runs, one after another, each with a new
-// proxy IP. Every line of its console is kept in memory only (never saved), so any open campaign page
+// paused, stopped or deleted. Each time it's the day's target visits from the campaign's visit plan
+// (day 1 visits, grown by the daily increase), one after another, each with a new proxy IP. Every line of its console is kept in memory only (never saved), so any open campaign page
 // can replay it and then follow it live. Restarting the app clears it.
 
 import { ProxyWaitError } from "../proxy-api";
 import { resolveProxyApi } from "../proxy-settings";
 import type { VisitEvent } from "../visit-types";
-import { addVisitDone } from "./db";
+import { addVisitDone, visitsDoneOn } from "./db";
 import { todayInVietnam } from "./site";
-import type { Campaign } from "./types";
+import { daysBetween } from "./metrics";
+import { plannedVisits, type Campaign } from "./types";
 
 /** One console line: the event and when it happened (ms). */
 export type LoggedVisitEvent = VisitEvent & { at: number };
 
 interface LiveVisit {
   startedAt: number;
-  /** Runs in a row (VISITS_PER_DAY) and the one running now. */
+  /** Runs in a row (the day's target visits) and the one running now. */
   runs: number;
   run: number;
   events: LoggedVisitEvent[];
@@ -34,13 +35,19 @@ const visits = (g.__campaignVisits ??= new Map<number, LiveVisit>());
 /** Visits need a real browser: only when the app runs on a computer, not on Vercel. */
 export const canRunVisits = () => !process.env.VERCEL;
 
-/** Each visit is this many runs, one after another, each with a new proxy IP. */
-export const VISITS_PER_DAY = 3;
+type VisitCampaign = Pick<Campaign, "id" | "siteUrl" | "startDate" | "durationDays" | "day1Visits" | "dailyIncreasePct">;
 
-/** Starts the campaign's visit: `runs` runs one after another (a running visit is stopped first). */
-export function startCampaignVisit(c: Pick<Campaign, "id" | "siteUrl">, runs = VISITS_PER_DAY): void {
+/** The campaign's target visits for today (Vietnam date), from its visit plan. */
+export function targetVisitsToday(c: VisitCampaign): number {
+  const day = Math.min(Math.max(1, daysBetween(c.startDate, todayInVietnam()) + 1), c.durationDays);
+  return plannedVisits(c.day1Visits, c.dailyIncreasePct, day);
+}
+
+/** Starts the campaign's visit: today's target visits, one after another (a running visit is stopped first). */
+export function startCampaignVisit(c: VisitCampaign): void {
   if (!canRunVisits()) return;
   stopCampaignVisit(c.id);
+  const runs = targetVisitsToday(c);
   const v: LiveVisit = { startedAt: Date.now(), runs, run: 1, events: [], running: true, controller: new AbortController(), listeners: new Set() };
   visits.set(c.id, v);
   void run(c, v);
@@ -80,8 +87,19 @@ async function run(c: Pick<Campaign, "id" | "siteUrl">, v: LiveVisit) {
     if (!proxyApiUrl) throw new Error("No proxy API link is saved. Add it in Settings.");
     // Loaded only here: the browser library isn't available on Vercel.
     const { runVisitTest } = await import("../visit-runner");
+    // Visits already done today (before a restart, or a pause and resume) count toward the target.
+    const done = await visitsDoneOn(c.id, todayInVietnam()).catch((err: unknown) => {
+      console.error(`Campaign ${c.id}: couldn't read today's visits:`, err);
+      return 0;
+    });
+    if (done >= v.runs) {
+      v.run = v.runs;
+      send({ type: "step", message: `All ${v.runs} of today's visits are done.` });
+      return;
+    }
+    if (done > 0) send({ type: "step", message: `${done} of today's ${v.runs} visits are already done; running the other ${v.runs - done}.` });
     // Each run starts only when the one before has finished.
-    for (v.run = 1; v.run <= v.runs && !signal.aborted; v.run++) {
+    for (v.run = done + 1; v.run <= v.runs && !signal.aborted; v.run++) {
       if (v.runs > 1) send({ type: "run", n: v.run, of: v.runs });
       for (;;) {
         try {

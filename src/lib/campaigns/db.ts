@@ -242,6 +242,13 @@ export async function addVisitDone(campaignId: number, day: string): Promise<voi
   );
 }
 
+/** Visit runs that finished on `day` (0 if none). */
+export async function visitsDoneOn(campaignId: number, day: string): Promise<number> {
+  const q = await db();
+  const rows = await q(`SELECT visits_done FROM ctr_days WHERE campaign_id = $1 AND day = $2`, [campaignId, day]);
+  return Number(rows[0]?.visits_done ?? 0);
+}
+
 export async function listDays(campaignId: number): Promise<CampaignDay[]> {
   const q = await db();
   return (await q(`SELECT * FROM ctr_days WHERE campaign_id = $1 ORDER BY day`, [campaignId])).map(toDay);
