@@ -8,11 +8,14 @@ import { usePathname } from "next/navigation";
 import { useState, type ReactNode } from "react";
 import { LogOut, Menu, UserRound, X } from "lucide-react";
 import { TOOLS } from "@/config/tools";
+import { allowedTools, type ToolId } from "@/lib/auth/permissions";
 import { Logo } from "./logo";
 
 export interface ShellUser {
   username: string;
   role: "admin" | "user";
+  /** null = all tools (admins). */
+  tools: ToolId[] | null;
 }
 
 export function AppShell({ children, user }: { children: ReactNode; user: ShellUser | null }) {
@@ -26,7 +29,7 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
       <aside className="hidden w-60 shrink-0 border-r border-line bg-canvas/60 backdrop-blur-xl md:block">
         <div className="sticky top-0 flex h-screen flex-col">
           <Brand />
-          <Nav />
+          <Nav user={user} />
           <UserBox user={user} />
         </div>
       </aside>
@@ -51,7 +54,7 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
                 <X className="size-4" />
               </button>
             </div>
-            <Nav onNavigate={() => setOpen(false)} />
+            <Nav user={user} onNavigate={() => setOpen(false)} />
             <UserBox user={user} />
           </aside>
         </div>
@@ -122,14 +125,17 @@ function Brand({ compact = false }: { compact?: boolean }) {
   );
 }
 
-function Nav({ onNavigate }: { onNavigate?: () => void }) {
+function Nav({ user, onNavigate }: { user: ShellUser | null; onNavigate?: () => void }) {
   const pathname = usePathname();
+  // Only the tools this account may use.
+  const allowed = user ? allowedTools(user) : [];
+  const tools = TOOLS.filter((t) => allowed.includes(t.id));
 
   return (
     <nav className="px-3 py-2">
       <div className="px-2 pb-2 font-mono text-[10px] tracking-[0.2em] text-subtle uppercase">Tools</div>
       <ul className="space-y-1">
-        {TOOLS.map(({ href, name, icon: Icon, children }) => {
+        {tools.map(({ href, name, icon: Icon, children }) => {
           const active = pathname.startsWith(href);
           return (
             <li key={href}>

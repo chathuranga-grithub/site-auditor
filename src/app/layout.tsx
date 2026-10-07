@@ -29,7 +29,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full">
-        <AppShell user={session ? { username: session.username, role: session.role } : null}>{children}</AppShell>
+        <AppShell user={session ? { username: session.username, role: session.role, tools: session.tools } : null}>{children}</AppShell>
       </body>
     </html>
   );

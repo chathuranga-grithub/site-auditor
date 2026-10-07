@@ -39,7 +39,7 @@ export async function POST(request: Request) {
   }
 
   fails.delete(key);
-  const { token, expires } = await createSessionToken({ uid: user.id, username: user.username, role: user.role });
+  const { token, expires } = await createSessionToken({ uid: user.id, username: user.username, role: user.role, tools: user.tools });
   (await cookies()).set(SESSION_COOKIE, token, { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", path: "/", expires });
-  return Response.json({ ok: true, user: { username: user.username, role: user.role } });
+  return Response.json({ ok: true, user: { username: user.username, role: user.role, tools: user.tools } });
 }

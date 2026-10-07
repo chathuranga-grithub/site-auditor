@@ -137,11 +137,14 @@ Every page and API needs a login (`src/proxy.ts`); the daily CTR job is the only
 - Session: a signed, httpOnly cookie (HMAC with `AUTH_SECRET`, at least 32 characters), valid 7 days. **Sign out** is at the bottom of the sidebar.
 - 5 wrong passwords for a username → that username waits 10 minutes.
 
-**Add a user, or set a new password** (uses `DATABASE_URL` from `.env.local`):
+**Permissions:** an **admin** can use every tool. A **user** can only use the tools on their account (`audit`, `rankings`, `visit`, `ctr`): the sidebar shows only those, other pages send them back to their tool, and other APIs answer 403.
+
+**Add a user, or change a password / tools** (uses `DATABASE_URL` from `.env.local`):
 
 ```
 npm run user:create -- <username> "<password>" admin
-npm run user:create -- <username> "<password>" user
+npm run user:create -- <username> "<password>" user audit
+npm run user:create -- <username> "<password>" user audit,rankings,ctr
 ```
 
 Passwords need at least 8 characters. On Vercel, `AUTH_SECRET` and `DATABASE_URL` must be set in Environment Variables.

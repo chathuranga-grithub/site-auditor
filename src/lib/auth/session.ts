@@ -2,6 +2,8 @@
 // AUTH_SECRET, so it can't be forged or edited; httpOnly, so page scripts can't read it.
 // Web Crypto only, so it works in the proxy as well as in route handlers.
 
+import { isToolId, type ToolId } from "./permissions";
+
 export const SESSION_COOKIE = "seo_auditor_session";
 export const SESSION_DAYS = 7;
 
@@ -11,6 +13,8 @@ export interface Session {
   uid: number;
   username: string;
   role: Role;
+  /** Tools this account may use; null = all (admins). */
+  tools: ToolId[] | null;
   /** Expiry, seconds since 1970. */
   exp: number;
 }
@@ -33,7 +37,7 @@ async function hmac(data: string): Promise<string> {
   return b64url(new Uint8Array(await crypto.subtle.sign("HMAC", key, enc.encode(data))));
 }
 
-export async function createSessionToken(user: { uid: number; username: string; role: Role }): Promise<{ token: string; expires: Date }> {
+export async function createSessionToken(user: { uid: number; username: string; role: Role; tools: ToolId[] | null }): Promise<{ token: string; expires: Date }> {
   const exp = Math.floor(Date.now() / 1000) + SESSION_DAYS * 86_400;
   const body = b64url(enc.encode(JSON.stringify({ ...user, exp })));
   return { token: `${body}.${await hmac(body)}`, expires: new Date(exp * 1000) };
@@ -49,6 +53,7 @@ export async function readSessionToken(token: string | undefined | null): Promis
   try {
     const s = JSON.parse(new TextDecoder().decode(fromB64url(body))) as Session;
     if (typeof s.uid !== "number" || typeof s.username !== "string" || (s.role !== "admin" && s.role !== "user")) return null;
+    if (s.tools !== null && !(Array.isArray(s.tools) && s.tools.every(isToolId))) return null;
     return s.exp > Date.now() / 1000 ? s : null;
   } catch {
     return null;

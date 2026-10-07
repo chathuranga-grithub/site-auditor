@@ -3,7 +3,11 @@
 
 import { ChartSpline, MousePointerClick, ScanSearch, TrendingUp, type LucideIcon } from "lucide-react";
 
+import type { ToolId } from "@/lib/auth/permissions";
+
 export interface Tool {
+  /** Permission id: which accounts may see and use the tool (src/lib/auth/permissions.ts). */
+  id: ToolId;
   /** Route, e.g. "/audit". */
   href: string;
   name: string;
@@ -15,24 +19,28 @@ export interface Tool {
 
 export const TOOLS: Tool[] = [
   {
+    id: "audit",
     href: "/audit",
     name: "Site Audit",
     description: "Crawl a site from its sitemap and homepage. Finds orphan pages, broken internal links and redirects.",
     icon: ScanSearch,
   },
   {
+    id: "rankings",
     href: "/rankings",
     name: "Keyword Rankings",
     description: "Top Google results for a keyword in any country, with an on-page SEO comparison of each ranking page.",
     icon: TrendingUp,
   },
   {
+    id: "visit",
     href: "/visit-test",
     name: "Visit Test",
     description: "Runs on this computer: visits every page of a company site through a Vietnam proxy, on desktop and phone, and logs what works.",
     icon: MousePointerClick,
   },
   {
+    id: "ctr",
     href: "/ctr",
     name: "CTR Tracker",
     description: "Follow a keyword for a site over time with real data: Google position, Search Console clicks and CTR, and time on page, against goals.",

@@ -5,6 +5,7 @@
 import { randomBytes, scrypt as scryptCb, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 import { neon } from "@neondatabase/serverless";
+import { isToolId, type ToolId } from "./permissions";
 import type { Role } from "./session";
 
 const scrypt = promisify(scryptCb) as (password: string, salt: Buffer, keylen: number, opts: { N: number; r: number; p: number }) => Promise<Buffer>;
@@ -15,6 +16,8 @@ export interface User {
   id: number;
   username: string;
   role: Role;
+  /** Tools a "user" may use; null for admins (all tools). */
+  tools: ToolId[] | null;
   active: boolean;
 }
 
@@ -27,6 +30,8 @@ export const USERS_SCHEMA = `CREATE TABLE IF NOT EXISTS app_users (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_login_at TIMESTAMPTZ
 )`;
+/** Added after the first version of the table. */
+export const USERS_MIGRATIONS = [`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS tools TEXT[]`];
 
 type Query = (text: string, params?: unknown[]) => Promise<Record<string, unknown>[]>;
 let testQuery: Query | null = null;
@@ -46,7 +51,10 @@ async function db(): Promise<Query> {
     q = (text, params = []) => sql.query(text, params) as Promise<Record<string, unknown>[]>;
   }
   const run = q;
-  ready ??= run(USERS_SCHEMA).then(
+  ready ??= (async () => {
+    await run(USERS_SCHEMA);
+    for (const m of USERS_MIGRATIONS) await run(m);
+  })().then(
     () => undefined,
     (err) => {
       ready = null;
@@ -77,25 +85,30 @@ export async function verifyPassword(password: string, stored: string): Promise<
 /** The user if the username and password match an active account; null otherwise. */
 export async function checkLogin(username: string, password: string): Promise<User | null> {
   const q = await db();
-  const rows = await q(`SELECT id, username, role, active, password_hash FROM app_users WHERE username = $1`, [normalizeUsername(username)]);
+  const rows = await q(`SELECT id, username, role, tools, active, password_hash FROM app_users WHERE username = $1`, [normalizeUsername(username)]);
   const row = rows[0];
   // Hash anyway when the user doesn't exist, so response time doesn't reveal which usernames exist.
   const ok = await verifyPassword(password, (row?.password_hash as string) ?? DUMMY_HASH);
   if (!row || !ok || !row.active) return null;
   await q(`UPDATE app_users SET last_login_at = now() WHERE id = $1`, [row.id]);
-  return { id: Number(row.id), username: String(row.username), role: row.role as Role, active: true };
+  return { id: Number(row.id), username: String(row.username), role: row.role as Role, tools: toolsOf(row.role as Role, row.tools), active: true };
 }
 
-export async function upsertUser(username: string, password: string, role: Role): Promise<User> {
+export async function upsertUser(username: string, password: string, role: Role, tools: ToolId[] | null = null): Promise<User> {
   const q = await db();
   const rows = await q(
-    `INSERT INTO app_users (username, password_hash, role) VALUES ($1, $2, $3)
-     ON CONFLICT (username) DO UPDATE SET password_hash = EXCLUDED.password_hash, role = EXCLUDED.role, active = true
-     RETURNING id, username, role, active`,
-    [normalizeUsername(username), await hashPassword(password), role],
+    `INSERT INTO app_users (username, password_hash, role, tools) VALUES ($1, $2, $3, $4)
+     ON CONFLICT (username) DO UPDATE SET password_hash = EXCLUDED.password_hash, role = EXCLUDED.role, tools = EXCLUDED.tools, active = true
+     RETURNING id, username, role, tools, active`,
+    [normalizeUsername(username), await hashPassword(password), role, role === "admin" ? null : (tools ?? [])],
   );
   const r = rows[0];
-  return { id: Number(r.id), username: String(r.username), role: r.role as Role, active: Boolean(r.active) };
+  return { id: Number(r.id), username: String(r.username), role: r.role as Role, tools: toolsOf(r.role as Role, r.tools), active: Boolean(r.active) };
+}
+
+function toolsOf(role: Role, raw: unknown): ToolId[] | null {
+  if (role === "admin") return null;
+  return Array.isArray(raw) ? raw.filter(isToolId) : [];
 }
 
 // A fixed hash of a random password, used only to spend the same time on unknown usernames.
