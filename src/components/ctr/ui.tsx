@@ -3,10 +3,10 @@
 // Auto CTR: pieces shared by the dashboard, campaign list, form and campaign page.
 
 import Link from "next/link";
-import type { ReactNode } from "react";
-import { CircleCheck, CircleDashed, CircleX, Pause, TriangleAlert } from "lucide-react";
+import { useEffect, type ReactNode } from "react";
+import { CircleCheck, CircleDashed, CircleX, Pause, Square, Trash2, TriangleAlert } from "lucide-react";
 import type { CampaignSummary, Health } from "@/lib/campaigns/metrics";
-import type { Campaign, CampaignStatus, CtrSetup } from "@/lib/campaigns/types";
+import { visitPlanProgress, type Campaign, type CampaignStatus, type CtrSetup } from "@/lib/campaigns/types";
 import { Notice } from "@/components/ui/primitives";
 
 export interface CampaignItem {
@@ -27,14 +27,17 @@ export function PageHeader({ section, title, intro, actions }: { section: string
   );
 }
 
+/** Search Console and GA4: not used by campaigns for now, so not asked for. Set true to bring them back. */
+const GOOGLE_CONNECTOR = false;
+
 /** What still needs connecting, in plain steps. */
 export function SetupNotice({ setup }: { setup: CtrSetup | null }) {
   if (!setup) return null;
   const missing: ReactNode[] = [];
   if (!setup.database) missing.push(<>Database: in Vercel, <b>Storage → Create → Neon</b>; it adds <code>DATABASE_URL</code>. Add it to <code>.env.local</code> too.</>);
-  if (!setup.searchConsole)
+  if (GOOGLE_CONNECTOR && !setup.searchConsole)
     missing.push(<>Google (Search Console and GA4): create a service account, put its JSON key in <code>GOOGLE_SERVICE_ACCOUNT_JSON</code>, and add its email as a user of each site.</>);
-  if (!setup.serp) missing.push(<>Google position: <code>SERPER_API_KEY</code> (already used by Keyword Rankings).</>);
+  if (!setup.serp) missing.push(<>Google position: read in a browser through the Vietnam proxy, so it&apos;s only checked when the app runs on a computer.</>);
   if (!missing.length) return null;
   return (
     <Notice tone="warning">
@@ -44,7 +47,7 @@ export function SetupNotice({ setup }: { setup: CtrSetup | null }) {
           <li key={i}>{m}</li>
         ))}
       </ul>
-      {setup.serviceAccountEmail && (
+      {GOOGLE_CONNECTOR && setup.serviceAccountEmail && (
         <div className="mt-1 text-xs">
           Service account to add in Search Console and GA4: <code>{setup.serviceAccountEmail}</code>
         </div>
@@ -70,12 +73,91 @@ export function HealthBadge({ health }: { health: Health }) {
 }
 
 export function StatusBadge({ status }: { status: CampaignStatus }) {
-  const style = status === "active" ? "text-status-good ring-status-good/40" : status === "paused" ? "text-status-warning ring-status-warning/40" : "text-muted ring-line-strong";
+  const style =
+    status === "active"
+      ? "text-status-good ring-status-good/40"
+      : status === "paused"
+        ? "text-status-warning ring-status-warning/40"
+        : status === "stopped"
+          ? "text-status-critical ring-status-critical/40"
+          : "text-muted ring-line-strong";
   return (
     <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-mono text-[10px] tracking-wide uppercase ring-1 ${style}`}>
       {status === "paused" && <Pause className="size-2.5" aria-hidden />}
+      {status === "stopped" && <Square className="size-2.5" aria-hidden />}
       {status}
     </span>
+  );
+}
+
+/** What the popup says before stopping or deleting a campaign. */
+export const CONFIRM = {
+  stop: {
+    title: "Stop this campaign?",
+    text: "Tracking ends now and its data is kept.",
+    warning: "It can't be started again.",
+    confirmLabel: "Stop",
+  },
+  delete: {
+    title: "Delete this campaign?",
+    text: "The campaign and all its data are removed.",
+    warning: "This can't be undone.",
+    confirmLabel: "Delete",
+  },
+} as const;
+
+/** Pause, Resume, Stop, Check now and Run visit only apply to these. */
+export function isOpen(status: CampaignStatus) {
+  return status === "active" || status === "paused";
+}
+
+/**
+ * Confirm before stopping or deleting a campaign. Escape or a click outside counts as Cancel.
+ */
+export function CampaignConfirm({ kind, campaign: c, onConfirm, onCancel }: { kind: keyof typeof CONFIRM; campaign: Campaign; onConfirm: () => void; onCancel: () => void }) {
+  const t = CONFIRM[kind];
+  const Icon = kind === "stop" ? Square : Trash2;
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onCancel();
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4 motion-safe:animate-fade-in"
+      onClick={onCancel}
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="confirm-title"
+      aria-describedby="confirm-text"
+    >
+      <div className="w-full max-w-sm rounded-2xl border border-line-strong bg-surface-solid p-5 shadow-2xl motion-safe:animate-pop-in" onClick={(e) => e.stopPropagation()}>
+        <div className="flex gap-3.5">
+          <span className="grid size-10 shrink-0 place-items-center rounded-full bg-status-critical/15 text-status-critical">
+            <Icon className="size-4.5" aria-hidden />
+          </span>
+          <div className="min-w-0">
+            <h2 id="confirm-title" className="font-semibold text-ink">
+              {t.title}
+            </h2>
+            <p className="mt-0.5 truncate font-mono text-xs text-link">{c.keyword}</p>
+            <p id="confirm-text" className="mt-2 text-sm text-muted">
+              {t.text} {t.warning}
+            </p>
+          </div>
+        </div>
+        <div className="mt-5 grid grid-cols-2 gap-2">
+          <button type="button" onClick={onCancel} autoFocus className="h-10 rounded-lg border border-line-strong bg-surface text-sm font-medium text-ink transition hover:bg-surface-2">
+            Cancel
+          </button>
+          <button type="button" onClick={onConfirm} className="h-10 rounded-lg bg-status-critical text-sm font-semibold text-white transition hover:brightness-110">
+            {t.confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -83,13 +165,16 @@ export function StatusBadge({ status }: { status: CampaignStatus }) {
 export function CampaignTable({ items, actions }: { items: CampaignItem[]; actions?: (item: CampaignItem) => ReactNode }) {
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[860px] text-left text-sm">
+      <table className="w-full min-w-[960px] text-left text-sm">
         <thead className="border-b border-line font-mono text-[10px] tracking-[0.12em] text-subtle uppercase">
           <tr>
             <th className="px-4 py-2.5 font-medium">Keyword · site</th>
             <th className="px-3 py-2.5 text-right font-medium">Position</th>
             <th className="px-3 py-2.5 text-right font-medium">CTR (7 days)</th>
             <th className="px-3 py-2.5 text-right font-medium">Clicks (7 days)</th>
+            <th className="px-3 py-2.5 text-right font-medium" title="Visit runs done so far, out of the plan's total; today's runs done out of today's plan, and the balance">
+              Visits
+            </th>
             <th className="px-3 py-2.5 font-medium">Result</th>
             <th className="px-3 py-2.5 font-medium">Progress</th>
             {actions && <th className="px-3 py-2.5" />}
@@ -98,6 +183,7 @@ export function CampaignTable({ items, actions }: { items: CampaignItem[]; actio
         <tbody className="divide-y divide-line">
           {items.map((item) => {
             const { campaign: c, summary: s } = item;
+            const plan = visitPlanProgress(c, s.dayNumber);
             return (
               <tr key={c.id} className="align-top hover:bg-surface-2">
                 <td className="max-w-0 px-4 py-2.5">
@@ -122,6 +208,17 @@ export function CampaignTable({ items, actions }: { items: CampaignItem[]; actio
                       {s.growthPct}% vs last week
                     </span>
                   )}
+                </td>
+                <td className="px-3 py-2.5 text-right font-mono text-xs tabular-nums">
+                  {s.visitsDone.toLocaleString()}
+                  <span className="text-subtle"> / {plan.total.toLocaleString()}</span>
+                  <span className="block text-[10px] text-subtle">
+                    {isOpen(c.status)
+                      ? `today ${s.visitsDoneToday} / ${plan.today.toLocaleString()} · ${Math.max(0, plan.total - s.visitsDone).toLocaleString()} left`
+                      : c.status === "stopped"
+                        ? "ended early"
+                        : "finished"}
+                  </span>
                 </td>
                 <td className="px-3 py-2.5">
                   <HealthBadge health={s.health} />
@@ -153,82 +250,6 @@ export function Progress({ day, total }: { day: number; total: number }) {
         <div className="h-full rounded-full bg-series-1" style={{ width: `${pct}%` }} />
       </div>
     </div>
-  );
-}
-
-export interface ChartPoint {
-  day: string;
-  value: number | null;
-}
-
-/**
- * Small line chart for one daily series, with an optional dashed goal line. `invert` puts lower
- * values on top (Google position: 1 is best). Missing days leave a gap.
- */
-export function LineChart({ points, goal, invert = false, unit = "", label }: { points: ChartPoint[]; goal?: number | null; invert?: boolean; unit?: string; label: string }) {
-  const W = 600;
-  const H = 160;
-  const pad = { l: 36, r: 10, t: 10, b: 22 };
-  const values = points.map((p) => p.value).filter((v): v is number => v != null);
-  if (!values.length) return <div className="grid h-40 place-items-center text-xs text-subtle">No data yet</div>;
-  let lo = Math.min(...values, goal ?? Infinity);
-  let hi = Math.max(...values, goal ?? -Infinity);
-  if (lo === hi) [lo, hi] = [lo - 1, hi + 1];
-  const x = (i: number) => pad.l + (points.length === 1 ? (W - pad.l - pad.r) / 2 : (i / (points.length - 1)) * (W - pad.l - pad.r));
-  const y = (v: number) => {
-    const t = (v - lo) / (hi - lo);
-    return pad.t + (invert ? t : 1 - t) * (H - pad.t - pad.b);
-  };
-  const segments: string[] = [];
-  let current = "";
-  points.forEach((p, i) => {
-    if (p.value == null) {
-      if (current) segments.push(current);
-      current = "";
-      return;
-    }
-    current += `${current ? "L" : "M"}${x(i).toFixed(1)},${y(p.value).toFixed(1)}`;
-  });
-  if (current) segments.push(current);
-  const fmt = (v: number) => `${Math.round(v * 10) / 10}${unit}`;
-  const top = invert ? lo : hi;
-  const bottom = invert ? hi : lo;
-
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="h-40 w-full" role="img" aria-label={label}>
-      <line x1={pad.l} x2={W - pad.r} y1={pad.t} y2={pad.t} stroke="var(--color-line)" />
-      <line x1={pad.l} x2={W - pad.r} y1={H - pad.b} y2={H - pad.b} stroke="var(--color-line)" />
-      <text x={pad.l - 6} y={pad.t + 4} textAnchor="end" className="fill-subtle font-mono text-[10px]">
-        {fmt(top)}
-      </text>
-      <text x={pad.l - 6} y={H - pad.b + 4} textAnchor="end" className="fill-subtle font-mono text-[10px]">
-        {fmt(bottom)}
-      </text>
-      {goal != null && (
-        <>
-          <line x1={pad.l} x2={W - pad.r} y1={y(goal)} y2={y(goal)} stroke="var(--color-status-good)" strokeDasharray="5 4" strokeOpacity=".8" />
-          <text x={W - pad.r} y={y(goal) - 4} textAnchor="end" className="fill-status-good font-mono text-[10px]">
-            goal {fmt(goal)}
-          </text>
-        </>
-      )}
-      {segments.map((d, i) => (
-        <path key={i} d={d} fill="none" stroke="var(--color-series-1)" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
-      ))}
-      {points.map((p, i) =>
-        p.value == null ? null : (
-          <circle key={p.day} cx={x(i)} cy={y(p.value)} r="2.5" fill="var(--color-series-1)">
-            <title>{`${p.day}: ${fmt(p.value)}`}</title>
-          </circle>
-        ),
-      )}
-      <text x={pad.l} y={H - 6} className="fill-subtle font-mono text-[10px]">
-        {points[0].day}
-      </text>
-      <text x={W - pad.r} y={H - 6} textAnchor="end" className="fill-subtle font-mono text-[10px]">
-        {points[points.length - 1].day}
-      </text>
-    </svg>
   );
 }
 

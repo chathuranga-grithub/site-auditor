@@ -6,6 +6,7 @@ import { collectCampaign, ctrSetup } from "@/lib/campaigns/collect";
 import { NotConfiguredError, createCampaign, getCampaign, listCampaigns, listDays } from "@/lib/campaigns/db";
 import { summarize } from "@/lib/campaigns/metrics";
 import { todayInVietnam } from "@/lib/campaigns/site";
+import { startCampaignVisit } from "@/lib/campaigns/visits";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -35,6 +36,8 @@ export async function POST(request: Request) {
   try {
     const today = todayInVietnam();
     const campaign = await createCampaign(input, today);
+    // An active campaign runs its visit through the proxy (on the server; pages follow its console).
+    startCampaignVisit(campaign);
     // First reading right away, so the campaign isn't empty until tomorrow.
     const first = await collectCampaign(campaign, today).catch((err: unknown) => ({ problems: [err instanceof Error ? err.message : String(err)] }));
     return Response.json({ campaign: (await getCampaign(campaign.id)) ?? campaign, problems: first.problems }, { status: 201 });

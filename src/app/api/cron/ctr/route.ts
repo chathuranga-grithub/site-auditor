@@ -1,4 +1,6 @@
-// GET /api/cron/ctr — called once a day by Vercel Cron (vercel.json). Checks every active campaign.
+// GET /api/cron/ctr — called once a day by Vercel Cron (vercel.json). Checks every active campaign:
+// Search Console / GA4 and the end date. The Google position needs a browser, so on Vercel it's
+// skipped; the computer running the app checks it (src/lib/campaigns/scheduler.ts).
 // Vercel sends "Authorization: Bearer <CRON_SECRET>"; anything else is refused.
 
 import { errorResponse } from "@/lib/campaigns/api";

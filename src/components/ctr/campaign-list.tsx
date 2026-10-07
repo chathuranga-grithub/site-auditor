@@ -1,13 +1,13 @@
 "use client";
 
-// Auto CTR: every saved campaign, with status filters and pause / resume / delete.
+// Auto CTR: every saved campaign, with status filters and pause / resume / stop / delete.
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { Pause, Play, Plus, Trash2 } from "lucide-react";
-import type { CampaignStatus, CtrSetup } from "@/lib/campaigns/types";
+import { Pause, Play, Plus, Square, Trash2 } from "lucide-react";
+import type { Campaign, CampaignStatus, CtrSetup } from "@/lib/campaigns/types";
 import { Notice, Panel, buttonClass } from "@/components/ui/primitives";
-import { CampaignTable, PageHeader, SetupNotice, api, type CampaignItem } from "./ui";
+import { CONFIRM, CampaignConfirm, CampaignTable, PageHeader, SetupNotice, api, isOpen, type CampaignItem } from "./ui";
 
 type Filter = "all" | CampaignStatus;
 
@@ -15,20 +15,22 @@ export function CampaignList() {
   const [data, setData] = useState<{ items: CampaignItem[]; setup: CtrSetup } | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
   const [error, setError] = useState<string | null>(null);
+  // The campaign and action waiting for "yes" in the popup.
+  const [confirming, setConfirming] = useState<{ campaign: Campaign; action: keyof typeof CONFIRM } | null>(null);
 
   const load = useCallback(() => api<{ items: CampaignItem[]; setup: CtrSetup }>("/api/ctr/campaigns").then(setData, (e: Error) => setError(e.message)), []);
   useEffect(() => {
     load();
   }, [load]);
 
-  async function act(id: number, action: "pause" | "resume" | "delete") {
+  async function act(id: number, action: "pause" | "resume" | "stop" | "delete") {
     setError(null);
     try {
       if (action === "delete") {
-        if (!confirm("Delete this campaign and all its saved data?")) return;
         await api(`/api/ctr/campaigns/${id}`, { method: "DELETE" });
       } else {
-        await api(`/api/ctr/campaigns/${id}`, { method: "PATCH", body: JSON.stringify({ status: action === "pause" ? "paused" : "active" }) });
+        const status = action === "pause" ? "paused" : action === "stop" ? "stopped" : "active";
+        await api(`/api/ctr/campaigns/${id}`, { method: "PATCH", body: JSON.stringify({ status }) });
       }
       await load();
     } catch (e) {
@@ -45,7 +47,7 @@ export function CampaignList() {
       <PageHeader
         section="Campaigns"
         title="Campaigns"
-        intro="Every saved campaign. Open one for its charts, daily numbers and change log."
+        intro="Every saved campaign. Open one for its charts and daily numbers."
         actions={
           <Link href="/ctr/new" className={buttonClass.primary}>
             <Plus className="size-4" /> New campaign
@@ -59,7 +61,7 @@ export function CampaignList() {
         title={`Campaigns · ${shown.length}`}
         actions={
           <div className="flex gap-1.5" role="group" aria-label="Show">
-            {(["all", "active", "paused", "finished"] as const).map((f) => (
+            {(["all", "active", "paused", "finished", "stopped"] as const).map((f) => (
               <button
                 key={f}
                 type="button"
@@ -91,7 +93,12 @@ export function CampaignList() {
                     <Play className="size-3.5" />
                   </IconButton>
                 )}
-                <IconButton label="Delete" onClick={() => act(c.id, "delete")} danger>
+                {isOpen(c.status) && (
+                  <IconButton label="Stop" onClick={() => setConfirming({ campaign: c, action: "stop" })} danger>
+                    <Square className="size-3.5" />
+                  </IconButton>
+                )}
+                <IconButton label="Delete" onClick={() => setConfirming({ campaign: c, action: "delete" })} danger>
                   <Trash2 className="size-3.5" />
                 </IconButton>
               </span>
@@ -101,6 +108,18 @@ export function CampaignList() {
           <div className="px-4 py-10 text-center text-sm text-muted">No campaigns here yet.</div>
         )}
       </Panel>
+
+      {confirming && (
+        <CampaignConfirm
+          kind={confirming.action}
+          campaign={confirming.campaign}
+          onCancel={() => setConfirming(null)}
+          onConfirm={() => {
+            setConfirming(null);
+            act(confirming.campaign.id, confirming.action);
+          }}
+        />
+      )}
     </div>
   );
 }

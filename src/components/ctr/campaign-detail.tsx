@@ -1,21 +1,62 @@
 "use client";
 
-// Auto CTR: one campaign. Goals vs real numbers, daily charts, change log, and the daily data.
+// Auto CTR: one campaign. Its visit to the site through the proxy runs on the server while the
+// campaign is active (src/lib/campaigns/visits.ts); this page shows its console and results, the same
+// live. Then goals vs real numbers, visits done vs the plan, daily data.
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { Loader2, Pause, Play, RefreshCw, Trash2 } from "lucide-react";
-import { summarize } from "@/lib/campaigns/metrics";
+import { useCallback, useEffect, useState } from "react";
+import { ArrowLeft, Loader2, Pause, Play, RefreshCw, Square, Trash2 } from "lucide-react";
+import { daysBetween, summarize } from "@/lib/campaigns/metrics";
 import { todayInVietnam } from "@/lib/campaigns/site";
-import type { Campaign, CampaignDay, CampaignNote } from "@/lib/campaigns/types";
+import { plannedVisits, visitPlanProgress, type Campaign, type CampaignDay } from "@/lib/campaigns/types";
 import { Notice, Panel, StatTile, buttonClass } from "@/components/ui/primitives";
-import { HealthBadge, LineChart, PageHeader, Progress, StatusBadge, api } from "./ui";
+import { VisitRunView, useVisitRun } from "@/components/visit/visit-run";
+import { CONFIRM, CampaignConfirm, isOpen, HealthBadge, PageHeader, Progress, StatusBadge, api } from "./ui";
+
+const HEARTBEAT_MS = 5 * 60_000;
+
+interface Heartbeat {
+  status: Campaign["status"];
+  canRunVisits: boolean;
+  visit: { running: boolean; startedAt: number; run: number; runs: number; pages: number; lastEventAt: number | null } | null;
+  at: number;
+}
+
+/** One line for the browser console, e.g. "up · active · visit running 12m, 37 pages, last line 4s ago". */
+function heartbeatText(h: Heartbeat): string {
+  const ago = (ms: number) => (ms < 60_000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60_000)}m`);
+  if (h.status !== "active") return `campaign is ${h.status}`;
+  if (!h.canRunVisits) return "up · active · visits don't run here (not on a computer)";
+  if (!h.visit) return "up · active · no visit since the app started";
+  const v = h.visit;
+  const last = v.lastEventAt ? `, last line ${ago(h.at - v.lastEventAt)} ago` : "";
+  const run = v.runs > 1 ? ` (run ${v.run} of ${v.runs})` : "";
+  return v.running
+    ? `up · active · visit running${run} ${ago(h.at - v.startedAt)}, ${v.pages} pages${last}`
+    : `up · active · visit finished${run}, ${v.pages} pages${last}`;
+}
+
+/**
+ * Active campaigns: visit runs done (counted as each one finishes) against the visit plan (day 1
+ * visits, compounded by the daily increase): today, so far, and what's left of the plan's total.
+ */
+function VisitPlanTiles({ campaign: c, day, done, doneToday }: { campaign: Campaign; day: number; done: number; doneToday: number }) {
+  const plan = visitPlanProgress(c, day);
+  return (
+    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <StatTile label="Visits today" value={`${doneToday} / ${plan.today.toLocaleString()}`} detail={`done / planned · day ${day} of ${c.durationDays}`} />
+      <StatTile label="Visits so far" value={`${done.toLocaleString()} / ${plan.soFar.toLocaleString()}`} detail="done / planned up to today" />
+      <StatTile label="Balance" value={Math.max(0, plan.total - done).toLocaleString()} detail={`left of ${plan.total.toLocaleString()} planned in total`} />
+      <StatTile label="Plan" value={`${plan.total.toLocaleString()} visits`} detail={`${c.day1Visits} on day 1, +${c.dailyIncreasePct}% a day`} />
+    </div>
+  );
+}
 
 interface Detail {
   campaign: Campaign;
   days: CampaignDay[];
-  notes: CampaignNote[];
 }
 
 export function CampaignDetail({ id }: { id: number }) {
@@ -24,12 +65,48 @@ export function CampaignDetail({ id }: { id: number }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [problems, setProblems] = useState<string[]>([]);
-  const [note, setNote] = useState("");
+  // Answer of the last "Check ranking": Google position now (null = not in the top 10).
+  const [ranking, setRanking] = useState<{ position: number | null } | null>(null);
+  // Waiting for "yes" in the popup.
+  const [confirming, setConfirming] = useState<keyof typeof CONFIRM | null>(null);
+
+  const visit = useVisitRun();
+  const { follow } = visit;
 
   const load = useCallback(() => api<Detail>(`/api/ctr/campaigns/${id}`).then(setData, (e: Error) => setError(e.message)), [id]);
   useEffect(() => {
     load();
   }, [load]);
+
+  // The campaign's visit console: what has happened so far, then live while it runs.
+  useEffect(() => follow(id), [follow, id]);
+
+  // A run finished: reload the numbers, so the visits done go up without reloading the page.
+  // (A short delay as well, for a server still on code that counts the run just after "done".)
+  const { report } = visit;
+  useEffect(() => {
+    if (!report) return;
+    load();
+    const t = setTimeout(load, 3000);
+    return () => clearTimeout(t);
+  }, [report, load]);
+
+  // Heartbeat: while an active campaign is open, ask the server every 5 minutes (and once now)
+  // whether it and its visit are still up, and log the answer to the browser console.
+  const active = data?.campaign.status === "active";
+  useEffect(() => {
+    if (!active) return;
+    const beat = () => {
+      const time = new Date().toLocaleTimeString();
+      api<Heartbeat>(`/api/ctr/campaigns/${id}/heartbeat`).then(
+        (h) => console.log(`[campaign ${id}] ${time} ${heartbeatText(h)}`, h),
+        (e: Error) => console.error(`[campaign ${id}] ${time} server not reachable: ${e.message}`),
+      );
+    };
+    beat();
+    const t = setInterval(beat, HEARTBEAT_MS);
+    return () => clearInterval(t);
+  }, [active, id]);
 
   async function run(label: string, fn: () => Promise<unknown>) {
     setBusy(label);
@@ -47,19 +124,8 @@ export function CampaignDetail({ id }: { id: number }) {
   if (error && !data) return <Shell><Notice tone="error">{error}</Notice></Shell>;
   if (!data) return <Shell><div className="py-16 text-center text-sm text-muted">Loading…</div></Shell>;
 
-  const { campaign: c, days, notes } = data;
+  const { campaign: c, days } = data;
   const s = summarize(c, days, todayInVietnam());
-  // The full campaign period on the x axis, so charts show progress through it.
-  const range = dayRange(c.startDate, days.length ? days[days.length - 1].day > c.endDate ? days[days.length - 1].day : c.endDate : c.endDate, days);
-  const byDay = new Map(days.map((d) => [d.day, d]));
-  const series = (f: (d: CampaignDay) => number | null) => range.map((day) => ({ day, value: byDay.has(day) ? f(byDay.get(day)!) : null }));
-
-  async function addNote(e: FormEvent) {
-    e.preventDefault();
-    if (!note.trim()) return;
-    await run("note", () => api(`/api/ctr/campaigns/${id}/notes`, { method: "POST", body: JSON.stringify({ text: note }) }));
-    setNote("");
-  }
 
   return (
     <Shell>
@@ -77,18 +143,48 @@ export function CampaignDetail({ id }: { id: number }) {
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge status={c.status} />
-            <button type="button" className={buttonClass.secondary} disabled={!!busy} onClick={() => run("check", async () => setProblems((await api<{ problems: string[] }>(`/api/ctr/campaigns/${id}/check`, { method: "POST" })).problems))}>
-              {busy === "check" ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />} Check now
-            </button>
-            {c.status !== "finished" && (
+            {isOpen(c.status) && (
               <button
                 type="button"
                 className={buttonClass.secondary}
                 disabled={!!busy}
-                onClick={() => run("status", () => api(`/api/ctr/campaigns/${id}`, { method: "PATCH", body: JSON.stringify({ status: c.status === "active" ? "paused" : "active" }) }))}
+                title="Search Google Vietnam for the keyword now (in a browser, through the proxy) and save where the site ranks. Also runs by itself every day."
+                onClick={() =>
+                  run("check", async () => {
+                    setRanking(null);
+                    const r = await api<{ position: number | null; problems: string[] }>(`/api/ctr/campaigns/${id}/check`, { method: "POST" });
+                    setProblems(r.problems);
+                    if (!r.problems.some((p) => p.startsWith("Google position"))) setRanking({ position: r.position });
+                  })
+                }
+              >
+                {busy === "check" ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />} Check ranking
+              </button>
+            )}
+            {isOpen(c.status) && (
+              <button
+                type="button"
+                className={buttonClass.secondary}
+                disabled={!!busy}
+                onClick={() => {
+                  // The server ends the visit on Pause and starts a new one on Resume.
+                  if (c.status === "active") {
+                    run("status", () => api(`/api/ctr/campaigns/${id}`, { method: "PATCH", body: JSON.stringify({ status: "paused" }) }));
+                  } else {
+                    run("status", async () => {
+                      await api(`/api/ctr/campaigns/${id}`, { method: "PATCH", body: JSON.stringify({ status: "active" }) });
+                      follow(id);
+                    });
+                  }
+                }}
               >
                 {c.status === "active" ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
                 {c.status === "active" ? "Pause" : "Resume"}
+              </button>
+            )}
+            {isOpen(c.status) && (
+              <button type="button" className={buttonClass.secondary} disabled={!!busy} title="End the campaign early, for good (its data is kept)" onClick={() => setConfirming("stop")}>
+                <Square className="size-3.5" /> Stop
               </button>
             )}
             <button
@@ -96,17 +192,46 @@ export function CampaignDetail({ id }: { id: number }) {
               className={buttonClass.secondary}
               disabled={!!busy}
               aria-label="Delete campaign"
-              onClick={() => confirm("Delete this campaign and all its saved data?") && run("delete", async () => {
-                await api(`/api/ctr/campaigns/${id}`, { method: "DELETE" });
-                router.push("/ctr/campaigns");
-              })}
+              title="Delete campaign"
+              onClick={() => setConfirming("delete")}
             >
               <Trash2 className="size-3.5" />
             </button>
           </div>
         }
       />
+      {confirming && (
+        <CampaignConfirm
+          kind={confirming}
+          campaign={c}
+          onCancel={() => setConfirming(null)}
+          onConfirm={() => {
+            const action = confirming;
+            setConfirming(null);
+            if (action === "stop") run("status", () => api(`/api/ctr/campaigns/${id}`, { method: "PATCH", body: JSON.stringify({ status: "stopped" }) }));
+            else
+              run("delete", async () => {
+                await api(`/api/ctr/campaigns/${id}`, { method: "DELETE" });
+                router.push("/ctr/campaigns");
+              });
+          }}
+        />
+      )}
       {error && <Notice tone="error">{error}</Notice>}
+      <VisitRunView run={visit} />
+      {ranking && (
+        <Notice tone="info">
+          {ranking.position != null ? (
+            <>
+              Google ranking today: <strong className="font-mono">#{ranking.position}</strong> for &ldquo;{c.keyword}&rdquo;. Saved to the Google position tile, chart and daily numbers below.
+            </>
+          ) : (
+            <>
+              Not in Google&apos;s top 10 today for &ldquo;{c.keyword}&rdquo;. Saved to the daily numbers below.
+            </>
+          )}
+        </Notice>
+      )}
       {problems.length > 0 && (
         <Notice tone="warning">
           <div className="font-medium">Some numbers couldn&apos;t be read</div>
@@ -133,54 +258,15 @@ export function CampaignDetail({ id }: { id: number }) {
         <StatTile label="Time on page" value={s.engagementSec != null ? `${s.engagementSec}s` : "—"} detail={c.targetEngagementSec != null ? `goal ${c.targetEngagementSec}s` : "Google Analytics"} severity={s.engagementSec != null && c.targetEngagementSec != null ? (s.engagementSec >= c.targetEngagementSec ? "good" : "warning") : undefined} />
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Panel title="Google position (lower is better)" bodyClassName="p-3">
-          <LineChart label="Google position by day" points={series((d) => d.position)} goal={c.targetPosition} invert />
-        </Panel>
-        <Panel title="CTR % (Search Console)" bodyClassName="p-3">
-          <LineChart label="CTR by day" points={series((d) => d.ctr)} goal={c.targetCtr} unit="%" />
-        </Panel>
-        <Panel title="Clicks per day" bodyClassName="p-3">
-          <LineChart label="Clicks by day" points={series((d) => d.clicks)} />
-        </Panel>
-        <Panel title="Impressions per day" bodyClassName="p-3">
-          <LineChart label="Impressions by day" points={series((d) => d.impressions)} />
-        </Panel>
-      </div>
-
-      <Panel title={`Change log · ${notes.length}`} bodyClassName="p-4 space-y-3">
-        <p className="text-xs text-muted">Write down what you changed (new title, faster page, more content), so the charts show what helped.</p>
-        <form onSubmit={addNote} className="flex gap-2">
-          <input
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            maxLength={500}
-            placeholder="e.g. New title and meta description"
-            className="h-9 min-w-0 flex-1 rounded-lg border border-line bg-canvas/60 px-3 text-sm text-ink outline-none placeholder:text-subtle focus:border-accent/60"
-          />
-          <button type="submit" disabled={!note.trim() || !!busy} className={buttonClass.secondary}>
-            Add
-          </button>
-        </form>
-        {notes.length > 0 && (
-          <ul className="divide-y divide-line">
-            {[...notes].reverse().map((n) => (
-              <li key={n.id} className="flex gap-3 py-2 text-sm">
-                <span className="font-mono text-xs text-subtle tabular-nums">{n.day}</span>
-                <span className="text-ink">{n.text}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Panel>
+      {c.status === "active" && <VisitPlanTiles campaign={c} day={s.dayNumber} done={s.visitsDone} doneToday={s.visitsDoneToday} />}
 
       <Panel title={`Daily numbers · ${days.length}`} bodyClassName="">
         {days.length ? (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[820px] text-left font-mono text-xs">
+            <table className="w-full min-w-[900px] text-left font-mono text-xs">
               <thead className="border-b border-line text-[10px] tracking-[0.12em] text-subtle uppercase">
                 <tr>
-                  {["Day", "Position", "Impressions", "Clicks", "CTR", "Mobile / desktop clicks", "Time on page", "Notes"].map((h) => (
+                  {["Day", "Visits (done / planned)", "Position", "Impressions", "Clicks", "CTR", "Mobile / desktop clicks", "Time on page", "Notes"].map((h) => (
                     <th key={h} className="px-3 py-2 font-medium">
                       {h}
                     </th>
@@ -191,6 +277,9 @@ export function CampaignDetail({ id }: { id: number }) {
                 {[...days].reverse().map((d) => (
                   <tr key={d.day} className="align-top">
                     <td className="px-3 py-2 text-muted">{d.day}</td>
+                    <td className="px-3 py-2">
+                      {d.visitsDone} / {plannedVisits(c.day1Visits, c.dailyIncreasePct, Math.max(1, daysBetween(c.startDate, d.day) + 1)).toLocaleString()}
+                    </td>
                     <td className="px-3 py-2">{d.position ?? "–"}</td>
                     <td className="px-3 py-2">{d.impressions ?? "–"}</td>
                     <td className="px-3 py-2">{d.clicks ?? "–"}</td>
@@ -204,27 +293,26 @@ export function CampaignDetail({ id }: { id: number }) {
             </table>
           </div>
         ) : (
-          <div className="px-4 py-10 text-center text-sm text-muted">No numbers yet. The first check runs when the campaign is created, then once a day.</div>
+          <div className="px-4 py-10 text-center text-sm text-muted">No numbers yet. The Google ranking is checked when the campaign starts, then once a day.</div>
         )}
       </Panel>
 
-      <Link href="/ctr/campaigns" className="inline-block text-sm text-muted hover:text-ink">
-        ← All campaigns
-      </Link>
     </Shell>
   );
 }
 
+/** The page frame, with the way back to the list at the top (also while loading or on an error). */
 function Shell({ children }: { children: React.ReactNode }) {
-  return <div className="mx-auto w-full max-w-7xl space-y-5 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">{children}</div>;
-}
-
-/** Every day from start to end (inclusive), plus any saved days outside it. */
-function dayRange(start: string, end: string, days: CampaignDay[]): string[] {
-  const out: string[] = [];
-  const first = days.length && days[0].day < start ? days[0].day : start;
-  for (let d = new Date(`${first}T00:00:00Z`); d.toISOString().slice(0, 10) <= end && out.length < 400; d.setUTCDate(d.getUTCDate() + 1)) {
-    out.push(d.toISOString().slice(0, 10));
-  }
-  return out;
+  return (
+    <div className="mx-auto w-full max-w-7xl space-y-5 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+      <Link
+        href="/ctr/campaigns"
+        className="group inline-flex h-8 items-center gap-1.5 rounded-lg border border-line bg-surface pr-3 pl-2 text-xs font-medium text-muted transition hover:border-line-strong hover:bg-surface-2 hover:text-ink"
+      >
+        <ArrowLeft className="size-3.5 transition group-hover:-translate-x-0.5" aria-hidden />
+        Back to campaigns
+      </Link>
+      {children}
+    </div>
+  );
 }

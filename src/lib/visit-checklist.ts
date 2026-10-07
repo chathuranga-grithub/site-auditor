@@ -1,4 +1,4 @@
-// The Visit Test results checklist: every step the test performed, marked pass / warn / fail.
+// The visit results checklist: every step the test performed, marked pass / warn / fail.
 // Pure function of the report, so the page and "Copy summary" show the same thing.
 
 import { isInternal } from "./url";

@@ -1,22 +1,21 @@
 // Which tools an account may use. Admins: every tool. Other users: the tools listed on their
 // account (app_users.tools). Each tool owns its pages and API routes; the proxy blocks the rest.
 
-export const TOOL_IDS = ["audit", "rankings", "visit", "ctr"] as const;
+export const TOOL_IDS = ["audit", "rankings", "ctr"] as const;
 export type ToolId = (typeof TOOL_IDS)[number];
 
 /** Pages and API routes that belong to each tool. */
 const TOOL_PATHS: Record<ToolId, string[]> = {
   audit: ["/audit", "/api/sitemap", "/api/fetch"],
   rankings: ["/rankings", "/api/serp", "/api/analyze"],
-  visit: ["/visit-test", "/api/visit-test", "/api/proxy-settings"],
   ctr: ["/ctr", "/api/ctr"],
 };
 
 /** Where each tool starts. */
-export const TOOL_HOME: Record<ToolId, string> = { audit: "/audit", rankings: "/rankings", visit: "/visit-test", ctr: "/ctr/campaigns" };
+export const TOOL_HOME: Record<ToolId, string> = { audit: "/audit", rankings: "/rankings", ctr: "/ctr/campaigns" };
 
 /** Pages only admins may open (app settings). */
-const ADMIN_PATHS = ["/settings"];
+const ADMIN_PATHS = ["/settings", "/api/proxy-settings"];
 
 export function isToolId(v: unknown): v is ToolId {
   return typeof v === "string" && (TOOL_IDS as readonly string[]).includes(v);

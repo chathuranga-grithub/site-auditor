@@ -53,7 +53,9 @@ export async function readSessionToken(token: string | undefined | null): Promis
   try {
     const s = JSON.parse(new TextDecoder().decode(fromB64url(body))) as Session;
     if (typeof s.uid !== "number" || typeof s.username !== "string" || (s.role !== "admin" && s.role !== "user")) return null;
-    if (s.tools !== null && !(Array.isArray(s.tools) && s.tools.every(isToolId))) return null;
+    if (s.tools !== null && !Array.isArray(s.tools)) return null;
+    // Older sessions may list tools that no longer exist (e.g. Visit Test): drop them.
+    if (s.tools) s.tools = s.tools.filter(isToolId);
     return s.exp > Date.now() / 1000 ? s : null;
   } catch {
     return null;

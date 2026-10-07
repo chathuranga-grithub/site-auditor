@@ -54,13 +54,17 @@ export async function getProxy(apiUrl: string): Promise<ProxyConfig> {
 
   const data = (body.data ?? {}) as Record<string, unknown>;
   const address = typeof data.proxy === "string" ? data.proxy.trim() : "";
-  // e.g. {"status":"error","mess":"Con lai 177 giay de get proxy moi","nextChange":177}
-  if (body.status !== "success" && typeof body.nextChange === "number" && body.nextChange > 0) {
-    throw new ProxyWaitError(Math.ceil(body.nextChange));
+  // e.g. {"status":"error","mess":"Con lai 177 giay de get proxy moi","nextChange":177}. Right at the end
+  // of the wait it can say 0 seconds left: still a wait, so try again a few seconds later.
+  if (body.status !== "success" && typeof body.nextChange === "number" && body.nextChange >= 0) {
+    throw new ProxyWaitError(Math.max(5, Math.ceil(body.nextChange)));
   }
   if (body.status !== "success" || !/^[\w.-]+:\d{2,5}$/.test(address)) {
     // Providers put their reason in different fields ("mess", "message", "error").
     const reason = [body.mess, body.message, body.error, data.mess].find((v) => typeof v === "string" && v.trim());
+    if (typeof reason === "string" && /het han|khong ton tai/i.test(reason)) {
+      throw new Error(`The proxy API key doesn't exist or has expired ("${reason}"). Renew it with the provider, then save the new link in Settings.`);
+    }
     throw new Error(`The proxy API didn't return a proxy${reason ? `: ${reason}` : "."}`);
   }
 

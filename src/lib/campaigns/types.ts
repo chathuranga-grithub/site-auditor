@@ -3,8 +3,37 @@
 // against goals. Nothing is generated; every number comes from real visitors.
 
 export const MAX_DURATION_DAYS = 365;
+/** Used while the form's Tracking and Goals sections are switched off (they're not sent). */
+export const DEFAULT_DURATION_DAYS = 30;
+export const DEFAULT_TARGET_CTR = 5;
 
-export type CampaignStatus = "active" | "finished" | "paused";
+/** Visit plan: visits on day 1, then compounded by a daily increase. */
+export const DEFAULT_DAY1_VISITS = 10;
+export const MAX_DAY1_VISITS = 1000;
+export const DEFAULT_DAILY_INCREASE_PCT = 5;
+export const MAX_DAILY_INCREASE_PCT = 100;
+
+/** Visits planned for day `n` (1-based): day 1 visits, compounded by the daily increase. */
+export function plannedVisits(day1Visits: number, dailyIncreasePct: number, n: number): number {
+  return Math.round(day1Visits * (1 + dailyIncreasePct / 100) ** (n - 1));
+}
+
+/** Visits planned over the whole campaign. */
+export function plannedVisitsTotal(day1Visits: number, dailyIncreasePct: number, durationDays: number): number {
+  let total = 0;
+  for (let n = 1; n <= durationDays; n++) total += plannedVisits(day1Visits, dailyIncreasePct, n);
+  return total;
+}
+
+/** A campaign's visit plan on day `day`: planned up to and including today, today's, what's left, the total. */
+export function visitPlanProgress(c: Pick<Campaign, "day1Visits" | "dailyIncreasePct" | "durationDays">, day: number) {
+  const soFar = plannedVisitsTotal(c.day1Visits, c.dailyIncreasePct, day);
+  const total = plannedVisitsTotal(c.day1Visits, c.dailyIncreasePct, c.durationDays);
+  return { soFar, today: plannedVisits(c.day1Visits, c.dailyIncreasePct, day), balance: total - soFar, total };
+}
+
+/** finished: reached its end date. stopped: ended early by hand. Neither can be started again. */
+export type CampaignStatus = "active" | "paused" | "finished" | "stopped";
 
 export interface Campaign {
   id: number;
@@ -14,6 +43,9 @@ export interface Campaign {
   pageUrl: string | null;
   country: string;
   durationDays: number;
+  /** Visit plan: visits on day 1, and the % they grow by each day (compounded). */
+  day1Visits: number;
+  dailyIncreasePct: number;
   /** YYYY-MM-DD */
   startDate: string;
   endDate: string;
@@ -51,6 +83,8 @@ export interface CampaignDay {
   desktopImpressions: number | null;
   /** GA4 average engagement time on the page, seconds. */
   engagementSec: number | null;
+  /** Site visit runs that finished that day (Vietnam date). */
+  visitsDone: number;
   /** What couldn't be read that day, per source, in plain words. */
   notes: DayNotes;
 }
@@ -59,7 +93,8 @@ export type DaySource = "serp" | "gsc" | "ga4";
 export type DayNotes = Partial<Record<DaySource, string>>;
 
 /** The columns of a day that one source fills in. */
-export type DayFields = Partial<Omit<CampaignDay, "campaignId" | "day">>;
+/** (Visit runs are counted on their own, addVisitDone.) */
+export type DayFields = Partial<Omit<CampaignDay, "campaignId" | "day" | "visitsDone">>;
 
 export interface CampaignNote {
   id: number;
@@ -75,6 +110,8 @@ export interface NewCampaign {
   keyword: string;
   pageUrl?: string | null;
   durationDays: number;
+  day1Visits: number;
+  dailyIncreasePct: number;
   targetCtr: number;
   targetPosition?: number | null;
   weeklyGrowthPct?: number | null;

@@ -1,6 +1,6 @@
 // Server-only: the saved proxy API link (with its access token). Stored ENCRYPTED in the database
 // (src/lib/secret-settings.ts), never sent back to the browser in full: pages only get a hint.
-// Used by Visit Test. Older versions kept it in .site-auditor.local.json on this computer; that file
+// Used by campaign visits and browser searches. Older versions kept it in .site-auditor.local.json on this computer; that file
 // is moved into the database the first time the link is read, then deleted.
 
 import { promises as fs } from "node:fs";

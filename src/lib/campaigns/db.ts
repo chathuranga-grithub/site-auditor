@@ -47,6 +47,9 @@ const SCHEMA = [
     status TEXT NOT NULL DEFAULT 'active',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
   )`,
+  // Visit plan, added later: older campaigns get the defaults.
+  `ALTER TABLE ctr_campaigns ADD COLUMN IF NOT EXISTS day1_visits INT NOT NULL DEFAULT 10`,
+  `ALTER TABLE ctr_campaigns ADD COLUMN IF NOT EXISTS daily_increase_pct NUMERIC NOT NULL DEFAULT 5`,
   `CREATE TABLE IF NOT EXISTS ctr_days (
     campaign_id INT NOT NULL REFERENCES ctr_campaigns(id) ON DELETE CASCADE,
     day DATE NOT NULL,
@@ -64,6 +67,8 @@ const SCHEMA = [
     notes JSONB NOT NULL DEFAULT '{}'::jsonb,
     PRIMARY KEY (campaign_id, day)
   )`,
+  // Visit runs finished per day, added later.
+  `ALTER TABLE ctr_days ADD COLUMN IF NOT EXISTS visits_done INT NOT NULL DEFAULT 0`,
   `CREATE TABLE IF NOT EXISTS ctr_notes (
     id SERIAL PRIMARY KEY,
     campaign_id INT NOT NULL REFERENCES ctr_campaigns(id) ON DELETE CASCADE,
@@ -87,7 +92,12 @@ async function db(): Promise<Query> {
 }
 
 const num = (v: unknown) => (v == null ? null : Number(v));
-const isoDay = (v: unknown) => (v instanceof Date ? v.toISOString().slice(0, 10) : String(v).slice(0, 10));
+// The driver reads a DATE as midnight on this computer's clock, so its local date is the day.
+// (toISOString would turn it into UTC: the day before, east of Greenwich.)
+const isoDay = (v: unknown) =>
+  v instanceof Date
+    ? `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, "0")}-${String(v.getDate()).padStart(2, "0")}`
+    : String(v).slice(0, 10);
 const iso = (v: unknown) => (v instanceof Date ? v.toISOString() : String(v));
 
 function toCampaign(r: Record<string, unknown>): Campaign {
@@ -98,6 +108,8 @@ function toCampaign(r: Record<string, unknown>): Campaign {
     pageUrl: (r.page_url as string | null) ?? null,
     country: String(r.country),
     durationDays: Number(r.duration_days),
+    day1Visits: Number(r.day1_visits),
+    dailyIncreasePct: Number(r.daily_increase_pct),
     startDate: isoDay(r.start_date),
     endDate: isoDay(r.end_date),
     targetCtr: Number(r.target_ctr),
@@ -132,6 +144,7 @@ function toDay(r: Record<string, unknown>): CampaignDay {
     mobileImpressions: num(r.mobile_impressions),
     desktopImpressions: num(r.desktop_impressions),
     engagementSec: num(r.engagement_sec),
+    visitsDone: Number(r.visits_done ?? 0),
     notes,
   };
 }
@@ -142,8 +155,8 @@ export async function createCampaign(input: NewCampaign, today: string): Promise
   end.setUTCDate(end.getUTCDate() + input.durationDays - 1);
   const rows = await q(
     `INSERT INTO ctr_campaigns (site_url, keyword, page_url, duration_days, start_date, end_date, target_ctr, target_position,
-       weekly_growth_pct, target_engagement_sec, gsc_property, ga4_property)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+       weekly_growth_pct, target_engagement_sec, gsc_property, ga4_property, day1_visits, daily_increase_pct)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
     [
       input.siteUrl,
       input.keyword,
@@ -157,6 +170,8 @@ export async function createCampaign(input: NewCampaign, today: string): Promise
       input.targetEngagementSec ?? null,
       input.gscProperty || null,
       input.ga4Property || null,
+      input.day1Visits,
+      input.dailyIncreasePct,
     ],
   );
   return toCampaign(rows[0]);
@@ -215,6 +230,23 @@ export async function upsertDay(campaignId: number, day: string, fields: DayFiel
      ON CONFLICT (campaign_id, day) DO ${updates.length ? "UPDATE SET " + updates.join(", ") : "NOTHING"}`,
     [campaignId, day, ...values],
   );
+}
+
+/** One more visit run finished on that day. */
+export async function addVisitDone(campaignId: number, day: string): Promise<void> {
+  const q = await db();
+  await q(
+    `INSERT INTO ctr_days (campaign_id, day, visits_done) VALUES ($1, $2, 1)
+     ON CONFLICT (campaign_id, day) DO UPDATE SET visits_done = ctr_days.visits_done + 1`,
+    [campaignId, day],
+  );
+}
+
+/** Visit runs that finished on `day` (0 if none). */
+export async function visitsDoneOn(campaignId: number, day: string): Promise<number> {
+  const q = await db();
+  const rows = await q(`SELECT visits_done FROM ctr_days WHERE campaign_id = $1 AND day = $2`, [campaignId, day]);
+  return Number(rows[0]?.visits_done ?? 0);
 }
 
 export async function listDays(campaignId: number): Promise<CampaignDay[]> {

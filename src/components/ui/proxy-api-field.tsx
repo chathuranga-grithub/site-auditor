@@ -1,12 +1,11 @@
 "use client";
 
-// The proxy API link: the editable field on the Settings page, and a read-only status for Visit Test.
+// The proxy API link: the editable field on the Settings page.
 // Paste the link once and it's saved encrypted in the database and locked ("Proxy API saved · host…a1b2");
 // Change replaces it, Remove deletes it. The full link never comes back to the browser.
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
-import { KeyRound, Lock, Pencil, Settings, Trash2, TriangleAlert } from "lucide-react";
+import { KeyRound, Lock, Pencil, Trash2 } from "lucide-react";
 
 interface Status {
   saved: boolean;
@@ -19,29 +18,6 @@ interface Status {
 }
 
 const EMPTY: Status = { saved: false, source: null, hint: null };
-
-/** Read-only: whether the proxy link is set, with a link to Settings where admins change it. */
-export function ProxyApiStatusChip() {
-  const [status, setStatus] = useState<Status | null>(null);
-  useEffect(() => {
-    fetch("/api/proxy-settings")
-      .then((r) => r.json())
-      .then(setStatus)
-      .catch(() => setStatus(EMPTY));
-  }, []);
-  const saved = !!status?.saved;
-  return (
-    <div className="flex h-10 min-w-0 items-center gap-2 rounded-lg bg-canvas/60 pr-1 pl-3.5 text-xs">
-      {saved ? <Lock className="size-4 shrink-0 text-status-good" aria-hidden /> : <TriangleAlert className="size-4 shrink-0 text-status-warning" aria-hidden />}
-      <span className={`min-w-0 truncate font-mono ${saved ? "text-ink" : "text-status-warning"}`}>
-        {!status ? "Proxy…" : saved ? `Proxy · ${status.hint}` : status.unreadable ? "Proxy link must be saved again" : "Proxy link not set"}
-      </span>
-      <Link href="/settings" className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-muted hover:bg-surface-2 hover:text-ink" title="Change the proxy link (admins)">
-        <Settings className="size-3" /> Settings
-      </Link>
-    </div>
-  );
-}
 
 export function ProxyApiField({ disabled = false }: { disabled?: boolean }) {
   const [status, setStatus] = useState<Status | null>(null);
