@@ -89,7 +89,7 @@ The third tool, at `/visit-test`. It checks that **every page of a company site 
 
 **Run it:**
 1. Run `npm run dev`, then open http://localhost:3000/visit-test.
-2. Paste the proxy API link, or save it once in `.env.local` as `PROXY_API_URL`. The link and its token stay on the computer.
+2. An admin saves the proxy API link once in **Settings** (bottom of the sidebar). It is stored **encrypted** in the database (AES-256-GCM, key derived from `AUTH_SECRET`, which is not in the database) and never shown in full again; pages only see `host…last4`. `PROXY_API_URL` in `.env.local` still works as a fallback. If `AUTH_SECRET` changes, the saved link can no longer be decrypted: save it again.
 
 **How long it takes:** about 2–4 seconds per page with 3 pages at a time, e.g. 5–10 minutes for a 200-page site on desktop only; the phone check roughly doubles that. Use Stop at any time; the report covers what was done so far.
 

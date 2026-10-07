@@ -1,19 +1,24 @@
 "use client";
 
-// The proxy API link field shared by Visit Test and Auto CTR (new campaign). Paste the link once and it's saved
-// on this computer and locked ("Proxy API saved · host…a1b2"); Change replaces it, Remove deletes it.
-// The full link never comes back to the browser.
+// The proxy API link: the editable field on the Settings page, and a read-only status for Visit Test.
+// Paste the link once and it's saved encrypted in the database and locked ("Proxy API saved · host…a1b2");
+// Change replaces it, Remove deletes it. The full link never comes back to the browser.
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { KeyRound, Lock, Pencil, Settings, Trash2, TriangleAlert } from "lucide-react";
 
 interface Status {
-  local: boolean;
   saved: boolean;
   source: "saved" | "env" | null;
   hint: string | null;
+  /** Saved, but can't be decrypted (AUTH_SECRET changed): save it again. */
+  unreadable?: boolean;
+  updatedBy?: string | null;
+  updatedAt?: string | null;
 }
+
+const EMPTY: Status = { saved: false, source: null, hint: null };
 
 /** Read-only: whether the proxy link is set, with a link to Settings where admins change it. */
 export function ProxyApiStatusChip() {
@@ -22,14 +27,14 @@ export function ProxyApiStatusChip() {
     fetch("/api/proxy-settings")
       .then((r) => r.json())
       .then(setStatus)
-      .catch(() => setStatus({ local: true, saved: false, source: null, hint: null }));
+      .catch(() => setStatus(EMPTY));
   }, []);
   const saved = !!status?.saved;
   return (
     <div className="flex h-10 min-w-0 items-center gap-2 rounded-lg bg-canvas/60 pr-1 pl-3.5 text-xs">
       {saved ? <Lock className="size-4 shrink-0 text-status-good" aria-hidden /> : <TriangleAlert className="size-4 shrink-0 text-status-warning" aria-hidden />}
       <span className={`min-w-0 truncate font-mono ${saved ? "text-ink" : "text-status-warning"}`}>
-        {!status ? "Proxy…" : saved ? `Proxy · ${status.hint}` : status.local ? "Proxy link not set" : "Proxy: local only"}
+        {!status ? "Proxy…" : saved ? `Proxy · ${status.hint}` : status.unreadable ? "Proxy link must be saved again" : "Proxy link not set"}
       </span>
       <Link href="/settings" className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-muted hover:bg-surface-2 hover:text-ink" title="Change the proxy link (admins)">
         <Settings className="size-3" /> Settings
@@ -49,7 +54,7 @@ export function ProxyApiField({ disabled = false }: { disabled?: boolean }) {
     fetch("/api/proxy-settings")
       .then((r) => r.json())
       .then(setStatus)
-      .catch(() => setStatus({ local: true, saved: false, source: null, hint: null }));
+      .catch(() => setStatus(EMPTY));
   }, []);
 
   async function call(method: "POST" | "DELETE", body?: object) {
@@ -73,16 +78,6 @@ export function ProxyApiField({ disabled = false }: { disabled?: boolean }) {
     }
   }
 
-  // On the live site there's nowhere to save the link: say so instead of a field that can't save.
-  if (status && !status.local) {
-    return (
-      <div className="flex h-10 min-w-0 items-center gap-2 rounded-lg bg-canvas/60 px-3.5 text-xs text-muted">
-        <KeyRound className="size-4 shrink-0 text-subtle" aria-hidden />
-        <span className="min-w-0 truncate">The proxy link can only be saved when the app runs on a computer.</span>
-      </div>
-    );
-  }
-
   const locked = !!status?.saved && !editing;
   const save = () => value.trim() && call("POST", { proxyApiUrl: value });
 
@@ -90,7 +85,7 @@ export function ProxyApiField({ disabled = false }: { disabled?: boolean }) {
     return (
       <div className="flex h-10 min-w-0 items-center gap-2 rounded-lg bg-canvas/60 pr-1 pl-3.5 text-sm">
         <Lock className="size-4 shrink-0 text-status-good" aria-hidden />
-        <span className="min-w-0 truncate font-mono text-xs text-ink" title={status?.source === "env" ? "From PROXY_API_URL in .env.local" : "Saved on this computer"}>
+        <span className="min-w-0 truncate font-mono text-xs text-ink" title={status?.source === "env" ? "From PROXY_API_URL in .env.local" : `Saved encrypted in the database${status?.updatedBy ? ` by ${status.updatedBy}` : ""}`}>
           Proxy API saved · {status?.hint}
         </span>
         <span className="ml-auto flex shrink-0 gap-0.5">
@@ -138,7 +133,7 @@ export function ProxyApiField({ disabled = false }: { disabled?: boolean }) {
             }}
             disabled={disabled || busy}
             placeholder="Paste the proxy API link"
-            title="The link that returns {status, data: {proxy: 'ip:port'}}. It's saved on this computer only."
+            title="The link that returns {status, data: {proxy: 'ip:port'}}. Saved encrypted in the database."
             className="h-10 w-full rounded-lg border border-transparent bg-transparent pr-2 pl-10 font-mono text-base text-ink outline-none placeholder:text-subtle focus:border-accent/60 focus:ring-2 focus:ring-accent/20 disabled:opacity-60 sm:text-sm"
           />
         </label>
@@ -156,6 +151,7 @@ export function ProxyApiField({ disabled = false }: { disabled?: boolean }) {
           </button>
         )}
       </div>
+      {status?.unreadable && !error && <div className="mt-1 text-xs text-status-warning">A link is saved but can&apos;t be read (the app&apos;s secret key changed). Paste it again.</div>}
       {error && <div className="mt-1 text-xs text-status-critical">{error}</div>}
     </div>
   );

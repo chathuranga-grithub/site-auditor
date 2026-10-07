@@ -1,36 +1,60 @@
-// Server-only, local only: the saved proxy API link (with its access token). Kept in a file on this
-// computer (.site-auditor.local.json, git-ignored), never sent back to the browser in full.
-// Used by Visit Test and Auto CTR.
+// Server-only: the saved proxy API link (with its access token). Stored ENCRYPTED in the database
+// (src/lib/secret-settings.ts), never sent back to the browser in full: pages only get a hint.
+// Used by Visit Test. Older versions kept it in .site-auditor.local.json on this computer; that file
+// is moved into the database the first time the link is read, then deleted.
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { deleteSecretSetting, readSecretSetting, writeSecretSetting } from "./secret-settings";
 import { isBlockedHost } from "./url";
 
-const FILE = path.join(process.cwd(), ".site-auditor.local.json");
+const NAME = "proxy_api_url";
+const LEGACY_FILE = path.join(process.cwd(), ".site-auditor.local.json");
 
 export interface ProxyApiStatus {
   saved: boolean;
-  /** "saved": the link saved from the page; "env": PROXY_API_URL in .env.local. */
+  /** "saved": saved in Settings (database); "env": PROXY_API_URL in .env.local. */
   source: "saved" | "env" | null;
   /** Safe to show: host and the last 4 characters, e.g. "proxy.shoplike.vn…a1b2". */
   hint: string | null;
+  /** A link is saved but can't be decrypted (AUTH_SECRET changed): save it again. */
+  unreadable?: boolean;
+  updatedBy?: string | null;
+  updatedAt?: string | null;
+}
+
+let migrated: Promise<void> | null = null;
+/** Moves a link saved by an older version (local file) into the database, once. */
+function migrateLegacyFile(): Promise<void> {
+  migrated ??= (async () => {
+    let url: string | null = null;
+    try {
+      const j = JSON.parse(await fs.readFile(LEGACY_FILE, "utf8")) as { proxyApiUrl?: unknown };
+      url = typeof j.proxyApiUrl === "string" && j.proxyApiUrl.trim() ? j.proxyApiUrl.trim() : null;
+    } catch {
+      return; // no old file
+    }
+    if (url && (await readSecretSetting(NAME)).state === "missing") await writeSecretSetting(NAME, url, "moved from this computer");
+    await fs.rm(LEGACY_FILE, { force: true });
+  })().catch((err) => {
+    migrated = null;
+    throw err;
+  });
+  return migrated;
 }
 
 export async function readSavedProxyApi(): Promise<string | null> {
-  try {
-    const j = JSON.parse(await fs.readFile(FILE, "utf8")) as { proxyApiUrl?: unknown };
-    return typeof j.proxyApiUrl === "string" && j.proxyApiUrl.trim() ? j.proxyApiUrl.trim() : null;
-  } catch {
-    return null;
-  }
+  await migrateLegacyFile();
+  const r = await readSecretSetting(NAME);
+  return r.state === "ok" ? r.value : null;
 }
 
-export async function saveProxyApi(url: string): Promise<void> {
-  await fs.writeFile(FILE, JSON.stringify({ proxyApiUrl: url.trim(), savedAt: new Date().toISOString() }, null, 2), { mode: 0o600 });
+export async function saveProxyApi(url: string, updatedBy: string | null): Promise<void> {
+  await writeSecretSetting(NAME, url.trim(), updatedBy);
 }
 
 export async function removeSavedProxyApi(): Promise<void> {
-  await fs.rm(FILE, { force: true });
+  await deleteSecretSetting(NAME);
 }
 
 /** The link to use: one sent with the request, else the saved one, else PROXY_API_URL. */
@@ -39,10 +63,11 @@ export async function resolveProxyApi(fromRequest: unknown): Promise<string> {
 }
 
 export async function proxyApiStatus(): Promise<ProxyApiStatus> {
-  const saved = await readSavedProxyApi();
-  if (saved) return { saved: true, source: "saved", hint: hint(saved) };
+  await migrateLegacyFile();
+  const r = await readSecretSetting(NAME);
+  if (r.state === "ok") return { saved: true, source: "saved", hint: hint(r.value), updatedBy: r.updatedBy, updatedAt: r.updatedAt };
   if (process.env.PROXY_API_URL) return { saved: true, source: "env", hint: hint(process.env.PROXY_API_URL) };
-  return { saved: false, source: null, hint: null };
+  return { saved: false, source: null, hint: null, unreadable: r.state === "unreadable" };
 }
 
 /** A usable proxy API link: http(s) and not a private/local address. */

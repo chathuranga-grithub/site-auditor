@@ -20,8 +20,8 @@ export default async function SettingsPage() {
 
       <Panel title={<Title icon={<KeyRound className="size-3.5" />} text="Proxy" />} bodyClassName="space-y-3 p-4 sm:p-5">
         <p className="text-sm text-muted">
-          The ShopLike proxy API link Visit Test uses for visits from Vietnam. Saved on this computer only
-          (<code>.site-auditor.local.json</code>, never uploaded); the full link is never shown again after saving.
+          The ShopLike proxy API link Visit Test uses for visits from Vietnam. Saved <b className="text-ink">encrypted</b> in the
+          database (the key isn&apos;t in the database), and never shown in full again after saving.
         </p>
         <ProxyApiField />
       </Panel>
