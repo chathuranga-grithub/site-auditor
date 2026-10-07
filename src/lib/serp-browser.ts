@@ -5,6 +5,7 @@
 
 import { existsSync } from "node:fs";
 import type { Browser } from "puppeteer-core";
+import { NO_WEBRTC_ARGS, NO_WEBRTC_SCRIPT } from "./no-webrtc";
 import { getProxyOrReuse } from "./proxy-api";
 import { resolveProxyApi } from "./proxy-settings";
 
@@ -62,8 +63,8 @@ export async function openBrowserSearch(): Promise<BrowserSearch> {
     headless: true,
     args: [
       `--proxy-server=${proxy.server}`,
-      // WebRTC could otherwise go around the proxy and show this computer's IP.
-      "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+      // WebRTC could otherwise go around the proxy and show this computer's IP (src/lib/no-webrtc.ts).
+      ...NO_WEBRTC_ARGS,
       "--lang=vi-VN",
     ],
   });
@@ -73,6 +74,7 @@ export async function openBrowserSearch(): Promise<BrowserSearch> {
       const tab = await browser.newPage();
       try {
         if (proxy.username) await tab.authenticate({ username: proxy.username, password: proxy.password ?? "" });
+        await tab.evaluateOnNewDocument(NO_WEBRTC_SCRIPT);
         await tab.emulateTimezone("Asia/Ho_Chi_Minh");
         await tab.setViewport({ width: 1366, height: 768 });
         const url = new URL("https://www.google.com/search");

@@ -104,9 +104,10 @@ async function run(c: Pick<Campaign, "id" | "siteUrl">, v: LiveVisit) {
       for (;;) {
         try {
           const report = await runVisitTest({ url: c.siteUrl, proxyApiUrl, mobile: true, freshProxy: true, signal, send });
-          // Counted when finished (not stopped), for the visits done per day; before "done", so a page
+          // Counted when finished (not stopped by hand, and not stopped by the run itself: wrong or
+          // unconfirmed proxy IP, proxy died), for the visits done per day; before "done", so a page
           // that reloads its numbers on "done" already sees it.
-          if (!signal.aborted) await addVisitDone(c.id, todayInVietnam()).catch((err: unknown) => console.error(`Campaign ${c.id}: couldn't count the visit:`, err));
+          if (!signal.aborted && !report.stopReason) await addVisitDone(c.id, todayInVietnam()).catch((err: unknown) => console.error(`Campaign ${c.id}: couldn't count the visit:`, err));
           send({ type: "done", report });
           if (signal.aborted) send({ type: "step", message: "Stopped." });
           if (!signal.aborted && v.runs > 1) send({ type: "step", message: v.run < v.runs ? `Run ${v.run} of ${v.runs} finished.` : `All ${v.runs} runs finished.` });

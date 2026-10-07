@@ -6,6 +6,7 @@
 import { chromium, devices, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { getProxy, getProxyOrReuse } from "./proxy-api";
 import { networkType } from "./network-type";
+import { NO_WEBRTC_ARGS, NO_WEBRTC_SCRIPT } from "./no-webrtc";
 import { readSitemap, type SitemapFetcher } from "./sitemap";
 import { isBlockedHost, isInternal, normalizeUrl, shouldSkipCrawl } from "./url";
 import {
@@ -107,15 +108,19 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
     context.setDefaultNavigationTimeout(NAV_TIMEOUT);
     const phone = mobile ? await browser.newContext({ ...PHONE, locale: "vi-VN", timezoneId: "Asia/Ho_Chi_Minh" }) : null;
     phone?.setDefaultNavigationTimeout(NAV_TIMEOUT);
+    // No WebRTC in any page, so nothing can go around the proxy.
+    await context.addInitScript(NO_WEBRTC_SCRIPT);
+    await phone?.addInitScript(NO_WEBRTC_SCRIPT);
 
     // 2. Where does the visit come from? Looked up inside the proxied browser (through the proxy;
     // nothing is sent from this computer's own IP). Wrong or unknown location: stop before opening
     // any page. With a proxy set, the browser never falls back to a direct connection.
     send({ type: "step", message: "Checking the proxy IP (location, network, speed)…" });
-    report.exit = await exitLocation(context);
+    const [exitInfo, ownIp] = await Promise.all([exitLocation(context), ownPublicIp()]);
+    report.exit = exitInfo;
     send({ type: "proxy", proxy: publicProxy, exit: report.exit });
     if (stopped()) return finish(report);
-    report.stopReason = exitProblem(report.exit);
+    report.stopReason = exitProblem(report.exit, ownIp);
     if (report.stopReason) return finish(report);
     const exit = report.exit!;
     send({
@@ -263,9 +268,8 @@ async function launchBrowser(proxy: { server: string; username?: string; passwor
         proxy: { ...proxy, bypass: BROWSER_BACKGROUND_HOSTS.join(",") },
         args: [
           `--host-resolver-rules=${BROWSER_BACKGROUND_HOSTS.map((h) => `MAP ${h} ~NOTFOUND`).join(", ")}`,
-          // WebRTC (video calls, chat widgets) can send UDP straight from this computer, around the
-          // proxy, and show the site our real IP. Only allow it through the proxy.
-          "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+          // WebRTC could otherwise show the site our real IP (src/lib/no-webrtc.ts).
+          ...NO_WEBRTC_ARGS,
         ],
       });
     } catch {
@@ -310,9 +314,29 @@ async function exitLocation(context: BrowserContext): Promise<ExitInfo | null> {
   return null;
 }
 
+/**
+ * This computer's own public IP, asked directly (not through the proxy). Only the IP service sees
+ * it, never the site. Null if no service answered.
+ */
+async function ownPublicIp(): Promise<string | null> {
+  for (const service of IP_SERVICES) {
+    try {
+      const res = await fetch(service, { signal: AbortSignal.timeout(10_000), headers: { Accept: "application/json" } });
+      const ip = ((await res.json()) as { ip?: string }).ip;
+      if (ip) return ip;
+    } catch {
+      /* try the next service */
+    }
+  }
+  return null;
+}
+
 /** Why the test must not continue from this IP, or null when it's the right country through the proxy. */
-function exitProblem(exit: ExitInfo | null): string | null {
+function exitProblem(exit: ExitInfo | null, ownIp: string | null): string | null {
   if (!exit) return "Couldn't confirm the proxy's IP and country, so no pages were opened (the results might not be from the right country). Run the test again.";
+  // Belt and braces: the browser never connects directly with a proxy set, but if the visit would
+  // come from this computer's own IP, stop before the site sees it.
+  if (ownIp && exit.ip === ownIp) return `The visit would come from this computer's own IP (${ownIp}), not the proxy, so no pages were opened.`;
   if (exit.countryCode !== EXPECTED_COUNTRY) {
     const where = new Intl.DisplayNames(["en"], { type: "region" }).of(EXPECTED_COUNTRY);
     return `The proxy's IP (${exit.ip}) is in ${exit.country ?? "an unknown country"}, not ${where}, so no pages were opened. Get a ${where} proxy and run again.`;
