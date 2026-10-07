@@ -1,11 +1,13 @@
 // Server-only: the daily check for one campaign. Reads REAL numbers only:
-// - Google position for the keyword in Vietnam today (Serper, 1–2 search credits);
+// - Google position for the keyword in Vietnam today (read in a browser through the Vietnam proxy,
+//   so only when the app runs on a computer: src/lib/campaigns/scheduler.ts runs it daily there);
 // - Search Console clicks / impressions / CTR / device split, and GA4 time on page, for
 //   GSC_DELAY_DAYS ago (Google's data takes a few days to settle).
 
 import { configuredProviders, searchGoogle } from "../serp";
 import { stripWwwHost } from "./site";
 import { listDays, setCampaignStatus, upsertDay } from "./db";
+import { stopCampaignVisit } from "./visits";
 import { engagementSeconds, searchConsoleDay, serviceAccountEmail } from "./google";
 import type { Campaign, CtrSetup } from "./types";
 
@@ -34,8 +36,8 @@ export async function collectCampaign(c: Campaign, today: string): Promise<Colle
 
   // 1. Google position today
   if (!configuredProviders().length) {
-    problems.push("Google position: search isn't set up (SERPER_API_KEY).");
-    await upsertDay(c.id, today, { notes: { serp: "Search isn't set up (SERPER_API_KEY)." } });
+    // On Vercel: no browser. The computer running the app checks it (no note, so it still will today).
+    problems.push("Google position: only checked when the app runs on a computer.");
   } else {
     try {
       const serp = await searchGoogle(c.keyword, c.country, 10);
@@ -78,7 +80,10 @@ export async function collectCampaign(c: Campaign, today: string): Promise<Colle
     }
   }
 
-  if (today >= c.endDate && c.status === "active") await setCampaignStatus(c.id, "finished");
+  if (today >= c.endDate && c.status === "active") {
+    await setCampaignStatus(c.id, "finished");
+    stopCampaignVisit(c.id);
+  }
   return { campaignId: c.id, position, dataDay, problems };
 }
 

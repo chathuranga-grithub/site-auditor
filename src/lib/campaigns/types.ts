@@ -7,7 +7,8 @@ export const MAX_DURATION_DAYS = 365;
 export const DEFAULT_DURATION_DAYS = 30;
 export const DEFAULT_TARGET_CTR = 5;
 
-export type CampaignStatus = "active" | "finished" | "paused";
+/** finished: reached its end date. stopped: ended early by hand. Neither can be started again. */
+export type CampaignStatus = "active" | "paused" | "finished" | "stopped";
 
 export interface Campaign {
   id: number;

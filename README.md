@@ -49,17 +49,10 @@ The second tool, at `/rankings`. Enter a **keyword** (e.g. `iphone`). It shows t
 - **Table:** one row per result. Click a row for the full details.
 - **Exports:** **Excel** and **Copy summary**.
 
-**Search results** come from a SERP API, because scraping Google directly is blocked and against its terms. Set at least one key in `.env.local` and in Vercel:
+**Search results** are read from Google in a real browser (Puppeteer, with Microsoft Edge or Google Chrome installed on the computer) through the **Vietnam proxy** from the proxy API (Settings). It only reads the result list; it never clicks a result.
 
-| Variable | Service | Free allowance |
-|---|---|---|
-| `SERPER_API_KEY` | [serper.dev](https://serper.dev) | 2,500 searches, one-time, no card |
-| `SERPAPI_API_KEY` | [serpapi.com](https://serpapi.com) | 250 searches per month |
-
-**How the keys are used:**
-- Serper is used first. If it fails or its credits run out, the tool switches to SerpApi automatically.
-- Top 5 or Top 10 costs **1 search**.
-- Without a key, the tool shows "Search isn't set up yet".
+- Works only when the app runs on a computer (`npm run dev`), and for **Vietnam** only (the proxy is in Vietnam).
+- Google sometimes answers a proxy IP with a CAPTCHA; then that search fails and the next one gets a new IP.
 
 Page analysis (`/api/analyze`) uses the same SSRF-safe fetch as Site Audit.
 
@@ -112,10 +105,10 @@ The third tool, at `/visit-test`. It checks that **every page of a company site 
 
 At `/ctr`: **Dashboard**, **Campaigns**, **New campaign**. A campaign follows one keyword for one site for 1–365 days and compares **real** numbers with goals. Nothing is generated: every number comes from real visitors.
 
-- **Every day** (Vercel Cron, 08:00 Vietnam time, `vercel.json`):
-  - Google position for the keyword in Vietnam (Serper, 1–2 search credits per campaign);
+- **Every day** from 08:00 Vietnam time:
+  - Google position for the keyword in Vietnam, read in a browser through the Vietnam proxy. Runs on the computer running the app (`src/lib/campaigns/scheduler.ts`); if it was off, it catches up when the app starts;
   - Search Console clicks, impressions, CTR and mobile / desktop split, for 3 days ago (Google's delay);
-  - Google Analytics 4 time on page (if a page URL and GA4 property are set).
+  - Google Analytics 4 time on page (if a page URL and GA4 property are set). These two run on Vercel Cron (`vercel.json`) too.
 - **Goals:** target CTR (with the typical CTR for the position as a guide), target position, weekly click growth, time on page.
 - **Campaign page:** goal vs real tiles, daily charts, a change log ("new title on 10 Oct") so you can see what helped, and every day's numbers. **Check now** runs today's check on demand.
 - Saved in **Postgres (Neon)**: campaigns, daily numbers, change log.
@@ -127,7 +120,6 @@ At `/ctr`: **Dashboard**, **Campaigns**, **New campaign**. A campaign follows on
 | `DATABASE_URL` | Neon connection string (Vercel → Storage → Create → Neon adds it). Tables are created on first use. |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | A Google Cloud service account key (JSON as is, or base64), with the Search Console API and Google Analytics Data API enabled. Add the account's email as a **user in Search Console** for each site and as a **Viewer in GA4**. |
 | `CRON_SECRET` | Any long random string; Vercel sends it to the daily job. |
-| `SERPER_API_KEY` | Already used by Keyword Rankings. |
 
 ## Login
 

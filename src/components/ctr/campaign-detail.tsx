@@ -1,16 +1,19 @@
 "use client";
 
-// Auto CTR: one campaign. Goals vs real numbers, daily charts, change log, and the daily data.
+// Auto CTR: one campaign. Its visit to the site through the proxy runs on the server while the
+// campaign is active (src/lib/campaigns/visits.ts); this page shows its console and results, the same
+// as Visit Test, live. Then goals vs real numbers, daily charts, change log, daily data.
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { Loader2, Pause, Play, RefreshCw, Trash2 } from "lucide-react";
+import { Loader2, Pause, Play, RefreshCw, Square, Trash2 } from "lucide-react";
 import { summarize } from "@/lib/campaigns/metrics";
 import { todayInVietnam } from "@/lib/campaigns/site";
 import type { Campaign, CampaignDay, CampaignNote } from "@/lib/campaigns/types";
 import { Notice, Panel, StatTile, buttonClass } from "@/components/ui/primitives";
-import { HealthBadge, LineChart, PageHeader, Progress, StatusBadge, api } from "./ui";
+import { VisitRunView, useVisitRun } from "@/components/visit/visit-test";
+import { CONFIRM, CampaignConfirm, isOpen, HealthBadge, LineChart, PageHeader, Progress, StatusBadge, api } from "./ui";
 
 interface Detail {
   campaign: Campaign;
@@ -24,12 +27,22 @@ export function CampaignDetail({ id }: { id: number }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [problems, setProblems] = useState<string[]>([]);
+  // Answer of the last "Check ranking": Google position now (null = not in the top 10).
+  const [ranking, setRanking] = useState<{ position: number | null } | null>(null);
   const [note, setNote] = useState("");
+  // Waiting for "yes" in the popup.
+  const [confirming, setConfirming] = useState<keyof typeof CONFIRM | null>(null);
+
+  const visit = useVisitRun();
+  const { follow } = visit;
 
   const load = useCallback(() => api<Detail>(`/api/ctr/campaigns/${id}`).then(setData, (e: Error) => setError(e.message)), [id]);
   useEffect(() => {
     load();
   }, [load]);
+
+  // The campaign's visit console: what has happened so far, then live while it runs.
+  useEffect(() => follow(id), [follow, id]);
 
   async function run(label: string, fn: () => Promise<unknown>) {
     setBusy(label);
@@ -77,18 +90,48 @@ export function CampaignDetail({ id }: { id: number }) {
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge status={c.status} />
-            <button type="button" className={buttonClass.secondary} disabled={!!busy} onClick={() => run("check", async () => setProblems((await api<{ problems: string[] }>(`/api/ctr/campaigns/${id}/check`, { method: "POST" })).problems))}>
-              {busy === "check" ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />} Check now
-            </button>
-            {c.status !== "finished" && (
+            {isOpen(c.status) && (
               <button
                 type="button"
                 className={buttonClass.secondary}
                 disabled={!!busy}
-                onClick={() => run("status", () => api(`/api/ctr/campaigns/${id}`, { method: "PATCH", body: JSON.stringify({ status: c.status === "active" ? "paused" : "active" }) }))}
+                title="Search Google Vietnam for the keyword now (in a browser, through the proxy) and save where the site ranks. Also runs by itself every day."
+                onClick={() =>
+                  run("check", async () => {
+                    setRanking(null);
+                    const r = await api<{ position: number | null; problems: string[] }>(`/api/ctr/campaigns/${id}/check`, { method: "POST" });
+                    setProblems(r.problems);
+                    if (!r.problems.some((p) => p.startsWith("Google position"))) setRanking({ position: r.position });
+                  })
+                }
+              >
+                {busy === "check" ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />} Check ranking
+              </button>
+            )}
+            {isOpen(c.status) && (
+              <button
+                type="button"
+                className={buttonClass.secondary}
+                disabled={!!busy}
+                onClick={() => {
+                  // The server ends the visit on Pause and starts a new one on Resume.
+                  if (c.status === "active") {
+                    run("status", () => api(`/api/ctr/campaigns/${id}`, { method: "PATCH", body: JSON.stringify({ status: "paused" }) }));
+                  } else {
+                    run("status", async () => {
+                      await api(`/api/ctr/campaigns/${id}`, { method: "PATCH", body: JSON.stringify({ status: "active" }) });
+                      follow(id);
+                    });
+                  }
+                }}
               >
                 {c.status === "active" ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
                 {c.status === "active" ? "Pause" : "Resume"}
+              </button>
+            )}
+            {isOpen(c.status) && (
+              <button type="button" className={buttonClass.secondary} disabled={!!busy} title="End the campaign early, for good (its data is kept)" onClick={() => setConfirming("stop")}>
+                <Square className="size-3.5" /> Stop
               </button>
             )}
             <button
@@ -96,17 +139,46 @@ export function CampaignDetail({ id }: { id: number }) {
               className={buttonClass.secondary}
               disabled={!!busy}
               aria-label="Delete campaign"
-              onClick={() => confirm("Delete this campaign and all its saved data?") && run("delete", async () => {
-                await api(`/api/ctr/campaigns/${id}`, { method: "DELETE" });
-                router.push("/ctr/campaigns");
-              })}
+              title="Delete campaign"
+              onClick={() => setConfirming("delete")}
             >
               <Trash2 className="size-3.5" />
             </button>
           </div>
         }
       />
+      {confirming && (
+        <CampaignConfirm
+          kind={confirming}
+          campaign={c}
+          onCancel={() => setConfirming(null)}
+          onConfirm={() => {
+            const action = confirming;
+            setConfirming(null);
+            if (action === "stop") run("status", () => api(`/api/ctr/campaigns/${id}`, { method: "PATCH", body: JSON.stringify({ status: "stopped" }) }));
+            else
+              run("delete", async () => {
+                await api(`/api/ctr/campaigns/${id}`, { method: "DELETE" });
+                router.push("/ctr/campaigns");
+              });
+          }}
+        />
+      )}
       {error && <Notice tone="error">{error}</Notice>}
+      <VisitRunView run={visit} />
+      {ranking && (
+        <Notice tone="info">
+          {ranking.position != null ? (
+            <>
+              Google ranking today: <strong className="font-mono">#{ranking.position}</strong> for &ldquo;{c.keyword}&rdquo;. Saved to the Google position tile, chart and daily numbers below.
+            </>
+          ) : (
+            <>
+              Not in Google&apos;s top 10 today for &ldquo;{c.keyword}&rdquo;. Saved to the daily numbers below.
+            </>
+          )}
+        </Notice>
+      )}
       {problems.length > 0 && (
         <Notice tone="warning">
           <div className="font-medium">Some numbers couldn&apos;t be read</div>
@@ -204,7 +276,7 @@ export function CampaignDetail({ id }: { id: number }) {
             </table>
           </div>
         ) : (
-          <div className="px-4 py-10 text-center text-sm text-muted">No numbers yet. The first check runs when the campaign is created, then once a day.</div>
+          <div className="px-4 py-10 text-center text-sm text-muted">No numbers yet. The Google ranking is checked when the campaign starts, then once a day.</div>
         )}
       </Panel>
 

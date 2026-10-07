@@ -21,7 +21,8 @@ export interface SerpResponse {
   languageName: string;
   /** Location sent to Google, e.g. "Vietnam". */
   location: string;
-  provider: "serper" | "serpapi";
+  /** "browser": read in a real browser through the Vietnam proxy (the only way, for now). */
+  provider: "browser";
   results: SerpResult[];
   /** 1 normally; 2 when page 1 was short and page 2 was fetched to fill the list. */
   searchesUsed: number;

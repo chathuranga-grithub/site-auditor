@@ -3,8 +3,8 @@
 // Auto CTR: pieces shared by the dashboard, campaign list, form and campaign page.
 
 import Link from "next/link";
-import type { ReactNode } from "react";
-import { CircleCheck, CircleDashed, CircleX, Pause, TriangleAlert } from "lucide-react";
+import { useEffect, type ReactNode } from "react";
+import { CircleCheck, CircleDashed, CircleX, Pause, Square, Trash2, TriangleAlert } from "lucide-react";
 import type { CampaignSummary, Health } from "@/lib/campaigns/metrics";
 import type { Campaign, CampaignStatus, CtrSetup } from "@/lib/campaigns/types";
 import { Notice } from "@/components/ui/primitives";
@@ -27,14 +27,17 @@ export function PageHeader({ section, title, intro, actions }: { section: string
   );
 }
 
+/** Search Console and GA4: not used by campaigns for now, so not asked for. Set true to bring them back. */
+const GOOGLE_CONNECTOR = false;
+
 /** What still needs connecting, in plain steps. */
 export function SetupNotice({ setup }: { setup: CtrSetup | null }) {
   if (!setup) return null;
   const missing: ReactNode[] = [];
   if (!setup.database) missing.push(<>Database: in Vercel, <b>Storage → Create → Neon</b>; it adds <code>DATABASE_URL</code>. Add it to <code>.env.local</code> too.</>);
-  if (!setup.searchConsole)
+  if (GOOGLE_CONNECTOR && !setup.searchConsole)
     missing.push(<>Google (Search Console and GA4): create a service account, put its JSON key in <code>GOOGLE_SERVICE_ACCOUNT_JSON</code>, and add its email as a user of each site.</>);
-  if (!setup.serp) missing.push(<>Google position: <code>SERPER_API_KEY</code> (already used by Keyword Rankings).</>);
+  if (!setup.serp) missing.push(<>Google position: read in a browser through the Vietnam proxy, so it&apos;s only checked when the app runs on a computer.</>);
   if (!missing.length) return null;
   return (
     <Notice tone="warning">
@@ -44,7 +47,7 @@ export function SetupNotice({ setup }: { setup: CtrSetup | null }) {
           <li key={i}>{m}</li>
         ))}
       </ul>
-      {setup.serviceAccountEmail && (
+      {GOOGLE_CONNECTOR && setup.serviceAccountEmail && (
         <div className="mt-1 text-xs">
           Service account to add in Search Console and GA4: <code>{setup.serviceAccountEmail}</code>
         </div>
@@ -70,12 +73,91 @@ export function HealthBadge({ health }: { health: Health }) {
 }
 
 export function StatusBadge({ status }: { status: CampaignStatus }) {
-  const style = status === "active" ? "text-status-good ring-status-good/40" : status === "paused" ? "text-status-warning ring-status-warning/40" : "text-muted ring-line-strong";
+  const style =
+    status === "active"
+      ? "text-status-good ring-status-good/40"
+      : status === "paused"
+        ? "text-status-warning ring-status-warning/40"
+        : status === "stopped"
+          ? "text-status-critical ring-status-critical/40"
+          : "text-muted ring-line-strong";
   return (
     <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-mono text-[10px] tracking-wide uppercase ring-1 ${style}`}>
       {status === "paused" && <Pause className="size-2.5" aria-hidden />}
+      {status === "stopped" && <Square className="size-2.5" aria-hidden />}
       {status}
     </span>
+  );
+}
+
+/** What the popup says before stopping or deleting a campaign. */
+export const CONFIRM = {
+  stop: {
+    title: "Stop this campaign?",
+    text: "Tracking ends now and its data is kept.",
+    warning: "It can't be started again.",
+    confirmLabel: "Stop",
+  },
+  delete: {
+    title: "Delete this campaign?",
+    text: "The campaign and all its data are removed.",
+    warning: "This can't be undone.",
+    confirmLabel: "Delete",
+  },
+} as const;
+
+/** Pause, Resume, Stop, Check now and Run visit only apply to these. */
+export function isOpen(status: CampaignStatus) {
+  return status === "active" || status === "paused";
+}
+
+/**
+ * Confirm before stopping or deleting a campaign. Escape or a click outside counts as Cancel.
+ */
+export function CampaignConfirm({ kind, campaign: c, onConfirm, onCancel }: { kind: keyof typeof CONFIRM; campaign: Campaign; onConfirm: () => void; onCancel: () => void }) {
+  const t = CONFIRM[kind];
+  const Icon = kind === "stop" ? Square : Trash2;
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onCancel();
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4 motion-safe:animate-fade-in"
+      onClick={onCancel}
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="confirm-title"
+      aria-describedby="confirm-text"
+    >
+      <div className="w-full max-w-sm rounded-2xl border border-line-strong bg-surface-solid p-5 shadow-2xl motion-safe:animate-pop-in" onClick={(e) => e.stopPropagation()}>
+        <div className="flex gap-3.5">
+          <span className="grid size-10 shrink-0 place-items-center rounded-full bg-status-critical/15 text-status-critical">
+            <Icon className="size-4.5" aria-hidden />
+          </span>
+          <div className="min-w-0">
+            <h2 id="confirm-title" className="font-semibold text-ink">
+              {t.title}
+            </h2>
+            <p className="mt-0.5 truncate font-mono text-xs text-link">{c.keyword}</p>
+            <p id="confirm-text" className="mt-2 text-sm text-muted">
+              {t.text} {t.warning}
+            </p>
+          </div>
+        </div>
+        <div className="mt-5 grid grid-cols-2 gap-2">
+          <button type="button" onClick={onCancel} autoFocus className="h-10 rounded-lg border border-line-strong bg-surface text-sm font-medium text-ink transition hover:bg-surface-2">
+            Cancel
+          </button>
+          <button type="button" onClick={onConfirm} className="h-10 rounded-lg bg-status-critical text-sm font-semibold text-white transition hover:brightness-110">
+            {t.confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

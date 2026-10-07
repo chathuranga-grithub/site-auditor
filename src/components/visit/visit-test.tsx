@@ -4,7 +4,7 @@
 // find every internal page and open each one, then show what a visitor there experiences.
 
 import { useSearchParams } from "next/navigation";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Check, CircleCheck, CircleMinus, CircleX, Copy, Globe, Loader2, Monitor, Smartphone, Play, Square, Timer, TriangleAlert } from "lucide-react";
 import {
   buildChecklist,
@@ -29,117 +29,13 @@ export function VisitTest() {
   const searchParams = useSearchParams();
   const [url, setUrl] = useState(() => searchParams.get("url") ?? "");
   const [mobile, setMobile] = useState(true);
-  const [env, setEnv] = useState<{ local: boolean; savedProxyApi: boolean } | null>(null);
-  const [running, setRunning] = useState(false);
-  const [steps, setSteps] = useState<string[]>([]);
-  const [pages, setPages] = useState<LoggedPage[]>([]);
-  const [discovery, setDiscovery] = useState<Discovery | null>(null);
-  // Start time and time of the latest page, for the "time left" estimate.
-  const [timing, setTiming] = useState({ start: 0, last: 0 });
-  const [report, setReport] = useState<VisitReport | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [waitUntil, setWaitUntil] = useState<number | null>(null);
-  const [now, setNow] = useState(() => Date.now());
-  const abortRef = useRef<AbortController | null>(null);
-  const [openPage, setOpenPage] = useState<VisitPage | null>(null);
-  const discoveredRef = useRef(false);
+  const run = useVisitRun();
+  const { running, waitLeft, notLocal } = run;
 
-  useEffect(() => {
-    fetch("/api/visit-test")
-      .then((r) => r.json())
-      .then(setEnv)
-      .catch(() => setEnv({ local: true, savedProxyApi: false }));
-  }, []);
-
-  // Countdown while the proxy provider makes us wait for a new IP.
-  useEffect(() => {
-    if (!waitUntil) return;
-    const t = setInterval(() => {
-      setNow(Date.now());
-      if (Date.now() >= waitUntil) setWaitUntil(null);
-    }, 1000);
-    return () => clearInterval(t);
-  }, [waitUntil]);
-  const waitLeft = waitUntil ? Math.max(0, Math.ceil((waitUntil - now) / 1000)) : 0;
-
-  async function handleRun(e: FormEvent) {
+  function handleRun(e: FormEvent) {
     e.preventDefault();
-    if (running || waitLeft > 0) return;
-    setError(null);
-    setSteps([]);
-    setPages([]);
-    setDiscovery(null);
-    discoveredRef.current = false;
-    setReport(null);
-    setTiming({ start: Date.now(), last: 0 });
-    setRunning(true);
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    try {
-      const res = await fetch("/api/visit-test", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, mobile }),
-        signal: controller.signal,
-      });
-      if (!res.ok || !res.body) {
-        const j = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(j.error ?? `Request failed (${res.status})`);
-      }
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) if (line.trim()) handleEvent(JSON.parse(line) as VisitEvent);
-      }
-    } catch (err) {
-      if (!controller.signal.aborted) setError(err instanceof Error ? err.message : String(err));
-      else setSteps((s) => [...s, "Stopped."]);
-    } finally {
-      setRunning(false);
-      abortRef.current = null;
-    }
+    run.start(url, mobile);
   }
-
-  function handleEvent(e: VisitEvent) {
-    switch (e.type) {
-      case "step":
-        setSteps((s) => [...s, e.message]);
-        break;
-      case "page":
-        // The start page is sent again once its phone check is done: replace it, don't add it twice.
-        {
-          const logged: LoggedPage = { ...e.page, at: Date.now() };
-          setPages((p) => (logged.kind === "start" && p.some((x) => x.kind === "start") ? p.map((x) => (x.kind === "start" ? { ...logged, at: x.at } : x)) : [...p, logged]));
-        }
-        setTiming((t) => ({ ...t, last: Date.now() }));
-        break;
-      case "discovered":
-        // The first count goes in the step log; later ones (pages found while visiting) only update the progress bar.
-        if (!discoveredRef.current) setSteps((s) => [...s, discoveryMessage(e.discovery)]);
-        discoveredRef.current = true;
-        setDiscovery(e.discovery);
-        break;
-      case "done":
-        setReport(e.report);
-        break;
-      case "wait":
-        setNow(Date.now());
-        setWaitUntil(Date.now() + e.seconds * 1000);
-        break;
-      case "error":
-        setError(e.message);
-        break;
-    }
-  }
-
-  const notLocal = env && !env.local;
 
   return (
     <div className="mx-auto w-full max-w-7xl space-y-5 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
@@ -154,13 +50,6 @@ export function VisitTest() {
           </p>
         </div>
       </header>
-
-      {notLocal && (
-        <Notice tone="warning">
-          Visit Test needs a real browser, so it only works when the app runs on a computer (<code>npm run dev</code>), not on the
-          live site.
-        </Notice>
-      )}
 
       <form onSubmit={handleRun} className="glass grid gap-2 rounded-xl p-2 lg:grid-cols-[1.2fr_1fr_auto_auto]">
         <label className="relative block">
@@ -200,18 +89,192 @@ export function VisitTest() {
         {running ? (
           // Separate keys: otherwise React reuses one <button>, and the click that stops the run
           // lands on the "start" (submit) button it turns into, starting a new run.
-          <button key="stop" type="button" onClick={() => abortRef.current?.abort()} className={buttonClass.danger}>
+          <button key="stop" type="button" onClick={run.stop} className={buttonClass.danger}>
             <Square className="size-3.5 fill-current" />
             Stop
           </button>
         ) : (
-          <button key="start" type="submit" disabled={waitLeft > 0 || !!notLocal} className={buttonClass.primary}>
+          <button key="start" type="submit" disabled={waitLeft > 0 || notLocal} className={buttonClass.primary}>
             {waitLeft > 0 ? <Timer className="size-4" /> : <Play className="size-3.5 fill-current" />}
             {waitLeft > 0 ? formatWait(waitLeft) : "Run test"}
           </button>
         )}
       </form>
 
+      <VisitRunView run={run} />
+    </div>
+  );
+}
+
+export type VisitRun = ReturnType<typeof useVisitRun>;
+
+/**
+ * One visit test run's console: everything the live log and results need. Either starts a run
+ * (Visit Test page) or follows a campaign's run, which the server runs on its own (Auto CTR).
+ */
+export function useVisitRun() {
+  const [env, setEnv] = useState<{ local: boolean; savedProxyApi: boolean } | null>(null);
+  const [running, setRunning] = useState(false);
+  const [steps, setSteps] = useState<string[]>([]);
+  const [pages, setPages] = useState<LoggedPage[]>([]);
+  const [discovery, setDiscovery] = useState<Discovery | null>(null);
+  // Start time and time of the latest page, for the "time left" estimate.
+  const [timing, setTiming] = useState({ start: 0, last: 0 });
+  const [report, setReport] = useState<VisitReport | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [waitUntil, setWaitUntil] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const abortRef = useRef<AbortController | null>(null);
+  const [openPage, setOpenPage] = useState<VisitPage | null>(null);
+  const discoveredRef = useRef(false);
+  // Each start / follow gets a number; lines from an older one (still arriving) are ignored.
+  const genRef = useRef(0);
+
+  useEffect(() => {
+    fetch("/api/visit-test")
+      .then((r) => r.json())
+      .then(setEnv)
+      .catch(() => setEnv({ local: true, savedProxyApi: false }));
+  }, []);
+
+  // Countdown while the proxy provider makes us wait for a new IP.
+  useEffect(() => {
+    if (!waitUntil) return;
+    const t = setInterval(() => {
+      setNow(Date.now());
+      if (Date.now() >= waitUntil) setWaitUntil(null);
+    }, 1000);
+    return () => clearInterval(t);
+  }, [waitUntil]);
+  const waitLeft = waitUntil ? Math.max(0, Math.ceil((waitUntil - now) / 1000)) : 0;
+
+  /** Reads a newline-delimited JSON console until it ends. `stoppable`: the page started it, so Stop ends it. */
+  const consume = useCallback(async (request: (signal: AbortSignal) => Promise<Response>, stoppable: boolean) => {
+    abortRef.current?.abort();
+    const gen = ++genRef.current;
+    const current = () => genRef.current === gen;
+    setError(null);
+    setSteps([]);
+    setPages([]);
+    setDiscovery(null);
+    discoveredRef.current = false;
+    setReport(null);
+    setWaitUntil(null);
+    setTiming({ start: 0, last: 0 });
+    setRunning(true);
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    const handle = (e: VisitEvent & { at?: number }) => {
+      const at = e.at ?? Date.now();
+      setTiming((t) => (t.start ? t : { ...t, start: at }));
+      switch (e.type) {
+        case "step":
+          setSteps((s) => [...s, e.message]);
+          break;
+        case "page":
+          // The start page is sent again once its phone check is done: replace it, don't add it twice.
+          {
+            const logged: LoggedPage = { ...e.page, at };
+            setPages((p) => (logged.kind === "start" && p.some((x) => x.kind === "start") ? p.map((x) => (x.kind === "start" ? { ...logged, at: x.at } : x)) : [...p, logged]));
+          }
+          setTiming((t) => ({ ...t, last: at }));
+          break;
+        case "discovered":
+          // The first count goes in the step log; later ones (pages found while visiting) only update the progress bar.
+          if (!discoveredRef.current) setSteps((s) => [...s, discoveryMessage(e.discovery)]);
+          discoveredRef.current = true;
+          setDiscovery(e.discovery);
+          break;
+        case "done":
+          setReport(e.report);
+          break;
+        case "wait":
+          setNow(Date.now());
+          setWaitUntil(at + e.seconds * 1000);
+          break;
+        case "error":
+          setError(e.message);
+          break;
+      }
+    };
+
+    try {
+      const res = await request(controller.signal);
+      if (!res.ok || !res.body) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error ?? `Request failed (${res.status})`);
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done || !current()) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) if (line.trim()) handle(JSON.parse(line) as VisitEvent & { at?: number });
+      }
+    } catch (err) {
+      if (!current()) return;
+      if (!controller.signal.aborted) setError(err instanceof Error ? err.message : String(err));
+      else if (stoppable) setSteps((s) => [...s, "Stopped."]);
+    } finally {
+      if (current()) {
+        setRunning(false);
+        abortRef.current = null;
+      }
+    }
+  }, []);
+
+  /** Visit Test page: runs a test of this site now. */
+  function start(url: string, mobile: boolean) {
+    if (abortRef.current || waitLeft > 0) return;
+    void consume(
+      (signal) => fetch("/api/visit-test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url, mobile }), signal }),
+      true,
+    );
+  }
+
+  /** Auto CTR: shows the campaign's visit (all lines so far, then live). Returns a function that stops following. */
+  const follow = useCallback(
+    (campaignId: number) => {
+      void consume((signal) => fetch(`/api/ctr/campaigns/${campaignId}/visit`, { signal, cache: "no-store" }), false);
+      return () => abortRef.current?.abort();
+    },
+    [consume],
+  );
+
+  return {
+    start,
+    follow,
+    stop: () => abortRef.current?.abort(),
+    running,
+    steps,
+    pages,
+    discovery,
+    timing,
+    report,
+    error,
+    waitLeft,
+    notLocal: !!env && !env.local,
+    openPage,
+    setOpenPage,
+  };
+}
+
+/** The run's notices, live console and results: the same on the Visit Test page and in a campaign. */
+export function VisitRunView({ run }: { run: VisitRun }) {
+  const { running, steps, pages, discovery, timing, report, error, waitLeft, notLocal, openPage, setOpenPage } = run;
+  return (
+    <>
+      {notLocal && (
+        <Notice tone="warning">
+          Visit Test needs a real browser, so it only works when the app runs on a computer (<code>npm run dev</code>), not on the
+          live site.
+        </Notice>
+      )}
       {waitLeft > 0 && (
         <Notice tone="info">
           The proxy provider gives a new IP in <strong className="font-mono">{formatWait(waitLeft)}</strong>. The test can run again then; the button
@@ -247,7 +310,7 @@ export function VisitTest() {
           <PageDetails page={openPage} heading={openPage.kind === "start" ? "Start page" : (openPage.title ?? "Page")} />
         </DetailDialog>
       )}
-    </div>
+    </>
   );
 }
 

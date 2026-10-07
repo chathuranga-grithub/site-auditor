@@ -1,4 +1,4 @@
-// POST /api/ctr/campaigns/:id/check → runs today's check now (uses 1–2 search credits).
+// POST /api/ctr/campaigns/:id/check → runs today's check now (Google in a browser through the proxy).
 
 import { badRequest, errorResponse, parseId } from "@/lib/campaigns/api";
 import { collectCampaign } from "@/lib/campaigns/collect";

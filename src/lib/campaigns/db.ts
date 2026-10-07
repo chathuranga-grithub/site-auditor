@@ -71,6 +71,12 @@ const SCHEMA = [
     text TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
   )`,
+  // The latest visit's console log, one per campaign (src/lib/campaigns/visits.ts).
+  `CREATE TABLE IF NOT EXISTS ctr_visits (
+    campaign_id INT PRIMARY KEY REFERENCES ctr_campaigns(id) ON DELETE CASCADE,
+    started_at TIMESTAMPTZ NOT NULL,
+    events JSONB NOT NULL DEFAULT '[]'::jsonb
+  )`,
 ];
 
 let schemaReady: Promise<void> | null = null;
@@ -232,6 +238,22 @@ export async function addNote(campaignId: number, day: string, text: string): Pr
   const q = await db();
   const rows = await q(`INSERT INTO ctr_notes (campaign_id, day, text) VALUES ($1,$2,$3) RETURNING *`, [campaignId, day, text]);
   return toNote(rows[0]);
+}
+
+/** Saves the campaign's latest visit log (replacing the previous one). */
+export async function saveVisitLog(campaignId: number, startedAt: Date, events: unknown[]): Promise<void> {
+  const q = await db();
+  await q(
+    `INSERT INTO ctr_visits (campaign_id, started_at, events) VALUES ($1, $2, $3::jsonb)
+     ON CONFLICT (campaign_id) DO UPDATE SET started_at = EXCLUDED.started_at, events = EXCLUDED.events`,
+    [campaignId, startedAt.toISOString(), JSON.stringify(events)],
+  );
+}
+
+export async function getVisitLog(campaignId: number): Promise<unknown[] | null> {
+  const q = await db();
+  const rows = await q(`SELECT events FROM ctr_visits WHERE campaign_id = $1`, [campaignId]);
+  return rows[0] ? (rows[0].events as unknown[]) : null;
 }
 
 export async function listNotes(campaignId: number): Promise<CampaignNote[]> {

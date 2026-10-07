@@ -49,6 +49,7 @@ export function NewCampaign() {
     setError(null);
     try {
       const res = await api<{ campaign: { id: number } }>("/api/ctr/campaigns", { method: "POST", body: JSON.stringify({ siteUrl: form.siteUrl, keyword: form.keyword }) });
+      // The visit through the proxy has started on the server; the campaign page shows its console.
       router.push(`/ctr/campaigns/${res.campaign.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -149,9 +150,9 @@ function Summary({ form, busy, error }: { form: Record<string, string>; busy: bo
           className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-gradient-accent text-sm font-semibold text-white shadow-lg shadow-accent/20 transition hover:-translate-y-px disabled:opacity-70"
         >
           {busy ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-3.5 fill-current" />}
-          {busy ? "Starting…" : "Start tracking"}
+          {busy ? "Starting…" : "Start campaign"}
         </button>
-        <p className="mt-2 text-center text-[11px] text-subtle">The first check runs right away, then every day at 08:00.</p>
+        <p className="mt-2 text-center text-[11px] text-subtle">The visit through the proxy starts right away.</p>
       </div>
     </aside>
   );
