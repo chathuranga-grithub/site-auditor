@@ -88,6 +88,16 @@ export function useVisitRun() {
         case "step":
           setSteps((s) => [...s, e.message]);
           break;
+        case "run":
+          // The next run of the visit starts. The step log carries on; the pages and results start over.
+          setSteps((s) => [...s, `Run ${e.n} of ${e.of}: new visit with a new proxy IP`]);
+          setPages([]);
+          setDiscovery(null);
+          discoveredRef.current = false;
+          setReport(null);
+          setWaitUntil(null);
+          setTiming({ start: at, last: 0 });
+          break;
         case "page":
           // The start page is sent again once its phone check is done: replace it, don't add it twice.
           {

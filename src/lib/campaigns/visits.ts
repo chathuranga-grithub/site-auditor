@@ -1,12 +1,14 @@
 // Server-only, local only: each campaign's visit to its site through the proxy (the visit run,
 // src/lib/visit-runner.ts). It runs on the server, not in a browser tab: it starts when a campaign is
 // created or resumed, runs again once a day (src/lib/campaigns/scheduler.ts), and stops when it's
-// paused, stopped or deleted. Every line of its console is kept in memory only (never saved), so
+// paused, stopped or deleted. Each time it's VISITS_PER_DAY runs, one after another, each with a new proxy IP. Every line of its console is kept in memory only (never saved), so
 // any open campaign page can replay it and then follow it live. Restarting the app clears it.
 
 import { ProxyWaitError } from "../proxy-api";
 import { resolveProxyApi } from "../proxy-settings";
 import type { VisitEvent } from "../visit-types";
+import { addVisitDone } from "./db";
+import { todayInVietnam } from "./site";
 import type { Campaign } from "./types";
 
 /** One console line: the event and when it happened (ms). */
@@ -14,6 +16,9 @@ export type LoggedVisitEvent = VisitEvent & { at: number };
 
 interface LiveVisit {
   startedAt: number;
+  /** Runs in a row (VISITS_PER_DAY) and the one running now. */
+  runs: number;
+  run: number;
   events: LoggedVisitEvent[];
   running: boolean;
   controller: AbortController;
@@ -28,11 +33,14 @@ const visits = (g.__campaignVisits ??= new Map<number, LiveVisit>());
 /** Visits need a real browser: only when the app runs on a computer, not on Vercel. */
 export const canRunVisits = () => !process.env.VERCEL;
 
-/** Starts the campaign's visit (a running one is stopped first). */
-export function startCampaignVisit(c: Pick<Campaign, "id" | "siteUrl">): void {
+/** Each visit is this many runs, one after another, each with a new proxy IP. */
+export const VISITS_PER_DAY = 3;
+
+/** Starts the campaign's visit: `runs` runs one after another (a running visit is stopped first). */
+export function startCampaignVisit(c: Pick<Campaign, "id" | "siteUrl">, runs = VISITS_PER_DAY): void {
   if (!canRunVisits()) return;
   stopCampaignVisit(c.id);
-  const v: LiveVisit = { startedAt: Date.now(), events: [], running: true, controller: new AbortController(), listeners: new Set() };
+  const v: LiveVisit = { startedAt: Date.now(), runs, run: 1, events: [], running: true, controller: new AbortController(), listeners: new Set() };
   visits.set(c.id, v);
   void run(c, v);
 }
@@ -42,11 +50,15 @@ export function stopCampaignVisit(campaignId: number): void {
 }
 
 /** The campaign's visit right now, for the page's heartbeat; null if none since the app started. */
-export function campaignVisitStatus(campaignId: number): { running: boolean; startedAt: number; pages: number; lastEventAt: number | null } | null {
+export function campaignVisitStatus(
+  campaignId: number,
+): { running: boolean; startedAt: number; run: number; runs: number; pages: number; lastEventAt: number | null } | null {
   const v = visits.get(campaignId);
   if (!v) return null;
-  const pages = v.events.filter((e) => e.type === "page").length;
-  return { running: v.running, startedAt: v.startedAt, pages, lastEventAt: v.events.at(-1)?.at ?? null };
+  // Pages of the run going on now (or the last one).
+  const from = v.events.findLastIndex((e) => e.type === "run");
+  const pages = v.events.slice(from + 1).filter((e) => e.type === "page").length;
+  return { running: v.running, startedAt: v.startedAt, run: v.run, runs: v.runs, pages, lastEventAt: v.events.at(-1)?.at ?? null };
 }
 
 /** Deleted campaign: stop its visit and forget its log. */
@@ -67,19 +79,29 @@ async function run(c: Pick<Campaign, "id" | "siteUrl">, v: LiveVisit) {
     if (!proxyApiUrl) throw new Error("No proxy API link is saved. Add it in Settings.");
     // Loaded only here: the browser library isn't available on Vercel.
     const { runVisitTest } = await import("../visit-runner");
-    for (;;) {
-      try {
-        send({ type: "done", report: await runVisitTest({ url: c.siteUrl, proxyApiUrl, mobile: true, freshProxy: true, signal, send }) });
-        if (signal.aborted) send({ type: "step", message: "Stopped." });
-        break;
-      } catch (err) {
-        // Campaigns always use a new IP; the provider only gives one after a wait: wait, then try again.
-        if (!(err instanceof ProxyWaitError) || signal.aborted) throw err;
-        send({ type: "wait", seconds: err.waitSec });
-        send({ type: "step", message: `Waiting for a new proxy IP (the provider gives one in ${err.waitSec}s); the previous IP isn't reused…` });
-        await sleep(err.waitSec * 1000, signal);
+    // Each run starts only when the one before has finished.
+    for (v.run = 1; v.run <= v.runs && !signal.aborted; v.run++) {
+      if (v.runs > 1) send({ type: "run", n: v.run, of: v.runs });
+      for (;;) {
+        try {
+          const report = await runVisitTest({ url: c.siteUrl, proxyApiUrl, mobile: true, freshProxy: true, signal, send });
+          // Counted when finished (not stopped), for the visits done per day; before "done", so a page
+          // that reloads its numbers on "done" already sees it.
+          if (!signal.aborted) await addVisitDone(c.id, todayInVietnam()).catch((err: unknown) => console.error(`Campaign ${c.id}: couldn't count the visit:`, err));
+          send({ type: "done", report });
+          if (signal.aborted) send({ type: "step", message: "Stopped." });
+          if (!signal.aborted && v.runs > 1) send({ type: "step", message: v.run < v.runs ? `Run ${v.run} of ${v.runs} finished.` : `All ${v.runs} runs finished.` });
+          break;
+        } catch (err) {
+          // Campaigns always use a new IP; the provider only gives one after a wait: wait, then try again.
+          if (!(err instanceof ProxyWaitError) || signal.aborted) throw err;
+          send({ type: "wait", seconds: err.waitSec });
+          send({ type: "step", message: `Waiting for a new proxy IP (the provider gives one in ${err.waitSec}s); the previous IP isn't reused…` });
+          await sleep(err.waitSec * 1000, signal);
+        }
       }
     }
+    v.run = Math.min(v.run, v.runs);
   } catch (err) {
     if (signal.aborted) send({ type: "step", message: "Stopped." });
     else send({ type: "error", message: err instanceof Error ? err.message : String(err) });

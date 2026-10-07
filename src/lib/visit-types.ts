@@ -148,6 +148,8 @@ export interface Discovery {
 /** Streamed from GET /api/ctr/campaigns/:id/visit, one JSON object per line. */
 export type VisitEvent =
   | { type: "step"; message: string }
+  /** A campaign's visit is several runs in a row: run `n` of `of` starts, with a new proxy IP. */
+  | { type: "run"; n: number; of: number }
   | { type: "proxy"; proxy: ProxyInfo; exit: ExitInfo | null }
   | { type: "page"; page: VisitPage }
   | { type: "scroll"; scroll: ScrollResult }

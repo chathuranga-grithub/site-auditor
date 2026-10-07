@@ -25,6 +25,13 @@ export function plannedVisitsTotal(day1Visits: number, dailyIncreasePct: number,
   return total;
 }
 
+/** A campaign's visit plan on day `day`: planned up to and including today, today's, what's left, the total. */
+export function visitPlanProgress(c: Pick<Campaign, "day1Visits" | "dailyIncreasePct" | "durationDays">, day: number) {
+  const soFar = plannedVisitsTotal(c.day1Visits, c.dailyIncreasePct, day);
+  const total = plannedVisitsTotal(c.day1Visits, c.dailyIncreasePct, c.durationDays);
+  return { soFar, today: plannedVisits(c.day1Visits, c.dailyIncreasePct, day), balance: total - soFar, total };
+}
+
 /** finished: reached its end date. stopped: ended early by hand. Neither can be started again. */
 export type CampaignStatus = "active" | "paused" | "finished" | "stopped";
 
@@ -76,6 +83,8 @@ export interface CampaignDay {
   desktopImpressions: number | null;
   /** GA4 average engagement time on the page, seconds. */
   engagementSec: number | null;
+  /** Site visit runs that finished that day (Vietnam date). */
+  visitsDone: number;
   /** What couldn't be read that day, per source, in plain words. */
   notes: DayNotes;
 }
@@ -84,7 +93,8 @@ export type DaySource = "serp" | "gsc" | "ga4";
 export type DayNotes = Partial<Record<DaySource, string>>;
 
 /** The columns of a day that one source fills in. */
-export type DayFields = Partial<Omit<CampaignDay, "campaignId" | "day">>;
+/** (Visit runs are counted on their own, addVisitDone.) */
+export type DayFields = Partial<Omit<CampaignDay, "campaignId" | "day" | "visitsDone">>;
 
 export interface CampaignNote {
   id: number;

@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useEffect, type ReactNode } from "react";
 import { CircleCheck, CircleDashed, CircleX, Pause, Square, Trash2, TriangleAlert } from "lucide-react";
 import type { CampaignSummary, Health } from "@/lib/campaigns/metrics";
-import type { Campaign, CampaignStatus, CtrSetup } from "@/lib/campaigns/types";
+import { visitPlanProgress, type Campaign, type CampaignStatus, type CtrSetup } from "@/lib/campaigns/types";
 import { Notice } from "@/components/ui/primitives";
 
 export interface CampaignItem {
@@ -165,13 +165,16 @@ export function CampaignConfirm({ kind, campaign: c, onConfirm, onCancel }: { ki
 export function CampaignTable({ items, actions }: { items: CampaignItem[]; actions?: (item: CampaignItem) => ReactNode }) {
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[860px] text-left text-sm">
+      <table className="w-full min-w-[960px] text-left text-sm">
         <thead className="border-b border-line font-mono text-[10px] tracking-[0.12em] text-subtle uppercase">
           <tr>
             <th className="px-4 py-2.5 font-medium">Keyword · site</th>
             <th className="px-3 py-2.5 text-right font-medium">Position</th>
             <th className="px-3 py-2.5 text-right font-medium">CTR (7 days)</th>
             <th className="px-3 py-2.5 text-right font-medium">Clicks (7 days)</th>
+            <th className="px-3 py-2.5 text-right font-medium" title="Visit runs done so far, out of the plan's total; today's runs done out of today's plan, and the balance">
+              Visits
+            </th>
             <th className="px-3 py-2.5 font-medium">Result</th>
             <th className="px-3 py-2.5 font-medium">Progress</th>
             {actions && <th className="px-3 py-2.5" />}
@@ -180,6 +183,7 @@ export function CampaignTable({ items, actions }: { items: CampaignItem[]; actio
         <tbody className="divide-y divide-line">
           {items.map((item) => {
             const { campaign: c, summary: s } = item;
+            const plan = visitPlanProgress(c, s.dayNumber);
             return (
               <tr key={c.id} className="align-top hover:bg-surface-2">
                 <td className="max-w-0 px-4 py-2.5">
@@ -204,6 +208,17 @@ export function CampaignTable({ items, actions }: { items: CampaignItem[]; actio
                       {s.growthPct}% vs last week
                     </span>
                   )}
+                </td>
+                <td className="px-3 py-2.5 text-right font-mono text-xs tabular-nums">
+                  {s.visitsDone.toLocaleString()}
+                  <span className="text-subtle"> / {plan.total.toLocaleString()}</span>
+                  <span className="block text-[10px] text-subtle">
+                    {isOpen(c.status)
+                      ? `today ${s.visitsDoneToday} / ${plan.today.toLocaleString()} · ${Math.max(0, plan.total - s.visitsDone).toLocaleString()} left`
+                      : c.status === "stopped"
+                        ? "ended early"
+                        : "finished"}
+                  </span>
                 </td>
                 <td className="px-3 py-2.5">
                   <HealthBadge health={s.health} />
@@ -235,82 +250,6 @@ export function Progress({ day, total }: { day: number; total: number }) {
         <div className="h-full rounded-full bg-series-1" style={{ width: `${pct}%` }} />
       </div>
     </div>
-  );
-}
-
-export interface ChartPoint {
-  day: string;
-  value: number | null;
-}
-
-/**
- * Small line chart for one daily series, with an optional dashed goal line. `invert` puts lower
- * values on top (Google position: 1 is best). Missing days leave a gap.
- */
-export function LineChart({ points, goal, invert = false, unit = "", label }: { points: ChartPoint[]; goal?: number | null; invert?: boolean; unit?: string; label: string }) {
-  const W = 600;
-  const H = 160;
-  const pad = { l: 36, r: 10, t: 10, b: 22 };
-  const values = points.map((p) => p.value).filter((v): v is number => v != null);
-  if (!values.length) return <div className="grid h-40 place-items-center text-xs text-subtle">No data yet</div>;
-  let lo = Math.min(...values, goal ?? Infinity);
-  let hi = Math.max(...values, goal ?? -Infinity);
-  if (lo === hi) [lo, hi] = [lo - 1, hi + 1];
-  const x = (i: number) => pad.l + (points.length === 1 ? (W - pad.l - pad.r) / 2 : (i / (points.length - 1)) * (W - pad.l - pad.r));
-  const y = (v: number) => {
-    const t = (v - lo) / (hi - lo);
-    return pad.t + (invert ? t : 1 - t) * (H - pad.t - pad.b);
-  };
-  const segments: string[] = [];
-  let current = "";
-  points.forEach((p, i) => {
-    if (p.value == null) {
-      if (current) segments.push(current);
-      current = "";
-      return;
-    }
-    current += `${current ? "L" : "M"}${x(i).toFixed(1)},${y(p.value).toFixed(1)}`;
-  });
-  if (current) segments.push(current);
-  const fmt = (v: number) => `${Math.round(v * 10) / 10}${unit}`;
-  const top = invert ? lo : hi;
-  const bottom = invert ? hi : lo;
-
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="h-40 w-full" role="img" aria-label={label}>
-      <line x1={pad.l} x2={W - pad.r} y1={pad.t} y2={pad.t} stroke="var(--color-line)" />
-      <line x1={pad.l} x2={W - pad.r} y1={H - pad.b} y2={H - pad.b} stroke="var(--color-line)" />
-      <text x={pad.l - 6} y={pad.t + 4} textAnchor="end" className="fill-subtle font-mono text-[10px]">
-        {fmt(top)}
-      </text>
-      <text x={pad.l - 6} y={H - pad.b + 4} textAnchor="end" className="fill-subtle font-mono text-[10px]">
-        {fmt(bottom)}
-      </text>
-      {goal != null && (
-        <>
-          <line x1={pad.l} x2={W - pad.r} y1={y(goal)} y2={y(goal)} stroke="var(--color-status-good)" strokeDasharray="5 4" strokeOpacity=".8" />
-          <text x={W - pad.r} y={y(goal) - 4} textAnchor="end" className="fill-status-good font-mono text-[10px]">
-            goal {fmt(goal)}
-          </text>
-        </>
-      )}
-      {segments.map((d, i) => (
-        <path key={i} d={d} fill="none" stroke="var(--color-series-1)" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
-      ))}
-      {points.map((p, i) =>
-        p.value == null ? null : (
-          <circle key={p.day} cx={x(i)} cy={y(p.value)} r="2.5" fill="var(--color-series-1)">
-            <title>{`${p.day}: ${fmt(p.value)}`}</title>
-          </circle>
-        ),
-      )}
-      <text x={pad.l} y={H - 6} className="fill-subtle font-mono text-[10px]">
-        {points[0].day}
-      </text>
-      <text x={W - pad.r} y={H - 6} textAnchor="end" className="fill-subtle font-mono text-[10px]">
-        {points[points.length - 1].day}
-      </text>
-    </svg>
   );
 }
 

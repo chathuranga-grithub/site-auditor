@@ -22,6 +22,9 @@ export interface CampaignSummary {
   mobileShare: number | null;
   /** Average GA4 time on page over the last 7 days with data, seconds. */
   engagementSec: number | null;
+  /** Site visit runs finished: in all, and today. */
+  visitsDone: number;
+  visitsDoneToday: number;
   /** Day N of the campaign, and days left. */
   dayNumber: number;
   daysLeft: number;
@@ -67,6 +70,8 @@ export function summarize(c: Campaign, days: CampaignDay[], today: string): Camp
     growthPct: clicksPrev7 ? Math.round((((clicks7 ?? 0) - clicksPrev7) / clicksPrev7) * 1000) / 10 : null,
     mobileShare: clicks7 ? Math.round((mobile7 / clicks7) * 100) : null,
     engagementSec: engaged.length ? Math.round(average(engaged.map((d) => d.engagementSec))! * 10) / 10 : null,
+    visitsDone: sum(sorted.map((d) => d.visitsDone)),
+    visitsDoneToday: sorted.find((d) => d.day === today)?.visitsDone ?? 0,
     dayNumber: Math.min(dayNumber, c.durationDays),
     daysLeft: Math.max(0, daysBetween(today, c.endDate)),
     health,

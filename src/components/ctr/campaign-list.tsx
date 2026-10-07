@@ -47,7 +47,7 @@ export function CampaignList() {
       <PageHeader
         section="Campaigns"
         title="Campaigns"
-        intro="Every saved campaign. Open one for its charts, daily numbers and change log."
+        intro="Every saved campaign. Open one for its charts and daily numbers."
         actions={
           <Link href="/ctr/new" className={buttonClass.primary}>
             <Plus className="size-4" /> New campaign

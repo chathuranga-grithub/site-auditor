@@ -67,6 +67,8 @@ const SCHEMA = [
     notes JSONB NOT NULL DEFAULT '{}'::jsonb,
     PRIMARY KEY (campaign_id, day)
   )`,
+  // Visit runs finished per day, added later.
+  `ALTER TABLE ctr_days ADD COLUMN IF NOT EXISTS visits_done INT NOT NULL DEFAULT 0`,
   `CREATE TABLE IF NOT EXISTS ctr_notes (
     id SERIAL PRIMARY KEY,
     campaign_id INT NOT NULL REFERENCES ctr_campaigns(id) ON DELETE CASCADE,
@@ -90,7 +92,12 @@ async function db(): Promise<Query> {
 }
 
 const num = (v: unknown) => (v == null ? null : Number(v));
-const isoDay = (v: unknown) => (v instanceof Date ? v.toISOString().slice(0, 10) : String(v).slice(0, 10));
+// The driver reads a DATE as midnight on this computer's clock, so its local date is the day.
+// (toISOString would turn it into UTC: the day before, east of Greenwich.)
+const isoDay = (v: unknown) =>
+  v instanceof Date
+    ? `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, "0")}-${String(v.getDate()).padStart(2, "0")}`
+    : String(v).slice(0, 10);
 const iso = (v: unknown) => (v instanceof Date ? v.toISOString() : String(v));
 
 function toCampaign(r: Record<string, unknown>): Campaign {
@@ -137,6 +144,7 @@ function toDay(r: Record<string, unknown>): CampaignDay {
     mobileImpressions: num(r.mobile_impressions),
     desktopImpressions: num(r.desktop_impressions),
     engagementSec: num(r.engagement_sec),
+    visitsDone: Number(r.visits_done ?? 0),
     notes,
   };
 }
@@ -221,6 +229,16 @@ export async function upsertDay(campaignId: number, day: string, fields: DayFiel
     `INSERT INTO ctr_days (campaign_id, day${cols.map((c) => ", " + c).join("")}) VALUES ($1, $2${placeholders.map((p) => ", " + p).join("")})
      ON CONFLICT (campaign_id, day) DO ${updates.length ? "UPDATE SET " + updates.join(", ") : "NOTHING"}`,
     [campaignId, day, ...values],
+  );
+}
+
+/** One more visit run finished on that day. */
+export async function addVisitDone(campaignId: number, day: string): Promise<void> {
+  const q = await db();
+  await q(
+    `INSERT INTO ctr_days (campaign_id, day, visits_done) VALUES ($1, $2, 1)
+     ON CONFLICT (campaign_id, day) DO UPDATE SET visits_done = ctr_days.visits_done + 1`,
+    [campaignId, day],
   );
 }
 
