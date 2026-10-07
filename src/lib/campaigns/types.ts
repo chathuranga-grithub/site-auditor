@@ -3,6 +3,9 @@
 // against goals. Nothing is generated; every number comes from real visitors.
 
 export const MAX_DURATION_DAYS = 365;
+/** Used while the form's Tracking and Goals sections are switched off (they're not sent). */
+export const DEFAULT_DURATION_DAYS = 30;
+export const DEFAULT_TARGET_CTR = 5;
 
 export type CampaignStatus = "active" | "finished" | "paused";
 

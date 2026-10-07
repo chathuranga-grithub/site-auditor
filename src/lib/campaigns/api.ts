@@ -2,7 +2,7 @@
 
 import { isBlockedHost, parseSiteUrl } from "../url";
 import { NotConfiguredError } from "./db";
-import { MAX_DURATION_DAYS, type NewCampaign } from "./types";
+import { DEFAULT_DURATION_DAYS, DEFAULT_TARGET_CTR, MAX_DURATION_DAYS, type NewCampaign } from "./types";
 
 export function errorResponse(err: unknown) {
   if (err instanceof NotConfiguredError) return Response.json({ error: err.message, notConfigured: true }, { status: 503 });
@@ -30,9 +30,10 @@ export function parseNewCampaign(body: Record<string, unknown>): NewCampaign | s
   const int = (v: unknown) => (typeof v === "number" ? v : typeof v === "string" && v.trim() ? Number(v) : NaN);
   const optional = (v: unknown) => (v === null || v === undefined || v === "" ? null : int(v));
 
-  const durationDays = int(body.durationDays);
+  // Tracking and Goals are optional for now (the form doesn't send them): defaults, or none.
+  const durationDays = optional(body.durationDays) ?? DEFAULT_DURATION_DAYS;
   if (!Number.isInteger(durationDays) || durationDays < 1 || durationDays > MAX_DURATION_DAYS) return `Duration must be 1 to ${MAX_DURATION_DAYS} days.`;
-  const targetCtr = int(body.targetCtr);
+  const targetCtr = optional(body.targetCtr) ?? DEFAULT_TARGET_CTR;
   if (!(targetCtr > 0 && targetCtr <= 100)) return "Target CTR must be between 0 and 100%.";
   const targetPosition = optional(body.targetPosition);
   if (targetPosition !== null && !(Number.isInteger(targetPosition) && targetPosition >= 1 && targetPosition <= 100)) return "Target position must be 1 to 100.";
