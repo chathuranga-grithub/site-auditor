@@ -63,7 +63,7 @@ At `/ctr`: **Dashboard**, **Campaigns**, **New campaign**. A campaign follows on
 - **Every day** from 08:00 Vietnam time:
   - Google position for the keyword in Vietnam, read in a browser through the Vietnam proxy. Runs on the computer running the app (`src/lib/campaigns/scheduler.ts`); if it was off, it catches up when the app starts;
   - Search Console clicks, impressions, CTR and mobile / desktop split, for 3 days ago (Google's delay);
-  - Google Analytics 4 time on page (if a page URL and GA4 property are set). These two run on Vercel Cron (`vercel.json`) too.
+  - Google Analytics 4 time on page (if a page URL and GA4 property are set). These two run on Vercel Cron (`vercel.json`) too. Both go through the proxy, Google sign-in included, never from the computer's or server's own IP; without a working proxy they fail and the day's note says why.
 - **Goals:** target CTR (with the typical CTR for the position as a guide), target position, weekly click growth, time on page.
 - **Campaign page:** goal vs real tiles, visits today and so far against the visit plan, and every day's numbers. **Check ranking** runs today's check on demand.
 - Saved in **Postgres (Neon)**: campaigns and daily numbers, including visits done per day.

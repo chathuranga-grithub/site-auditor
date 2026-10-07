@@ -1,8 +1,11 @@
 // Server-only: read-only access to Google Search Console and Google Analytics 4 with a service
 // account. GOOGLE_SERVICE_ACCOUNT_JSON holds the account's JSON key (as is, or base64). The
 // account's email must be added as a user in Search Console (each site) and as a Viewer in GA4.
+// Every call, sign-in included, goes through the proxy (src/lib/proxy-fetch.ts), never from this
+// computer's or the server's own IP.
 
-import { JWT } from "google-auth-library";
+import { createSign } from "node:crypto";
+import { proxiedFetch } from "../proxy-fetch";
 
 const SCOPES = ["https://www.googleapis.com/auth/webmasters.readonly", "https://www.googleapis.com/auth/analytics.readonly"];
 
@@ -27,18 +30,34 @@ export function serviceAccountEmail(): string | null {
   return serviceAccount()?.client_email ?? null;
 }
 
-let client: JWT | null = null;
+const TOKEN_URL = "https://oauth2.googleapis.com/token";
+const b64url = (s: string | Buffer) => Buffer.from(s).toString("base64url");
+
+/** Service account sign-in (OAuth 2.0 JWT bearer), through the proxy. Kept until a minute before it expires. */
+let cached: { token: string; expiresAt: number } | null = null;
 async function accessToken(): Promise<string> {
   const sa = serviceAccount();
   if (!sa) throw new Error("Google isn't connected yet: add GOOGLE_SERVICE_ACCOUNT_JSON.");
-  client ??= new JWT({ email: sa.client_email, key: sa.private_key, scopes: SCOPES });
-  const { token } = await client.getAccessToken();
-  if (!token) throw new Error("Google didn't give an access token.");
-  return token;
+  if (cached && Date.now() < cached.expiresAt) return cached.token;
+  const now = Math.floor(Date.now() / 1000);
+  const unsigned = `${b64url(JSON.stringify({ alg: "RS256", typ: "JWT" }))}.${b64url(
+    JSON.stringify({ iss: sa.client_email, scope: SCOPES.join(" "), aud: TOKEN_URL, iat: now, exp: now + 3600 }),
+  )}`;
+  const assertion = `${unsigned}.${b64url(createSign("RSA-SHA256").update(unsigned).sign(sa.private_key))}`;
+  const res = await proxiedFetch(TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion }).toString(),
+    signal: AbortSignal.timeout(20_000),
+  });
+  const json = (await res.json().catch(() => ({}))) as { access_token?: string; expires_in?: number; error_description?: string };
+  if (!res.ok || !json.access_token) throw new Error(`Google sign-in failed: ${json.error_description ?? `HTTP ${res.status}`}`);
+  cached = { token: json.access_token, expiresAt: Date.now() + ((json.expires_in ?? 3600) - 60) * 1000 };
+  return cached.token;
 }
 
 async function googlePost<T>(url: string, body: unknown): Promise<T> {
-  const res = await fetch(url, {
+  const res = await proxiedFetch(url, {
     method: "POST",
     headers: { Authorization: `Bearer ${await accessToken()}`, "Content-Type": "application/json" },
     body: JSON.stringify(body),

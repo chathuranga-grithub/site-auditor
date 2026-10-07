@@ -35,6 +35,15 @@ export async function getProxyOrReuse(apiUrl: string): Promise<ProxyConfig & { r
   }
 }
 
+/**
+ * A proxy for server-side API calls (Search Console, GA4): the one in use now while it's valid, so
+ * these calls don't use up a new IP that a visit is waiting for; otherwise a new one.
+ */
+export async function proxyForApis(apiUrl: string): Promise<ProxyConfig> {
+  if (lastProxy && lastProxy.apiUrl === apiUrl && Date.now() < lastProxy.expiresAt) return lastProxy.config;
+  return getProxyOrReuse(apiUrl);
+}
+
 export async function getProxy(apiUrl: string): Promise<ProxyConfig> {
   let url: URL;
   try {
