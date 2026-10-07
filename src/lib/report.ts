@@ -20,7 +20,7 @@ export function friendlyError(message: string): string {
   if (m.includes("cert") || m.includes("ssl") || m.includes("tls"))
     return "The site's SSL certificate couldn't be verified.";
   if (m.includes("failed to fetch") || m.includes("networkerror"))
-    return "Couldn't reach the Site Auditor server. Check your connection and try again.";
+    return "Couldn't reach the SEO Auditor server. Check your connection and try again.";
   return message;
 }
 

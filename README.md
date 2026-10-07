@@ -1,4 +1,4 @@
-# Site Auditor
+# SEO Auditor
 
 Internal tool for engineers and SEO specialists, with two tools: **Site Audit** and **Keyword Rankings** (see below).
 
@@ -107,6 +107,27 @@ The third tool, at `/visit-test`. It checks that **every page of a company site 
 - If the provider says to wait for a new IP (`"Con lai 177 giay de get proxy moi"`), the previous proxy is reused while it's still valid (`proxyTimeout`). Otherwise the page shows a countdown.
 
 **On Vercel:** the tool is disabled, because there's no browser there and the provider would likely reject Vercel's IPs.
+
+## CTR Tracker (live)
+
+At `/ctr`: **Dashboard**, **Campaigns**, **New campaign**. A campaign follows one keyword for one site for 1–365 days and compares **real** numbers with goals. Nothing is generated: every number comes from real visitors.
+
+- **Every day** (Vercel Cron, 08:00 Vietnam time, `vercel.json`):
+  - Google position for the keyword in Vietnam (Serper, 1–2 search credits per campaign);
+  - Search Console clicks, impressions, CTR and mobile / desktop split, for 3 days ago (Google's delay);
+  - Google Analytics 4 time on page (if a page URL and GA4 property are set).
+- **Goals:** target CTR (with the typical CTR for the position as a guide), target position, weekly click growth, time on page.
+- **Campaign page:** goal vs real tiles, daily charts, a change log ("new title on 10 Oct") so you can see what helped, and every day's numbers. **Check now** runs today's check on demand.
+- Saved in **Postgres (Neon)**: campaigns, daily numbers, change log.
+
+**Setup:**
+
+| Variable | What |
+|---|---|
+| `DATABASE_URL` | Neon connection string (Vercel → Storage → Create → Neon adds it). Tables are created on first use. |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | A Google Cloud service account key (JSON as is, or base64), with the Search Console API and Google Analytics Data API enabled. Add the account's email as a **user in Search Console** for each site and as a **Viewer in GA4**. |
+| `CRON_SECRET` | Any long random string; Vercel sends it to the daily job. |
+| `SERPER_API_KEY` | Already used by Keyword Rankings. |
 
 ## How it works
 

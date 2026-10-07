@@ -8,6 +8,7 @@ import { usePathname } from "next/navigation";
 import { useState, type ReactNode } from "react";
 import { Menu, X } from "lucide-react";
 import { TOOLS } from "@/config/tools";
+import { Logo } from "./logo";
 
 export function AppShell({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -67,11 +68,9 @@ export function AppShell({ children }: { children: ReactNode }) {
 function Brand({ compact = false }: { compact?: boolean }) {
   return (
     <Link href="/" className={`flex items-center gap-2.5 font-semibold tracking-tight ${compact ? "" : "h-16 px-5"}`}>
-      <span className="glow grid size-7 place-items-center rounded-lg bg-gradient-accent font-mono text-[11px] font-bold text-white">
-        SA
-      </span>
+      <Logo className="glow size-7 rounded-lg" />
       <span className="text-sm">
-        Site<span className="text-gradient">Auditor</span>
+        SEO <span className="text-gradient">Auditor</span>
       </span>
     </Link>
   );
@@ -84,7 +83,7 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
     <nav className="px-3 py-2">
       <div className="px-2 pb-2 font-mono text-[10px] tracking-[0.2em] text-subtle uppercase">Tools</div>
       <ul className="space-y-1">
-        {TOOLS.map(({ href, name, icon: Icon }) => {
+        {TOOLS.map(({ href, name, icon: Icon, children }) => {
           const active = pathname.startsWith(href);
           return (
             <li key={href}>
@@ -104,6 +103,26 @@ function Nav({ onNavigate }: { onNavigate?: () => void }) {
                 <Icon className={`size-4 shrink-0 ${active ? "text-accent-2" : ""}`} />
                 {name}
               </Link>
+              {children && active && (
+                <ul className="mt-1 mb-2 ml-[1.15rem] space-y-0.5 border-l border-line pl-3">
+                  {children.map((c) => {
+                    // The section's first page (its dashboard) only matches exactly; deeper pages by prefix.
+                    const on = c.href === href ? pathname === href : pathname.startsWith(c.href);
+                    return (
+                      <li key={c.href}>
+                        <Link
+                          href={c.href}
+                          onClick={onNavigate}
+                          aria-current={on ? "page" : undefined}
+                          className={`block rounded-md px-2 py-1.5 text-[13px] transition-colors ${on ? "bg-surface-2 text-ink" : "text-muted hover:bg-surface hover:text-ink"}`}
+                        >
+                          {c.name}
+                        </Link>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
             </li>
           );
         })}
