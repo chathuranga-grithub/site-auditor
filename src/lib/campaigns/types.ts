@@ -1,4 +1,4 @@
-// CTR Tracker: campaigns that follow one keyword for one site over a period, measuring REAL results
+// Auto CTR: campaigns that follow one keyword for one site over a period, measuring REAL results
 // (Google position, Search Console clicks / impressions / CTR / device split, GA4 time on page)
 // against goals. Nothing is generated; every number comes from real visitors.
 

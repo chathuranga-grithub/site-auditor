@@ -1,4 +1,4 @@
-// Server-only helpers for the CTR Tracker API routes: input checks and error responses.
+// Server-only helpers for the Auto CTR API routes: input checks and error responses.
 
 import { isBlockedHost, parseSiteUrl } from "../url";
 import { NotConfiguredError } from "./db";

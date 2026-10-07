@@ -1,6 +1,6 @@
 "use client";
 
-// CTR Tracker: one campaign. Goals vs real numbers, daily charts, change log, and the daily data.
+// Auto CTR: one campaign. Goals vs real numbers, daily charts, change log, and the daily data.
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";

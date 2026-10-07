@@ -1,4 +1,4 @@
-// Server-only: CTR Tracker storage in Postgres (Neon, via DATABASE_URL). Tables are created on
+// Server-only: Auto CTR storage in Postgres (Neon, via DATABASE_URL). Tables are created on
 // first use. All queries go through `query()`, so tests can swap in an in-memory Postgres.
 
 import { neon } from "@neondatabase/serverless";

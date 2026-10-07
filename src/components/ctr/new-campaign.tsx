@@ -1,6 +1,6 @@
 "use client";
 
-// CTR Tracker: the new-campaign form. Target (site, keyword), Tracking (duration, data sources),
+// Auto CTR: the new-campaign form. Target (site, keyword), Tracking (duration, data sources),
 // Goals (CTR, position, click growth, time on page). Everything after Target is measured or a goal.
 
 import { useRouter } from "next/navigation";

@@ -1,4 +1,4 @@
-// CTR Tracker: summaries of a campaign's real daily numbers (pure, used by every page).
+// Auto CTR: summaries of a campaign's real daily numbers (pure, used by every page).
 
 import { expectedCtr, type Campaign, type CampaignDay } from "./types";
 

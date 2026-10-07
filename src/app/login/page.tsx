@@ -87,7 +87,7 @@ function ProductPanel() {
           <Feature icon={<MousePointerClick className="size-4" />} title="Visit Test">
             Every page checked through a Vietnam proxy, on desktop and phone.
           </Feature>
-          <Feature icon={<ChartSpline className="size-4" />} title="CTR Tracker">
+          <Feature icon={<ChartSpline className="size-4" />} title="Auto CTR">
             Real position, clicks and CTR over time, against goals.
           </Feature>
         </ul>

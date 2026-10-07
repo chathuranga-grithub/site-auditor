@@ -1,4 +1,4 @@
-// Small URL helpers for CTR Tracker.
+// Small URL helpers for Auto CTR.
 
 /** "https://www.example.vn/page" → "example.vn" */
 export function stripWwwHost(url: string): string {

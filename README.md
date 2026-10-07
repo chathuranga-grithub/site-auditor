@@ -108,7 +108,7 @@ The third tool, at `/visit-test`. It checks that **every page of a company site 
 
 **On Vercel:** the tool is disabled, because there's no browser there and the provider would likely reject Vercel's IPs.
 
-## CTR Tracker (live)
+## Auto CTR (live)
 
 At `/ctr`: **Dashboard**, **Campaigns**, **New campaign**. A campaign follows one keyword for one site for 1–365 days and compares **real** numbers with goals. Nothing is generated: every number comes from real visitors.
 

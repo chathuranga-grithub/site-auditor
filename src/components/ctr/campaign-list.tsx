@@ -1,6 +1,6 @@
 "use client";
 
-// CTR Tracker: every saved campaign, with status filters and pause / resume / delete.
+// Auto CTR: every saved campaign, with status filters and pause / resume / delete.
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";

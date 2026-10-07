@@ -1,6 +1,6 @@
 "use client";
 
-// CTR Tracker dashboard: every campaign at a glance.
+// Auto CTR dashboard: every campaign at a glance.
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
@@ -30,7 +30,7 @@ export function CtrDashboard() {
         section="Dashboard"
         title={
           <>
-            CTR <span className="text-gradient">Tracker</span>
+            Auto <span className="text-gradient">CTR</span>
           </>
         }
         intro="Follow keywords over time with real data: Google position, Search Console clicks and CTR, and time on page, against your goals."

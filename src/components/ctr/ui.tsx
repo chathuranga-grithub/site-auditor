@@ -1,6 +1,6 @@
 "use client";
 
-// CTR Tracker: pieces shared by the dashboard, campaign list, form and campaign page.
+// Auto CTR: pieces shared by the dashboard, campaign list, form and campaign page.
 
 import Link from "next/link";
 import type { ReactNode } from "react";
@@ -18,7 +18,7 @@ export function PageHeader({ section, title, intro, actions }: { section: string
   return (
     <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
       <div>
-        <div className="font-mono text-[10px] tracking-[0.2em] text-subtle uppercase">CTR Tracker / {section}</div>
+        <div className="font-mono text-[10px] tracking-[0.2em] text-subtle uppercase">Auto CTR / {section}</div>
         <h1 className="mt-1 text-2xl font-semibold tracking-tight sm:text-3xl">{title}</h1>
         {intro && <p className="mt-1 max-w-2xl text-sm text-muted">{intro}</p>}
       </div>
