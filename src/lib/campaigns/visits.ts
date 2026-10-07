@@ -55,14 +55,14 @@ async function run(c: Pick<Campaign, "id" | "siteUrl">, v: LiveVisit) {
     const { runVisitTest } = await import("../visit-runner");
     for (;;) {
       try {
-        send({ type: "done", report: await runVisitTest({ url: c.siteUrl, proxyApiUrl, mobile: true, signal, send }) });
+        send({ type: "done", report: await runVisitTest({ url: c.siteUrl, proxyApiUrl, mobile: true, freshProxy: true, signal, send }) });
         if (signal.aborted) send({ type: "step", message: "Stopped." });
         break;
       } catch (err) {
-        // The provider only gives a new IP after a wait: wait here, then try again by itself.
+        // Campaigns always use a new IP; the provider only gives one after a wait: wait, then try again.
         if (!(err instanceof ProxyWaitError) || signal.aborted) throw err;
         send({ type: "wait", seconds: err.waitSec });
-        send({ type: "step", message: `The proxy provider gives a new IP in ${err.waitSec}s. Trying again then…` });
+        send({ type: "step", message: `Waiting for a new proxy IP (the provider gives one in ${err.waitSec}s); the previous IP isn't reused…` });
         await sleep(err.waitSec * 1000, signal);
       }
     }

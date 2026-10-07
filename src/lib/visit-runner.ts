@@ -4,7 +4,7 @@
 // This is a QA check that the site works for a visitor in that location, not a traffic tool.
 
 import { chromium, devices, type Browser, type BrowserContext, type Page } from "playwright-core";
-import { getProxyOrReuse } from "./proxy-api";
+import { getProxy, getProxyOrReuse } from "./proxy-api";
 import { networkType } from "./network-type";
 import { readSitemap, type SitemapFetcher } from "./sitemap";
 import { isBlockedHost, isInternal, normalizeUrl, shouldSkipCrawl } from "./url";
@@ -47,6 +47,8 @@ export interface VisitOptions {
   proxyApiUrl: string;
   /** Also open every page on a phone-sized screen, and test the phone menu. */
   mobile: boolean;
+  /** Always a new proxy IP: never reuse the previous one (ProxyWaitError until the provider gives one). */
+  freshProxy?: boolean;
   signal: AbortSignal;
   send: (e: VisitEvent) => void;
 }
@@ -59,7 +61,7 @@ interface Target {
   note?: string;
 }
 
-export async function runVisitTest({ url, proxyApiUrl, mobile, signal, send }: VisitOptions): Promise<VisitReport> {
+export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = false, signal, send }: VisitOptions): Promise<VisitReport> {
   const report: VisitReport = {
     url,
     startedAt: new Date().toISOString(),
@@ -83,7 +85,7 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, signal, send }: V
 
   // 1. Proxy
   send({ type: "step", message: "Getting a proxy from the proxy API…" });
-  const proxy = await getProxyOrReuse(proxyApiUrl);
+  const proxy = freshProxy ? { ...(await getProxy(proxyApiUrl)), reused: false } : await getProxyOrReuse(proxyApiUrl);
   const { server, username, password, ...publicProxy } = proxy;
   report.proxy = publicProxy;
   if (proxy.reused) {
