@@ -129,6 +129,23 @@ At `/ctr`: **Dashboard**, **Campaigns**, **New campaign**. A campaign follows on
 | `CRON_SECRET` | Any long random string; Vercel sends it to the daily job. |
 | `SERPER_API_KEY` | Already used by Keyword Rankings. |
 
+## Login
+
+Every page and API needs a login (`src/proxy.ts`); the daily CTR job is the only exception (it checks `CRON_SECRET`).
+
+- Username + password. Accounts are in the `app_users` table in Neon; passwords are stored as **scrypt hashes**, never as typed.
+- Session: a signed, httpOnly cookie (HMAC with `AUTH_SECRET`, at least 32 characters), valid 7 days. **Sign out** is at the bottom of the sidebar.
+- 5 wrong passwords for a username → that username waits 10 minutes.
+
+**Add a user, or set a new password** (uses `DATABASE_URL` from `.env.local`):
+
+```
+npm run user:create -- <username> "<password>" admin
+npm run user:create -- <username> "<password>" user
+```
+
+Passwords need at least 8 characters. On Vercel, `AUTH_SECRET` and `DATABASE_URL` must be set in Environment Variables.
+
 ## How it works
 
 To stay within Vercel's function time limits, the crawl runs in the **browser**, and each server call does only a small amount of work:

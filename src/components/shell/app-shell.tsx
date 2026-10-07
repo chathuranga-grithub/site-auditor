@@ -6,19 +6,28 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, type ReactNode } from "react";
-import { Menu, X } from "lucide-react";
+import { LogOut, Menu, UserRound, X } from "lucide-react";
 import { TOOLS } from "@/config/tools";
 import { Logo } from "./logo";
 
-export function AppShell({ children }: { children: ReactNode }) {
+export interface ShellUser {
+  username: string;
+  role: "admin" | "user";
+}
+
+export function AppShell({ children, user }: { children: ReactNode; user: ShellUser | null }) {
   const [open, setOpen] = useState(false);
+  const pathname = usePathname();
+  // The login page has its own full-screen layout.
+  if (pathname === "/login") return <>{children}</>;
 
   return (
     <div className="flex min-h-screen">
       <aside className="hidden w-60 shrink-0 border-r border-line bg-canvas/60 backdrop-blur-xl md:block">
-        <div className="sticky top-0">
+        <div className="sticky top-0 flex h-screen flex-col">
           <Brand />
           <Nav />
+          <UserBox user={user} />
         </div>
       </aside>
 
@@ -30,7 +39,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             onClick={() => setOpen(false)}
           />
-          <aside className="relative h-full w-64 border-r border-line bg-surface-solid">
+          <aside className="relative flex h-full w-64 flex-col border-r border-line bg-surface-solid">
             <div className="flex items-center justify-between pr-2">
               <Brand />
               <button
@@ -43,6 +52,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               </button>
             </div>
             <Nav onNavigate={() => setOpen(false)} />
+            <UserBox user={user} />
           </aside>
         </div>
       )}
@@ -60,6 +70,42 @@ export function AppShell({ children }: { children: ReactNode }) {
           <Brand compact />
         </header>
         <main className="min-w-0 flex-1">{children}</main>
+      </div>
+    </div>
+  );
+}
+
+/** Who is signed in, and Sign out. */
+function UserBox({ user }: { user: ShellUser | null }) {
+  const [busy, setBusy] = useState(false);
+  if (!user) return null;
+  async function signOut() {
+    setBusy(true);
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+    // Full reload on purpose: nothing from the signed-in session stays in memory.
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+    window.location.assign("/login");
+  }
+  return (
+    <div className="mt-auto border-t border-line p-3">
+      <div className="flex items-center gap-2.5 rounded-lg px-2 py-1.5">
+        <span className="grid size-8 shrink-0 place-items-center rounded-full bg-surface-2 text-muted ring-1 ring-line-strong">
+          <UserRound className="size-4" aria-hidden />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm text-ink">{user.username}</span>
+          <span className="block font-mono text-[10px] tracking-wide text-subtle uppercase">{user.role}</span>
+        </span>
+        <button
+          type="button"
+          onClick={signOut}
+          disabled={busy}
+          aria-label="Sign out"
+          title="Sign out"
+          className="grid size-8 place-items-center rounded-md text-muted transition hover:bg-surface-2 hover:text-ink disabled:opacity-50"
+        >
+          <LogOut className="size-4" />
+        </button>
       </div>
     </div>
   );
