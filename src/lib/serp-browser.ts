@@ -102,29 +102,44 @@ export async function openBrowserSearch(): Promise<BrowserSearch> {
         await tab.evaluateOnNewDocument(NO_WEBRTC_SCRIPT);
         await tab.emulateTimezone("Asia/Ho_Chi_Minh");
         await tab.setViewport({ width: 1366, height: 768 });
-        const url = new URL("https://www.google.com/search");
-        url.search = new URLSearchParams({ q: p.q, gl: p.gl, hl: p.hl, num: "10", pws: "0", ...(n > 1 ? { start: String((n - 1) * 10) } : {}) }).toString();
-        await tab.goto(url.toString(), { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
+        await tab.goto(googleResultsUrl(p, n), { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
 
-        const at = tab.url();
-        if (at.includes("/sorry/") || (await tab.$("#captcha-form"))) throw new Error(`Google asked for a CAPTCHA (proxy ${proxy.address})`);
-        if (at.includes("consent.google.")) throw new Error("Google showed its cookie consent page");
+        const blocked = googleBlocked(tab.url(), !!(await tab.$("#captcha-form")));
+        if (blocked) throw new Error(blocked === "captcha" ? `Google asked for a CAPTCHA (proxy ${proxy.address})` : "Google showed its cookie consent page");
         await tab.waitForSelector("#search", { timeout: 10_000 }).catch(() => {});
-
-        // Organic results: links with a heading inside the results column (ads sit outside it).
-        return await tab.evaluate(() =>
-          Array.from(document.querySelectorAll<HTMLAnchorElement>("#search a[href]"))
-            .filter((a) => a.querySelector("h3") && /^https?:/.test(a.href) && !/(^|\.)google\./.test(new URL(a.href).hostname))
-            .map((a) => {
-              const block = a.closest("[data-hveid], .g") ?? a.parentElement;
-              const snippet = block?.querySelector<HTMLElement>("[data-sncf], .VwiC3b")?.innerText ?? "";
-              return { title: a.querySelector("h3")!.textContent?.trim() ?? "", link: a.href, snippet: snippet.trim() };
-            }),
-        );
+        return await tab.evaluate(readOrganicResults);
       } finally {
         await tab.close().catch(() => {});
       }
     },
     close: () => browser.close().catch(() => {}),
   };
+}
+
+/** The Google results page for a search (page 1 = top 10, 2 = 11–20). Shared with campaign visits. */
+export function googleResultsUrl(p: BrowserSearchParams, n = 1): string {
+  const url = new URL("https://www.google.com/search");
+  url.search = new URLSearchParams({ q: p.q, gl: p.gl, hl: p.hl, num: "10", pws: "0", ...(n > 1 ? { start: String((n - 1) * 10) } : {}) }).toString();
+  return url.toString();
+}
+
+/** Why Google didn't show results, from the page's URL and whether it has a CAPTCHA form; null when it did. */
+export function googleBlocked(at: string, captchaForm: boolean): "captcha" | "consent" | null {
+  if (at.includes("/sorry/") || captchaForm) return "captcha";
+  if (at.includes("consent.google.")) return "consent";
+  return null;
+}
+
+/**
+ * Runs inside the results page (Puppeteer or Playwright evaluate): the organic results, links with
+ * a heading inside the results column (ads sit outside it). Self-contained: it's sent to the page as text.
+ */
+export function readOrganicResults(): BrowserResult[] {
+  return Array.from(document.querySelectorAll<HTMLAnchorElement>("#search a[href]"))
+    .filter((a) => a.querySelector("h3") && /^https?:/.test(a.href) && !/(^|\.)google\./.test(new URL(a.href).hostname))
+    .map((a) => {
+      const block = a.closest("[data-hveid], .g") ?? a.parentElement;
+      const snippet = block?.querySelector<HTMLElement>("[data-sncf], .VwiC3b")?.innerText ?? "";
+      return { title: a.querySelector("h3")!.textContent?.trim() ?? "", link: a.href, snippet: snippet.trim() };
+    });
 }

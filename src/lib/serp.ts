@@ -7,7 +7,7 @@
 
 import { findCountry, googleCountryParam, searchLanguage, type LanguageChoice } from "./countries";
 import type { SerpResponse, SerpResult } from "./rankings-types";
-import { BROWSER_SEARCH_COUNTRY, canSearchInBrowser, openBrowserSearch, type BrowserResult } from "./serp-browser";
+import { BROWSER_SEARCH_COUNTRY, canSearchInBrowser, openBrowserSearch, type BrowserResult, type BrowserSearchParams } from "./serp-browser";
 
 type Provider = SerpResponse["provider"];
 
@@ -27,7 +27,7 @@ export async function searchGoogle(
   if (country.toUpperCase() !== BROWSER_SEARCH_COUNTRY) throw new SerpError("Only Vietnam can be searched: the proxy is in Vietnam.", 400);
 
   const language = searchLanguage(country, languageChoice);
-  const params = { q: keyword, gl: googleCountryParam(country), hl: language.hl };
+  const params = searchParams(keyword, country, languageChoice);
 
   const session = await openBrowserSearch().catch((err: unknown) => {
     throw new SerpError(`Search failed: ${err instanceof Error ? err.message : String(err)}`, 502);
@@ -61,6 +61,11 @@ export async function searchGoogle(
   }
 }
 
+/** The country (gl) and search language (hl) Google is asked for. Shared with campaign visits. */
+export function searchParams(keyword: string, country: string, languageChoice: LanguageChoice = "local"): BrowserSearchParams {
+  return { q: keyword, gl: googleCountryParam(country), hl: searchLanguage(country, languageChoice).hl };
+}
+
 export class SerpError extends Error {
   constructor(
     message: string,
@@ -71,7 +76,7 @@ export class SerpError extends Error {
 }
 
 /** Keep valid http(s) results, number them 1..n in Google's order. */
-function clean(raw: BrowserResult[]): SerpResult[] {
+export function clean(raw: BrowserResult[]): SerpResult[] {
   const out: SerpResult[] = [];
   const seen = new Set<string>();
   for (const r of raw) {

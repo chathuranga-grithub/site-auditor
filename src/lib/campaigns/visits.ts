@@ -2,7 +2,8 @@
 // src/lib/visit-runner.ts). It runs on the server, not in a browser tab: it starts when a campaign is
 // created or resumed, runs again once a day (src/lib/campaigns/scheduler.ts), and stops when it's
 // paused, stopped or deleted. Each time it's the day's target visits from the campaign's visit plan
-// (day 1 visits, grown by the daily increase), one after another, each with a new proxy IP. Every line of its console is kept in memory only (never saved), so any open campaign page
+// (day 1 visits, grown by the daily increase), one after another, each with a new proxy IP; each first searches Google for the
+// keyword in the same browser, as Keyword Rankings does (never clicking a result), then opens the site. Every line of its console is kept in memory only (never saved), so any open campaign page
 // can replay it and then follow it live. Restarting the app clears it.
 
 import { ProxyWaitError } from "../proxy-api";
@@ -35,7 +36,7 @@ const visits = (g.__campaignVisits ??= new Map<number, LiveVisit>());
 /** Visits need a real browser: only when the app runs on a computer, not on Vercel. */
 export const canRunVisits = () => !process.env.VERCEL;
 
-type VisitCampaign = Pick<Campaign, "id" | "siteUrl" | "startDate" | "endDate" | "durationDays" | "day1Visits" | "dailyIncreasePct">;
+type VisitCampaign = Pick<Campaign, "id" | "siteUrl" | "keyword" | "country" | "startDate" | "endDate" | "durationDays" | "day1Visits" | "dailyIncreasePct">;
 
 /** The campaign's target visits for today (Vietnam date), from its visit plan. */
 export function targetVisitsToday(c: VisitCampaign): number {
@@ -110,7 +111,7 @@ async function run(c: VisitCampaign, v: LiveVisit) {
       if (v.runs > 1) send({ type: "run", n: v.run, of: v.runs });
       for (;;) {
         try {
-          const report = await runVisitTest({ url: c.siteUrl, proxyApiUrl, mobile: true, freshProxy: true, signal, send });
+          const report = await runVisitTest({ url: c.siteUrl, proxyApiUrl, mobile: true, freshProxy: true, searchFirst: { keyword: c.keyword, country: c.country }, signal, send });
           // Counted when finished (not stopped by hand, and not stopped by the run itself: wrong or
           // unconfirmed proxy IP, proxy died), for the visits done per day; before "done", so a page
           // that reloads its numbers on "done" already sees it.
