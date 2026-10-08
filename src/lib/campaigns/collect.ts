@@ -80,7 +80,8 @@ export async function collectCampaign(c: Campaign, today: string): Promise<Colle
     }
   }
 
-  if (today >= c.endDate && c.status === "active") {
+  // The end date is the campaign's last day, with its own visits: it finishes the day after.
+  if (today > c.endDate && c.status === "active") {
     await setCampaignStatus(c.id, "finished");
     stopCampaignVisit(c.id);
   }

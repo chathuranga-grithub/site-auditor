@@ -35,7 +35,7 @@ const visits = (g.__campaignVisits ??= new Map<number, LiveVisit>());
 /** Visits need a real browser: only when the app runs on a computer, not on Vercel. */
 export const canRunVisits = () => !process.env.VERCEL;
 
-type VisitCampaign = Pick<Campaign, "id" | "siteUrl" | "startDate" | "durationDays" | "day1Visits" | "dailyIncreasePct">;
+type VisitCampaign = Pick<Campaign, "id" | "siteUrl" | "startDate" | "endDate" | "durationDays" | "day1Visits" | "dailyIncreasePct">;
 
 /** The campaign's target visits for today (Vietnam date), from its visit plan. */
 export function targetVisitsToday(c: VisitCampaign): number {
@@ -47,6 +47,8 @@ export function targetVisitsToday(c: VisitCampaign): number {
 export function startCampaignVisit(c: VisitCampaign): void {
   if (!canRunVisits()) return;
   stopCampaignVisit(c.id);
+  // After its last day (the end date): no more visits; the daily check marks it finished.
+  if (todayInVietnam() > c.endDate) return;
   const runs = targetVisitsToday(c);
   const v: LiveVisit = { startedAt: Date.now(), runs, run: 1, events: [], running: true, controller: new AbortController(), listeners: new Set() };
   visits.set(c.id, v);
@@ -75,7 +77,7 @@ export function forgetCampaignVisit(campaignId: number): void {
   visits.delete(campaignId);
 }
 
-async function run(c: Pick<Campaign, "id" | "siteUrl">, v: LiveVisit) {
+async function run(c: VisitCampaign, v: LiveVisit) {
   const { signal } = v.controller;
   const send = (e: VisitEvent) => {
     const line = { ...e, at: Date.now() } as LoggedVisitEvent;
@@ -100,6 +102,11 @@ async function run(c: Pick<Campaign, "id" | "siteUrl">, v: LiveVisit) {
     if (done > 0) send({ type: "step", message: `${done} of today's ${v.runs} visits are already done; running the other ${v.runs - done}.` });
     // Each run starts only when the one before has finished.
     for (v.run = done + 1; v.run <= v.runs && !signal.aborted; v.run++) {
+      // A visit still going after midnight on the last day stops: the campaign is over.
+      if (todayInVietnam() > c.endDate) {
+        send({ type: "step", message: "The campaign's last day is over, so no more visits." });
+        break;
+      }
       if (v.runs > 1) send({ type: "run", n: v.run, of: v.runs });
       for (;;) {
         try {
