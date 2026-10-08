@@ -20,11 +20,15 @@ export function useQueryForTests(q: Query | null) {
   schemaReady = null;
 }
 
-function query(): Query {
-  if (testQuery) return testQuery;
+function neonSql() {
   const url = process.env.DATABASE_URL;
   if (!url) throw new NotConfiguredError("The database isn't connected yet: add DATABASE_URL (Neon).");
-  const sql = neon(url);
+  return neon(url);
+}
+
+function query(): Query {
+  if (testQuery) return testQuery;
+  const sql = neonSql();
   return (text, params = []) => sql.query(text, params) as Promise<Record<string, unknown>[]>;
 }
 
@@ -84,7 +88,13 @@ let schemaReady: Promise<void> | null = null;
 async function db(): Promise<Query> {
   const q = query();
   schemaReady ??= (async () => {
-    for (const stmt of SCHEMA) await q(stmt);
+    if (testQuery) {
+      for (const stmt of SCHEMA) await q(stmt);
+      return;
+    }
+    // All in one round trip to the database (it's far away), not one per statement.
+    const sql = neonSql();
+    await sql.transaction(SCHEMA.map((stmt) => sql.query(stmt)));
   })().catch((err) => {
     schemaReady = null;
     throw err;
@@ -251,6 +261,17 @@ export async function visitsDoneOn(campaignId: number, day: string): Promise<num
   const q = await db();
   const rows = await q(`SELECT visits_done FROM ctr_days WHERE campaign_id = $1 AND day = $2`, [campaignId, day]);
   return Number(rows[0]?.visits_done ?? 0);
+}
+
+/** The days of several campaigns in one query, by campaign id (each in day order). */
+export async function listDaysFor(campaignIds: number[]): Promise<Map<number, CampaignDay[]>> {
+  const byCampaign = new Map<number, CampaignDay[]>(campaignIds.map((id) => [id, []]));
+  if (!campaignIds.length) return byCampaign;
+  const q = await db();
+  for (const d of (await q(`SELECT * FROM ctr_days WHERE campaign_id = ANY($1::int[]) ORDER BY campaign_id, day`, [campaignIds])).map(toDay)) {
+    byCampaign.get(d.campaignId)?.push(d);
+  }
+  return byCampaign;
 }
 
 export async function listDays(campaignId: number): Promise<CampaignDay[]> {

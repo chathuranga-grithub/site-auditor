@@ -20,7 +20,24 @@ export class ProxyWaitError extends Error {
 
 // The last proxy handed out by each API link, reused while it's still valid (proxyTimeout) when the
 // provider says "wait N seconds" for a new one. In memory only; this runs on one local computer.
-const lastProxy = new Map<string, { config: ProxyConfig; expiresAt: number }>();
+// `visited`: a campaign visit has used that IP (it's never given to another visit).
+const lastProxy = new Map<string, { config: ProxyConfig; expiresAt: number; visited: boolean }>();
+
+/**
+ * A proxy IP no visit has used yet, for a campaign visit: the link's latest one if it's still valid
+ * and unused (e.g. a ranking check just got it, which made the provider's "new IP in N seconds"
+ * start), else a new one from the API (ProxyWaitError while the provider makes us wait).
+ */
+export async function getUnvisitedProxy(apiUrl: string): Promise<ProxyConfig & { fromEarlier: boolean }> {
+  const last = lastProxy.get(apiUrl);
+  if (last && !last.visited && Date.now() < last.expiresAt) {
+    last.visited = true;
+    return { ...last.config, fromEarlier: true };
+  }
+  const config = await getProxy(apiUrl);
+  lastProxy.get(apiUrl)!.visited = true;
+  return { ...config, fromEarlier: false };
+}
 
 /** A fresh proxy if the provider gives one; otherwise the last one if still valid. */
 export async function getProxyOrReuse(apiUrl: string): Promise<ProxyConfig & { reused: boolean }> {
@@ -89,6 +106,6 @@ export async function getProxy(apiUrl: string): Promise<ProxyConfig> {
   };
   // proxyTimeout = seconds the proxy stays usable (1800 in ShopLike's responses); keep a small margin.
   const timeout = typeof data.proxyTimeout === "number" ? data.proxyTimeout : typeof body.proxyTimeout === "number" ? body.proxyTimeout : 600;
-  lastProxy.set(apiUrl, { config, expiresAt: Date.now() + Math.max(0, timeout - 60) * 1000 });
+  lastProxy.set(apiUrl, { config, expiresAt: Date.now() + Math.max(0, timeout - 60) * 1000, visited: false });
   return config;
 }

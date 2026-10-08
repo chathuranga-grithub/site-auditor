@@ -43,16 +43,19 @@ interface Lane {
   /** The proxy link (number in Settings) and the proxy IP of the run going on now. */
   link: { number: number; of: number } | null;
   ip: string | null;
+  /** Stopped by hand (pause or stop). */
+  stopped: boolean;
 }
 
-const newLane = (): Lane => ({ steps: [], pages: [], discovery: null, discovered: false, timing: { start: 0, last: 0 }, report: null, error: null, waitUntil: null, run: null, finished: 0, link: null, ip: null });
+const newLane = (): Lane => ({ steps: [], pages: [], discovery: null, discovered: false, timing: { start: 0, last: 0 }, report: null, error: null, waitUntil: null, run: null, finished: 0, link: null, ip: null, stopped: false });
 
 /** A lane's next state for one console line. */
 function laneReducer(l: Lane, e: VisitEvent, at: number): Lane {
   const timing = l.timing.start ? l.timing : { ...l.timing, start: at };
   switch (e.type) {
     case "step":
-      return { ...l, timing, steps: [...l.steps, e.message] };
+      // Stopped: no more waiting for a new IP, so the countdown goes.
+      return { ...l, timing, steps: [...l.steps, e.message], ...(e.message === "Stopped." ? { stopped: true, waitUntil: null } : {}) };
     case "run":
       // The lane's next run starts: its steps, pages and results start over (the tab keeps its count).
       return { ...newLane(), steps: [`Run ${e.n} of ${e.of}: new visit with a new proxy IP`], timing: { start: at, last: 0 }, run: { n: e.n, of: e.of }, finished: l.finished, link: e.link ?? null };
@@ -106,7 +109,7 @@ export function useVisitRun() {
   }, []);
 
   // Countdown while the proxy provider makes a lane wait for a new IP.
-  const waiting = Object.values(lanes).some((l) => l.waitUntil && l.waitUntil > now);
+  const waiting = running && Object.values(lanes).some((l) => !l.stopped && l.waitUntil && l.waitUntil > now);
   useEffect(() => {
     if (!waiting) return;
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -227,7 +230,7 @@ export function VisitRunView({ run }: { run: VisitRun }) {
               <CommonSteps steps={common} />
             </div>
           )}
-          <div role="tablist" aria-label="Visits running at the same time" className="mt-3 flex gap-1 overflow-x-auto border-b border-line px-2">
+          <div role="tablist" aria-label="Visits running at the same time" className="mt-2 flex gap-0.5 overflow-x-auto border-b border-line px-2">
             {laneNumbers.map((n) => (
               <LaneTab key={n} n={n} lane={lanes[n]} active={n === selected} onSelect={() => setSelected(n)} running={running} now={now} />
             ))}
@@ -235,7 +238,7 @@ export function VisitRunView({ run }: { run: VisitRun }) {
           {lane && (
             <div role="tabpanel" id={`visit-lane-${selected}`} aria-labelledby={`visit-tab-${selected}`} className="p-4">
               <LaneFacts lane={lane} />
-              <LaneNotices lane={lane} now={now} />
+              <LaneNotices lane={lane} running={running} now={now} />
               <LaneConsole lane={lane} running={running} onOpen={setOpenPage} />
             </div>
           )}
@@ -243,7 +246,7 @@ export function VisitRunView({ run }: { run: VisitRun }) {
       ) : (
         lane && (
           <>
-            <LaneNotices lane={lane} now={now} />
+            <LaneNotices lane={lane} running={running} now={now} />
             {(running || lane.steps.length > 0) && (
               <Panel title={running ? "Running" : "Steps"} bodyClassName="p-4">
                 <LaneConsole lane={lane} running={running} onOpen={setOpenPage} />
@@ -264,12 +267,14 @@ export function VisitRunView({ run }: { run: VisitRun }) {
   );
 }
 
-type LaneState = "running" | "waiting" | "done" | "failed";
+type LaneState = "running" | "waiting" | "done" | "failed" | "stopped";
 
+/** A lane's state; once the visit isn't running, never "waiting" (no countdown after a stop). */
 function laneState(l: Lane, running: boolean, now: number): LaneState {
   if (l.error) return "failed";
-  if (l.waitUntil && l.waitUntil > now) return "waiting";
-  return running ? "running" : "done";
+  if (l.stopped) return "stopped";
+  if (!running) return "done";
+  return l.waitUntil && l.waitUntil > now ? "waiting" : "running";
 }
 
 const LANE_STATE: Record<LaneState, { icon: typeof CircleCheck; color: string; label: string }> = {
@@ -277,13 +282,15 @@ const LANE_STATE: Record<LaneState, { icon: typeof CircleCheck; color: string; l
   waiting: { icon: Clock, color: "text-status-warning", label: "Waiting" },
   done: { icon: CircleCheck, color: "text-status-good", label: "Done" },
   failed: { icon: CircleX, color: "text-status-critical", label: "Failed" },
+  stopped: { icon: CircleMinus, color: "text-subtle", label: "Stopped" },
 };
 
-/** One visit's tab: its state, then which run and proxy link it's on. */
+/** One visit's tab, kept small: its state, its number, a wait countdown, and the runs it has finished. */
 function LaneTab({ n, lane: l, active, onSelect, running, now }: { n: number; lane: Lane; active: boolean; onSelect: () => void; running: boolean; now: number }) {
   const state = laneState(l, running, now);
   const { icon: Icon, color, label } = LANE_STATE[state];
   const waitLeft = l.waitUntil ? Math.max(0, Math.ceil((l.waitUntil - now) / 1000)) : 0;
+  const detail = [label, l.run && `run ${l.run.n} of ${l.run.of}`, l.link && `proxy link #${l.link.number}`, `${l.finished} finished`].filter(Boolean).join(" · ");
   return (
     <button
       type="button"
@@ -292,24 +299,18 @@ function LaneTab({ n, lane: l, active, onSelect, running, now }: { n: number; la
       aria-selected={active}
       aria-controls={`visit-lane-${n}`}
       onClick={onSelect}
-      className={`relative flex shrink-0 items-center gap-2.5 rounded-t-lg px-3.5 py-2.5 text-left transition-colors ${
-        active ? "bg-surface-2 text-ink" : "text-muted hover:bg-surface hover:text-ink"
+      title={detail}
+      className={`relative flex shrink-0 items-center gap-1.5 rounded-t-md px-2.5 py-1.5 text-xs whitespace-nowrap transition-colors ${
+        active ? "bg-surface-2 text-ink" : "text-muted hover:text-ink"
       }`}
     >
-      <Icon className={`size-4 shrink-0 ${color} ${state === "running" ? "animate-spin" : ""}`} aria-label={label} />
-      <span className="flex flex-col leading-tight">
-        <span className="text-sm font-medium">Visit {n}</span>
-        <span className="font-mono text-[11px] whitespace-nowrap text-subtle">
-          {state === "waiting" ? `new IP in ${formatWait(waitLeft)}` : l.run ? `run ${l.run.n}/${l.run.of}` : label.toLowerCase()}
-          {l.link ? ` · link #${l.link.number}` : ""}
-        </span>
-      </span>
+      <Icon className={`size-3.5 shrink-0 ${color} ${state === "running" ? "animate-spin" : ""}`} aria-label={label} />
+      <span className="font-medium">Visit {n}</span>
+      {state === "waiting" && <span className="font-mono text-[11px] text-status-warning">{formatWait(waitLeft)}</span>}
       {l.finished > 0 && (
-        <span className={`rounded-md px-1.5 font-mono text-[11px] tabular-nums ${active ? "bg-accent/20 text-ink" : "bg-surface-2 text-subtle"}`} title="Runs finished">
-          {l.finished}
-        </span>
+        <span className={`rounded px-1 font-mono text-[10px] tabular-nums ${active ? "bg-accent/20 text-ink" : "bg-surface-2 text-subtle"}`}>{l.finished}</span>
       )}
-      {active && <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-gradient-accent" aria-hidden />}
+      {active && <span className="absolute inset-x-1.5 -bottom-px h-0.5 rounded-full bg-gradient-accent" aria-hidden />}
     </button>
   );
 }
@@ -347,9 +348,9 @@ function CommonSteps({ steps }: { steps: string[] }) {
   );
 }
 
-/** A lane's wait countdown and error. */
-function LaneNotices({ lane, now }: { lane: Lane; now: number }) {
-  const waitLeft = lane.waitUntil ? Math.max(0, Math.ceil((lane.waitUntil - now) / 1000)) : 0;
+/** A lane's wait countdown (only while the visit runs) and error. */
+function LaneNotices({ lane, running, now }: { lane: Lane; running: boolean; now: number }) {
+  const waitLeft = running && !lane.stopped && lane.waitUntil ? Math.max(0, Math.ceil((lane.waitUntil - now) / 1000)) : 0;
   return (
     <>
       {waitLeft > 0 && (

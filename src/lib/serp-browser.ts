@@ -19,10 +19,12 @@ const NAV_TIMEOUT = 30_000;
 /** Browsers already installed on this computer, tried in order. */
 const BROWSER_PATHS = [
   process.env.BROWSER_PATH,
-  "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-  "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+  // Google Chrome first, else Microsoft Edge.
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+  process.env.LOCALAPPDATA && `${process.env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`,
+  "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+  "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
   "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
   "/usr/bin/google-chrome",
@@ -59,7 +61,7 @@ const LEASE_WAIT_MS = 5 * 60_000;
  */
 export async function openBrowserSearch(): Promise<BrowserSearch> {
   const executablePath = BROWSER_PATHS.find((p): p is string => !!p && existsSync(p));
-  if (!executablePath) throw new Error("no browser found (install Microsoft Edge or Google Chrome)");
+  if (!executablePath) throw new Error("no browser found (install Google Chrome or Microsoft Edge)");
 
   const waitFor = AbortSignal.timeout(LEASE_WAIT_MS);
   for (;;) {

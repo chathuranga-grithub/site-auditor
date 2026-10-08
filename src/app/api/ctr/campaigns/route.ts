@@ -1,9 +1,10 @@
 // GET  /api/ctr/campaigns → { items: { campaign, summary }[], setup }
-// POST /api/ctr/campaigns  body: NewCampaign → saves it and runs the first check right away.
+// POST /api/ctr/campaigns  body: NewCampaign → saves it, starts its visits, and starts the first
+//   check in the background (the page doesn't wait for the Google search).
 
 import { badRequest, errorResponse, parseNewCampaign } from "@/lib/campaigns/api";
 import { collectCampaign, ctrSetup } from "@/lib/campaigns/collect";
-import { NotConfiguredError, createCampaign, getCampaign, listCampaigns, listDays } from "@/lib/campaigns/db";
+import { NotConfiguredError, createCampaign, listCampaigns, listDaysFor } from "@/lib/campaigns/db";
 import { summarize } from "@/lib/campaigns/metrics";
 import { todayInVietnam } from "@/lib/campaigns/site";
 import { startCampaignVisit } from "@/lib/campaigns/visits";
@@ -14,9 +15,11 @@ export const maxDuration = 60;
 export async function GET() {
   try {
     const today = todayInVietnam();
+    const setup = ctrSetup();
     const campaigns = await listCampaigns();
-    const items = await Promise.all(campaigns.map(async (campaign) => ({ campaign, summary: summarize(campaign, await listDays(campaign.id), today) })));
-    return Response.json({ items, setup: await ctrSetup() });
+    const days = await listDaysFor(campaigns.map((c) => c.id));
+    const items = campaigns.map((campaign) => ({ campaign, summary: summarize(campaign, days.get(campaign.id) ?? [], today) }));
+    return Response.json({ items, setup: await setup });
   } catch (err) {
     // No database yet: an empty list, and the page shows what to connect.
     if (err instanceof NotConfiguredError) return Response.json({ items: [], setup: await ctrSetup() });
@@ -38,9 +41,10 @@ export async function POST(request: Request) {
     const campaign = await createCampaign(input, today);
     // An active campaign runs its visit through the proxy (on the server; pages follow its console).
     startCampaignVisit(campaign);
-    // First reading right away, so the campaign isn't empty until tomorrow.
-    const first = await collectCampaign(campaign, today).catch((err: unknown) => ({ problems: [err instanceof Error ? err.message : String(err)] }));
-    return Response.json({ campaign: (await getCampaign(campaign.id)) ?? campaign, problems: first.problems }, { status: 201 });
+    // First reading right away, so the campaign isn't empty until tomorrow. In the background: the
+    // Google search takes a while (and waits for a free proxy link), and the page shouldn't wait for it.
+    void collectCampaign(campaign, today).catch((err: unknown) => console.error(`Campaign ${campaign.id}: first check failed:`, err));
+    return Response.json({ campaign, problems: [] }, { status: 201 });
   } catch (err) {
     return errorResponse(err);
   }

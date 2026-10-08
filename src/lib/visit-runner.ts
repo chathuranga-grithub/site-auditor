@@ -4,7 +4,7 @@
 // This is a QA check that the site works for a visitor in that location, not a traffic tool.
 
 import { chromium, devices, type Browser, type BrowserContext, type Page } from "playwright-core";
-import { getProxy, getProxyOrReuse } from "./proxy-api";
+import { getProxyOrReuse, getUnvisitedProxy } from "./proxy-api";
 import { NO_WEBRTC_ARGS, NO_WEBRTC_SCRIPT } from "./no-webrtc";
 import { lookupExit, ownPublicIp } from "./proxy-ip";
 import { ProxyIpInUseError } from "./proxy-pool";
@@ -99,9 +99,12 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
 
   // 1. Proxy
   send({ type: "step", message: "Getting a proxy from the proxy API…" });
-  const proxy = freshProxy ? { ...(await getProxy(proxyApiUrl)), reused: false } : await getProxyOrReuse(proxyApiUrl);
+  const proxy = freshProxy ? { ...(await getUnvisitedProxy(proxyApiUrl)), reused: false } : { ...(await getProxyOrReuse(proxyApiUrl)), fromEarlier: false };
   const { server, username, password, ...publicProxy } = proxy;
   report.proxy = publicProxy;
+  if (proxy.fromEarlier) {
+    send({ type: "step", message: `Using the IP this proxy link gave just before (no visit has used it yet): ${proxy.address}.` });
+  }
   if (proxy.reused) {
     send({ type: "step", message: `The provider isn't giving a new IP yet, so the previous proxy (${proxy.address}) is reused.` });
   }
@@ -285,8 +288,8 @@ const BROWSER_BACKGROUND_HOSTS = [
 ];
 
 async function launchBrowser(proxy: { server: string; username?: string; password?: string }): Promise<Browser> {
-  // Uses a browser already installed on this computer: Microsoft Edge, else Google Chrome.
-  for (const channel of ["msedge", "chrome"]) {
+  // Uses a browser already installed on this computer: Google Chrome, else Microsoft Edge.
+  for (const channel of ["chrome", "msedge"]) {
     try {
       return await chromium.launch({
         channel,
@@ -303,7 +306,7 @@ async function launchBrowser(proxy: { server: string; username?: string; passwor
       /* try the next one */
     }
   }
-  throw new Error("No browser found. Install Microsoft Edge or Google Chrome on this computer.");
+  throw new Error("No browser found. Install Google Chrome or Microsoft Edge on this computer.");
 }
 
 /** Where the visit comes from, looked up inside the proxied browser. */

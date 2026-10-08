@@ -49,7 +49,7 @@ The second tool, at `/rankings`. Enter a **keyword** (e.g. `iphone`). It shows t
 - **Table:** one row per result. Click a row for the full details.
 - **Exports:** **Excel** and **Copy summary**.
 
-**Search results** are read from Google in a real browser (Puppeteer, with Microsoft Edge or Google Chrome installed on the computer) through the **Vietnam proxy** from the proxy API (Settings). It only reads the result list; it never clicks a result.
+**Search results** are read from Google in a real browser (Puppeteer, with Google Chrome installed on the computer, else Microsoft Edge) through the **Vietnam proxy** from the proxy API (Settings). It only reads the result list; it never clicks a result.
 
 - Works only when the app runs on a computer (`npm run dev`), and for **Vietnam** only (the proxy is in Vietnam).
 - Google sometimes answers a proxy IP with a CAPTCHA; then that search fails and the next one gets a new IP.
@@ -67,7 +67,7 @@ At `/ctr`: **Dashboard**, **Campaigns**, **New campaign**. A campaign follows on
 - **Goals:** target CTR (with the typical CTR for the position as a guide), target position, weekly click growth, time on page.
 - **Campaign page:** goal vs real tiles, visits today and so far against the visit plan, and every day's numbers. **Check ranking** runs today's check on demand.
 - Saved in **Postgres (Neon)**: campaigns and daily numbers, including visits done per day.
-- **Site visit:** while a campaign runs, the computer running the app visits every page of the site in a real browser (Edge or Chrome) through a Vietnam proxy, and the campaign page shows the live console. Each day it runs the campaign's target visits from its visit plan (day 1 visits, grown by the daily increase %), one after another, each with a new proxy IP. Visits already done that day count toward the target, so a restart or a pause and resume only runs what's left. It runs when the campaign starts, then again once a day from 08:00 Vietnam time (and when the app starts or the campaign is resumed). Not on Vercel (no browser there).
+- **Site visit:** while a campaign runs, the computer running the app visits every page of the site in a real browser (Chrome, else Edge) through a Vietnam proxy, and the campaign page shows the live console. Each day it runs the campaign's target visits from its visit plan (day 1 visits, grown by the daily increase %), one after another, each with a new proxy IP. Visits already done that day count toward the target, so a restart or a pause and resume only runs what's left. It runs when the campaign starts, then again once a day from 08:00 Vietnam time (and when the app starts or the campaign is resumed). Not on Vercel (no browser there).
 - **Proxy links:** an admin saves one proxy API link (e.g. ShopLike) or a list of them (pasted one per line) in **Settings**; links can be added, replaced or removed one by one. They are stored **encrypted** in the database (AES-256-GCM, key derived from `AUTH_SECRET`) and never shown in full again. `PROXY_API_URL` in `.env.local` still works as a fallback (one link, or several separated by spaces or commas). For now visits and searches use the first link. If `AUTH_SECRET` changes, save the links again.
 
 **Setup:**
