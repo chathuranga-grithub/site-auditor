@@ -8,7 +8,7 @@ import { useEffect, useState } from "react";
 import { Loader2, RefreshCw, Trash2, UserRound } from "lucide-react";
 
 interface Status {
-  profiles: { name: string; folder: string }[];
+  profiles: { name: string; folder: string; account: { name: string | null; email: string } | null }[];
   selected: string | null;
   dir: string | null;
   source: "saved" | "env" | null;
@@ -72,7 +72,8 @@ export function ChromeProfileField() {
             <option value="">None: a fresh profile each time</option>
             {profiles.map((p) => (
               <option key={p.folder} value={p.name}>
-                {p.name}
+                {/* Signed-in profiles keep Chrome's own name ("Your Chrome"): show the account too, as Chrome's menu does. */}
+                {p.account ? `${p.name} — ${p.account.name ? `${p.account.name} (${p.account.email})` : p.account.email}` : p.name}
               </option>
             ))}
           </select>

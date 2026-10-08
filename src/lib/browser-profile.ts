@@ -31,6 +31,8 @@ export interface ChromeProfile {
   name: string;
   /** Its folder inside Chrome's own, e.g. "Profile 3". */
   folder: string;
+  /** Signed in to Google: the account's name and email, as Chrome's profile menu shows them. */
+  account: { name: string | null; email: string } | null;
 }
 
 export interface ChromeProfileStatus {
@@ -51,9 +53,11 @@ export async function listChromeProfiles(): Promise<ChromeProfile[]> {
   const root = chromeUserData();
   if (!root) return [];
   try {
-    const state = JSON.parse(await fs.readFile(path.join(root, "Local State"), "utf8")) as { profile?: { info_cache?: Record<string, { name?: string }> } };
+    const state = JSON.parse(await fs.readFile(path.join(root, "Local State"), "utf8")) as {
+      profile?: { info_cache?: Record<string, { name?: string; user_name?: string; gaia_name?: string }> };
+    };
     return Object.entries(state.profile?.info_cache ?? {})
-      .map(([folder, info]) => ({ name: info.name ?? folder, folder }))
+      .map(([folder, info]) => ({ name: info.name ?? folder, folder, account: info.user_name ? { name: info.gaia_name || null, email: info.user_name } : null }))
       .sort((a, b) => a.name.localeCompare(b.name));
   } catch {
     return []; // Chrome not installed, or never run
