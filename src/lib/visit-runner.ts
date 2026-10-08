@@ -5,8 +5,8 @@
 
 import { chromium, devices, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { getProxy, getProxyOrReuse } from "./proxy-api";
-import { networkType } from "./network-type";
 import { NO_WEBRTC_ARGS, NO_WEBRTC_SCRIPT } from "./no-webrtc";
+import { lookupExit, ownPublicIp } from "./proxy-ip";
 import { readSitemap, type SitemapFetcher } from "./sitemap";
 import { isBlockedHost, isInternal, normalizeUrl, shouldSkipCrawl } from "./url";
 import {
@@ -279,56 +279,16 @@ async function launchBrowser(proxy: { server: string; username?: string; passwor
   throw new Error("No browser found. Install Microsoft Edge or Google Chrome on this computer.");
 }
 
-/** IP lookup services, tried in order. Both return { ip, country (2-letter code) }. */
-const IP_SERVICES = ["https://ipinfo.io/json", "https://api.country.is/"];
-
-function toExitInfo(j: Record<string, string> | undefined, lookupMs: number): ExitInfo | null {
-  if (!j?.ip) return null;
-  const names = new Intl.DisplayNames(["en"], { type: "region" });
-  return {
-    ip: j.ip,
-    countryCode: j.country ?? null,
-    country: j.country ? (names.of(j.country) ?? j.country) : null,
-    city: j.city ?? null,
-    org: j.org ?? null,
-    network: networkType(j.org ?? null),
-    lookupMs,
-  };
-}
-
 /** Where the visit comes from, looked up inside the proxied browser. */
-async function exitLocation(context: BrowserContext): Promise<ExitInfo | null> {
-  for (const service of IP_SERVICES) {
+function exitLocation(context: BrowserContext): Promise<ExitInfo | null> {
+  return lookupExit(async (url) => {
     const page = await context.newPage();
     try {
-      const t0 = Date.now();
-      const res = await page.goto(service, { timeout: 20_000 });
-      const info = toExitInfo((await res?.json()) as Record<string, string> | undefined, Date.now() - t0);
-      if (info) return info;
-    } catch {
-      /* try the next service */
+      return await (await page.goto(url, { timeout: 20_000 }))?.json();
     } finally {
       await page.close().catch(() => {});
     }
-  }
-  return null;
-}
-
-/**
- * This computer's own public IP, asked directly (not through the proxy). Only the IP service sees
- * it, never the site. Null if no service answered.
- */
-async function ownPublicIp(): Promise<string | null> {
-  for (const service of IP_SERVICES) {
-    try {
-      const res = await fetch(service, { signal: AbortSignal.timeout(10_000), headers: { Accept: "application/json" } });
-      const ip = ((await res.json()) as { ip?: string }).ip;
-      if (ip) return ip;
-    } catch {
-      /* try the next service */
-    }
-  }
-  return null;
+  });
 }
 
 /** Why the test must not continue from this IP, or null when it's the right country through the proxy. */

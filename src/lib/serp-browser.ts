@@ -1,12 +1,14 @@
 // Server-only, local only: Google results read in a real browser (Puppeteer) through the Vietnam
 // proxy, instead of a paid SERP API. It only searches and reads the result list: it never clicks a
-// result. Google sometimes answers a proxy IP with a CAPTCHA; then that search fails and the next
-// one gets a new proxy IP.
+// result. Before searching it checks the proxy's IP: in Vietnam, and not this computer's own IP.
+// Google sometimes answers a proxy IP with a CAPTCHA; then the search fails, and the daily check
+// tries again later that day (src/lib/campaigns/scheduler.ts).
 
 import { existsSync } from "node:fs";
 import type { Browser } from "puppeteer-core";
 import { NO_WEBRTC_ARGS, NO_WEBRTC_SCRIPT } from "./no-webrtc";
 import { getProxyOrReuse } from "./proxy-api";
+import { lookupExit, ownPublicIp } from "./proxy-ip";
 import { resolveProxyApi } from "./proxy-settings";
 
 /** The proxy's country: browser searches are only right for this one. */
@@ -68,6 +70,28 @@ export async function openBrowserSearch(): Promise<BrowserSearch> {
       "--lang=vi-VN",
     ],
   });
+
+  // Where the searches really come from, before any search: wrong or unknown, no search at all.
+  try {
+    const [exit, ownIp] = await Promise.all([
+      lookupExit(async (url) => {
+        const tab = await browser.newPage();
+        try {
+          if (proxy.username) await tab.authenticate({ username: proxy.username, password: proxy.password ?? "" });
+          return await (await tab.goto(url, { timeout: NAV_TIMEOUT }))?.json();
+        } finally {
+          await tab.close().catch(() => {});
+        }
+      }),
+      ownPublicIp(),
+    ]);
+    if (!exit) throw new Error(`couldn't confirm the proxy's IP and country (proxy ${proxy.address})`);
+    if (ownIp && exit.ip === ownIp) throw new Error(`the search would come from this computer's own IP (${ownIp}), not the proxy`);
+    if (exit.countryCode !== BROWSER_SEARCH_COUNTRY) throw new Error(`the proxy's IP (${exit.ip}) is in ${exit.country ?? "an unknown country"}, not Vietnam`);
+  } catch (err) {
+    await browser.close().catch(() => {});
+    throw err;
+  }
 
   return {
     async page(p, n) {

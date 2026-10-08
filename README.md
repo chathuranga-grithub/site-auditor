@@ -61,7 +61,7 @@ Page analysis (`/api/analyze`) uses the same SSRF-safe fetch as Site Audit.
 At `/ctr`: **Dashboard**, **Campaigns**, **New campaign**. A campaign follows one keyword for one site for 1–365 days and compares **real** numbers with goals. Nothing is generated: every number comes from real visitors.
 
 - **Every day** from 08:00 Vietnam time:
-  - Google position for the keyword in Vietnam, read in a browser through the Vietnam proxy. Runs on the computer running the app (`src/lib/campaigns/scheduler.ts`); if it was off, it catches up when the app starts;
+  - Google position for the keyword in Vietnam, read in a browser through the Vietnam proxy. Runs on the computer running the app (`src/lib/campaigns/scheduler.ts`); if it was off, it catches up when the app starts. Before searching it checks the proxy's IP is in Vietnam and isn't the computer's own; a failed check (CAPTCHA, wrong IP) is tried again up to 3 times that day, 30 minutes apart;
   - Search Console clicks, impressions, CTR and mobile / desktop split, for 3 days ago (Google's delay);
   - Google Analytics 4 time on page (if a page URL and GA4 property are set). These two run on Vercel Cron (`vercel.json`) too.
 - **Goals:** target CTR (with the typical CTR for the position as a guide), target position, weekly click growth, time on page.
