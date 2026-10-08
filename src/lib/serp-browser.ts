@@ -9,7 +9,7 @@ import type { Browser } from "puppeteer-core";
 import { NO_WEBRTC_ARGS, NO_WEBRTC_SCRIPT } from "./no-webrtc";
 import { ProxyWaitError, getProxyOrReuse, type ProxyConfig } from "./proxy-api";
 import { leaseProxyApi, restProxyApi } from "./proxy-pool";
-import { leaseChromeProfile, profileLockedMessage, type ProfileLease } from "./browser-profile";
+import { leaseChromeProfile, PROFILE_ARGS, profileLockedMessage, type ProfileLease } from "./browser-profile";
 import { lookupExit, ownPublicIp } from "./proxy-ip";
 
 /** The proxy's country: browser searches are only right for this one. */
@@ -112,6 +112,7 @@ async function openWithProxy(executablePath: string, proxy: ProxyConfig, profile
         // WebRTC could otherwise go around the proxy and show this computer's IP (src/lib/no-webrtc.ts).
         ...NO_WEBRTC_ARGS,
         "--lang=vi-VN",
+        ...(profileDir ? PROFILE_ARGS : []),
       ],
     })
     .catch((err: unknown) => {

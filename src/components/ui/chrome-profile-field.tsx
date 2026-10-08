@@ -1,8 +1,9 @@
 "use client";
 
 // The Chrome profile: the picker on the Settings page. Lists this computer's Chrome profiles by name;
-// picking one copies it into the app's own folder (Chrome won't let the app use it in place), and
-// "Copy again" refreshes that copy after the profile was changed in Chrome. None = fresh profiles.
+// Save stores it for the app (behind the scenes, a copy in the app's own folder: Chrome won't let the
+// app use it in place), and Update saves it again after the profile was changed in Chrome. None = fresh
+// profiles. The words on screen are "save" and "update" only.
 
 import { useEffect, useState } from "react";
 import { Loader2, RefreshCw, Trash2, UserRound } from "lucide-react";
@@ -67,18 +68,18 @@ export function ChromeProfileField() {
             value={choice}
             onChange={(e) => setChoice(e.target.value)}
             disabled={busy || !profiles.length}
-            className="h-8 w-full min-w-40 rounded-md border border-transparent bg-transparent px-1 text-sm text-ink outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/20 disabled:opacity-60"
+            className="h-8 w-full min-w-40 rounded-md border border-transparent bg-transparent px-1 text-sm text-ink outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/20 disabled:opacity-60 [&_option]:bg-surface-solid [&_option]:text-ink"
           >
             <option value="">None: a fresh profile each time</option>
             {profiles.map((p) => (
               <option key={p.folder} value={p.name}>
-                {/* Signed-in profiles keep Chrome's own name ("Your Chrome"): show the account too, as Chrome's menu does. */}
-                {p.account ? `${p.name} — ${p.account.name ? `${p.account.name} (${p.account.email})` : p.account.email}` : p.name}
+                {/* Signed-in profiles: the account too, as Chrome's menu shows it. */}
+                {!p.account ? p.name : p.name === p.account.name || p.name === p.account.email ? `${p.name} (${p.account.email})` : `${p.name} — ${p.account.name ?? p.account.email}`}
               </option>
             ))}
           </select>
         </label>
-        {busy && <Loader2 className="size-4 animate-spin text-accent-2" aria-label="Copying" />}
+        {busy && <Loader2 className="size-4 animate-spin text-accent-2" aria-label="Saving" />}
         {changed && (
           <button
             type="button"
@@ -86,13 +87,13 @@ export function ChromeProfileField() {
             disabled={busy}
             className="rounded-md bg-surface-2 px-2.5 py-1 text-xs font-medium text-ink ring-1 ring-line-strong hover:bg-surface disabled:opacity-40"
           >
-            {choice ? "Use this profile" : "Save"}
+            Save
           </button>
         )}
         {!changed && status?.selected && (
           <>
-            <button type="button" onClick={() => call("POST", { name: status.selected })} disabled={busy} className={button} title="Copy the profile from Chrome again (after changing it there)">
-              <RefreshCw className="size-3" /> Copy again
+            <button type="button" onClick={() => call("POST", { name: status.selected })} disabled={busy} className={button} title="Save it again after changing the profile in Chrome">
+              <RefreshCw className="size-3" /> Update
             </button>
             <button type="button" onClick={() => call("DELETE")} disabled={busy} aria-label="Stop using a Chrome profile" title="Back to fresh profiles" className={`${button} hover:text-status-critical`}>
               <Trash2 className="size-3" />
@@ -103,13 +104,15 @@ export function ChromeProfileField() {
       <div className="text-xs text-subtle">
         {status?.selected && status.dir ? (
           <>
-            Using a copy of <b className="text-muted">{status.selected}</b>
-            {status.copiedAt ? `, copied ${new Date(status.copiedAt).toLocaleString()}` : ""}: <span className="font-mono break-all">{status.dir}</span>
+            <span title={status.dir}>
+              Using <b className="text-muted">{status.selected}</b>
+              {status.copiedAt ? ` (saved ${new Date(status.copiedAt).toLocaleString()})` : ""}.
+            </span>
           </>
         ) : status?.selected ? (
           <>
-            <b className="text-muted">{status.selected}</b> isn&apos;t copied on this computer, so no profile is used here (a fresh one each time). Use{" "}
-            <b className="text-muted">Copy again</b> to copy it here.
+            <b className="text-muted">{status.selected}</b> isn&apos;t saved on this computer, so no profile is used here (a fresh one each time). Click{" "}
+            <b className="text-muted">Update</b> to save it here.
           </>
         ) : status?.source === "env" && status.dir ? (
           <>
@@ -118,7 +121,7 @@ export function ChromeProfileField() {
         ) : status && !profiles.length ? (
           "No Chrome profiles found on this computer."
         ) : (
-          "Pick one of this computer's Chrome profiles. Quit Chrome first, so everything copies."
+          "Pick one of this computer's Chrome profiles and save. Quit Chrome first."
         )}
       </div>
       {error && <div className="text-xs text-status-critical">{error}</div>}

@@ -30,9 +30,8 @@ export default async function SettingsPage() {
 
       <Panel title={<Title icon={<AppWindow className="size-3.5" />} text="Browser" />} bodyClassName="space-y-3 p-4 sm:p-5">
         <p className="text-sm text-muted">
-          A Chrome profile for campaign visits and ranking checks (its cookies, settings and history). Pick one of this computer&apos;s
-          Chrome profiles: the app copies it into its own folder, because Chrome won&apos;t let the app use it in place, and each visit gets
-          its own copy. After changing the profile in Chrome, use <b className="text-ink">Copy again</b>. Extensions stay off.
+          The Chrome profile campaign visits and ranking checks use (its cookies, settings and history). Pick one of this computer&apos;s
+          Chrome profiles and save. After changing that profile in Chrome, click <b className="text-ink">Update</b>. Extensions stay off.
         </p>
         <ChromeProfileField />
       </Panel>

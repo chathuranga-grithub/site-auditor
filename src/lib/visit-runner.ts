@@ -8,7 +8,7 @@ import { getProxyOrReuse, getUnvisitedProxy } from "./proxy-api";
 import { NO_WEBRTC_ARGS, NO_WEBRTC_SCRIPT } from "./no-webrtc";
 import { lookupExit, ownPublicIp } from "./proxy-ip";
 import { ProxyIpInUseError } from "./proxy-pool";
-import { profileLockedMessage } from "./browser-profile";
+import { PROFILE_ARGS, profileLockedMessage } from "./browser-profile";
 import { clean, searchParams } from "./serp";
 import { BROWSER_SEARCH_COUNTRY, googleBlocked, googleResultsUrl, readOrganicResults } from "./serp-browser";
 import { readSitemap, type SitemapFetcher } from "./sitemap";
@@ -292,7 +292,7 @@ type ProxyLogin = { server: string; username?: string; password?: string };
 const CHANNELS = ["chrome", "msedge"];
 
 /** How every browser starts: visible, through the proxy only, background services blocked, no WebRTC. */
-function launchOptions(proxy: ProxyLogin) {
+function launchOptions(proxy: ProxyLogin, extraArgs: string[] = []) {
   return {
     // Headed: a visible browser window, so the visit can be watched as it works.
     headless: false,
@@ -301,6 +301,7 @@ function launchOptions(proxy: ProxyLogin) {
       `--host-resolver-rules=${BROWSER_BACKGROUND_HOSTS.map((h) => `MAP ${h} ~NOTFOUND`).join(", ")}`,
       // WebRTC could otherwise show the site our real IP (src/lib/no-webrtc.ts).
       ...NO_WEBRTC_ARGS,
+      ...extraArgs,
     ],
   };
 }
@@ -360,7 +361,7 @@ async function launchBrowser(proxy: ProxyLogin): Promise<Browser> {
 async function launchWithProfile(proxy: ProxyLogin, profileDir: string): Promise<BrowserContext> {
   for (const channel of CHANNELS) {
     try {
-      return await chromium.launchPersistentContext(profileDir, { channel, ...launchOptions(proxy), ...DESKTOP });
+      return await chromium.launchPersistentContext(profileDir, { channel, ...launchOptions(proxy, PROFILE_ARGS), ...DESKTOP });
     } catch (err) {
       // Open in another Chrome window: say so, rather than trying the next browser.
       const locked = profileLockedMessage(err, profileDir);

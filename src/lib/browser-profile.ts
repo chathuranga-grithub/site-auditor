@@ -54,10 +54,15 @@ export async function listChromeProfiles(): Promise<ChromeProfile[]> {
   if (!root) return [];
   try {
     const state = JSON.parse(await fs.readFile(path.join(root, "Local State"), "utf8")) as {
-      profile?: { info_cache?: Record<string, { name?: string; user_name?: string; gaia_name?: string }> };
+      profile?: { info_cache?: Record<string, { name?: string; is_using_default_name?: boolean; user_name?: string; gaia_name?: string }> };
     };
     return Object.entries(state.profile?.info_cache ?? {})
-      .map(([folder, info]) => ({ name: info.name ?? folder, folder, account: info.user_name ? { name: info.gaia_name || null, email: info.user_name } : null }))
+      .map(([folder, info]) => ({
+        // A signed-in profile never renamed is stored as "Your Chrome": Chrome's menu shows the account's name instead, so do we.
+        name: (info.is_using_default_name && info.user_name && (info.gaia_name || info.user_name)) || info.name || folder,
+        folder,
+        account: info.user_name ? { name: info.gaia_name || null, email: info.user_name } : null,
+      }))
       .sort((a, b) => a.name.localeCompare(b.name));
   } catch {
     return []; // Chrome not installed, or never run
@@ -85,7 +90,7 @@ export async function chromeProfileDir(): Promise<string | null> {
 
 /**
  * Picks a Chrome profile by name and copies it into the app's folder (again, when it's already
- * picked: "Copy again"). Older visit and ranking copies are removed, so they're filled from the new
+ * picked: "Update" in Settings). Older visit and ranking copies are removed, so they're filled from the new
  * one. Returns an error message, or null when done.
  */
 export async function selectChromeProfile(name: string, updatedBy: string | null): Promise<string | null> {
@@ -93,12 +98,12 @@ export async function selectChromeProfile(name: string, updatedBy: string | null
   const root = chromeUserData();
   if (!profile || !root) return `There's no Chrome profile named "${name}" on this computer.`;
   const dir = copyDir(profile.name);
-  if ([...inUse].some((d) => d === dir || d.startsWith(dir + path.sep))) return "A visit or ranking check is using the profile right now. Copy it again when they've finished.";
+  if ([...inUse].some((d) => d === dir || d.startsWith(dir + path.sep))) return "A visit or ranking check is using the profile right now. Update it when they've finished.";
   try {
     await fs.rm(dir, { recursive: true, force: true });
-    await copyProfile(path.join(root, profile.folder), root, dir);
+    await copyProfile(path.join(root, profile.folder), root, dir, profile.folder);
   } catch (err) {
-    return `Couldn't copy the profile (${err instanceof Error ? err.message : String(err)}). Quit Chrome completely and try again.`;
+    return `Couldn't save the profile (${err instanceof Error ? err.message : String(err)}). Quit Chrome completely and try again.`;
   }
   await writeSecretSetting(NAME, profile.name, updatedBy);
   return null;
@@ -108,12 +113,27 @@ export async function stopUsingChromeProfile(): Promise<void> {
   await deleteSecretSetting(NAME);
 }
 
-/** Copies one profile folder in as "Default", with Chrome's "Local State" beside it. Files a running Chrome holds are skipped. */
-async function copyProfile(profileFolder: string, userData: string, dest: string): Promise<void> {
+/**
+ * Copies one profile folder in as "Default", with Chrome's "Local State" beside it (it holds the key
+ * the cookies and passwords are encrypted with). Local State also says which profile Chrome opens and
+ * what it's called: it's rewritten to list only this one, as "Default" (else Chrome may open another,
+ * empty profile, or show the main profile's name). Files a running Chrome holds are skipped.
+ */
+async function copyProfile(profileFolder: string, userData: string, dest: string, folder = "Default"): Promise<void> {
   await fs.mkdir(dest, { recursive: true });
   await copyTree(profileFolder, path.join(dest, "Default"));
-  await fs.copyFile(path.join(userData, "Local State"), path.join(dest, "Local State")).catch(() => {});
+  try {
+    const state = JSON.parse(await fs.readFile(path.join(userData, "Local State"), "utf8")) as { profile?: Record<string, unknown> & { info_cache?: Record<string, unknown> } };
+    const info = state.profile?.info_cache?.[folder];
+    state.profile = { ...state.profile, info_cache: info ? { Default: info } : {}, last_used: "Default", last_active_profiles: ["Default"], profiles_order: ["Default"] };
+    await fs.writeFile(path.join(dest, "Local State"), JSON.stringify(state));
+  } catch {
+    /* no Local State: Chrome starts one (saved logins and cookies then don't carry over) */
+  }
 }
+
+/** Chrome's start-up switch for a saved profile: always its "Default" folder, whatever Local State says. */
+export const PROFILE_ARGS = ["--profile-directory=Default"];
 
 async function copyTree(from: string, to: string): Promise<void> {
   await fs.mkdir(to, { recursive: true });
