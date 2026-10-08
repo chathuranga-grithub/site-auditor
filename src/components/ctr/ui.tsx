@@ -17,9 +17,9 @@ export interface CampaignItem {
 export function PageHeader({ section, title, intro, actions }: { section: string; title: ReactNode; intro?: ReactNode; actions?: ReactNode }) {
   return (
     <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-      <div>
+      <div className="min-w-0">
         <div className="font-mono text-[10px] tracking-[0.2em] text-subtle uppercase">Auto CTR / {section}</div>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight sm:text-3xl">{title}</h1>
+        <h1 className="mt-1 text-2xl font-semibold tracking-tight break-words sm:text-3xl">{title}</h1>
         {intro && <p className="mt-1 max-w-2xl text-sm text-muted">{intro}</p>}
       </div>
       {actions}
@@ -142,7 +142,7 @@ export function CampaignConfirm({ kind, campaign: c, onConfirm, onCancel }: { ki
             <h2 id="confirm-title" className="font-semibold text-ink">
               {t.title}
             </h2>
-            <p className="mt-0.5 truncate font-mono text-xs text-link">{c.keyword}</p>
+            <p className="mt-0.5 font-mono text-xs break-words text-link">{c.keyword}</p>
             <p id="confirm-text" className="mt-2 text-sm text-muted">
               {t.text} {t.warning}
             </p>
@@ -187,7 +187,8 @@ export function CampaignTable({ items, actions }: { items: CampaignItem[]; actio
             return (
               <tr key={c.id} className="align-top hover:bg-surface-2">
                 <td className="max-w-0 px-4 py-2.5">
-                  <Link href={`/ctr/campaigns/${c.id}`} className="block truncate font-medium text-ink hover:underline">
+                  {/* The full keyword (often a phrase): wraps, never cut off. */}
+                  <Link href={`/ctr/campaigns/${c.id}`} className="block font-medium break-words text-ink hover:underline">
                     {c.keyword}
                   </Link>
                   <div className="truncate font-mono text-[11px] text-link">{(c.pageUrl ?? c.siteUrl).replace(/^https?:\/\//, "")}</div>
