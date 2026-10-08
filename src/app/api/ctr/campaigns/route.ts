@@ -16,10 +16,10 @@ export async function GET() {
     const today = todayInVietnam();
     const campaigns = await listCampaigns();
     const items = await Promise.all(campaigns.map(async (campaign) => ({ campaign, summary: summarize(campaign, await listDays(campaign.id), today) })));
-    return Response.json({ items, setup: ctrSetup() });
+    return Response.json({ items, setup: await ctrSetup() });
   } catch (err) {
     // No database yet: an empty list, and the page shows what to connect.
-    if (err instanceof NotConfiguredError) return Response.json({ items: [], setup: ctrSetup() });
+    if (err instanceof NotConfiguredError) return Response.json({ items: [], setup: await ctrSetup() });
     return errorResponse(err);
   }
 }
@@ -31,7 +31,7 @@ export async function POST(request: Request) {
   } catch {
     return badRequest("Request body must be JSON.");
   }
-  const input = parseNewCampaign(body);
+  const input = parseNewCampaign(body, (await ctrSetup()).proxyApis);
   if (typeof input === "string") return badRequest(input);
   try {
     const today = todayInVietnam();

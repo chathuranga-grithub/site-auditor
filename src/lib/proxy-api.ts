@@ -18,9 +18,9 @@ export class ProxyWaitError extends Error {
   }
 }
 
-// The last proxy handed out, reused while it's still valid (proxyTimeout) when the provider
-// says "wait N seconds" for a new one. In memory only; this runs on one local computer.
-let lastProxy: { config: ProxyConfig; apiUrl: string; expiresAt: number } | null = null;
+// The last proxy handed out by each API link, reused while it's still valid (proxyTimeout) when the
+// provider says "wait N seconds" for a new one. In memory only; this runs on one local computer.
+const lastProxy = new Map<string, { config: ProxyConfig; expiresAt: number }>();
 
 /** A fresh proxy if the provider gives one; otherwise the last one if still valid. */
 export async function getProxyOrReuse(apiUrl: string): Promise<ProxyConfig & { reused: boolean }> {
@@ -28,9 +28,8 @@ export async function getProxyOrReuse(apiUrl: string): Promise<ProxyConfig & { r
     const config = await getProxy(apiUrl);
     return { ...config, reused: false };
   } catch (err) {
-    if (err instanceof ProxyWaitError && lastProxy && lastProxy.apiUrl === apiUrl && Date.now() < lastProxy.expiresAt) {
-      return { ...lastProxy.config, reused: true };
-    }
+    const last = lastProxy.get(apiUrl);
+    if (err instanceof ProxyWaitError && last && Date.now() < last.expiresAt) return { ...last.config, reused: true };
     throw err;
   }
 }
@@ -90,6 +89,6 @@ export async function getProxy(apiUrl: string): Promise<ProxyConfig> {
   };
   // proxyTimeout = seconds the proxy stays usable (1800 in ShopLike's responses); keep a small margin.
   const timeout = typeof data.proxyTimeout === "number" ? data.proxyTimeout : typeof body.proxyTimeout === "number" ? body.proxyTimeout : 600;
-  lastProxy = { config, apiUrl, expiresAt: Date.now() + Math.max(0, timeout - 60) * 1000 };
+  lastProxy.set(apiUrl, { config, expiresAt: Date.now() + Math.max(0, timeout - 60) * 1000 });
   return config;
 }

@@ -20,7 +20,7 @@ const HEARTBEAT_MS = 5 * 60_000;
 interface Heartbeat {
   status: Campaign["status"];
   canRunVisits: boolean;
-  visit: { running: boolean; startedAt: number; run: number; runs: number; pages: number; lastEventAt: number | null } | null;
+  visit: { running: boolean; startedAt: number; run: number; runs: number; lanes?: number; pages: number; lastEventAt: number | null } | null;
   at: number;
 }
 
@@ -32,7 +32,7 @@ function heartbeatText(h: Heartbeat): string {
   if (!h.visit) return "up · active · no visit since the app started";
   const v = h.visit;
   const last = v.lastEventAt ? `, last line ${ago(h.at - v.lastEventAt)} ago` : "";
-  const run = v.runs > 1 ? ` (run ${v.run} of ${v.runs})` : "";
+  const run = v.runs > 1 ? ` (run ${v.run} of ${v.runs}${(v.lanes ?? 1) > 1 ? `, ${v.lanes} at a time` : ""})` : "";
   return v.running
     ? `up · active · visit running${run} ${ago(h.at - v.startedAt)}, ${v.pages} pages${last}`
     : `up · active · visit finished${run}, ${v.pages} pages${last}`;
@@ -49,7 +49,7 @@ function VisitPlanTiles({ campaign: c, day, done, doneToday }: { campaign: Campa
       <StatTile label="Visits today" value={`${doneToday} / ${plan.today.toLocaleString()}`} detail={`done / planned · day ${day} of ${c.durationDays}`} />
       <StatTile label="Visits so far" value={`${done.toLocaleString()} / ${plan.soFar.toLocaleString()}`} detail="done / planned up to today" />
       <StatTile label="Balance" value={Math.max(0, plan.total - done).toLocaleString()} detail={`left of ${plan.total.toLocaleString()} planned in total`} />
-      <StatTile label="Plan" value={`${plan.total.toLocaleString()} visits`} detail={`${c.day1Visits} on day 1, +${c.dailyIncreasePct}% a day`} />
+      <StatTile label="Plan" value={`${plan.total.toLocaleString()} visits`} detail={`${c.day1Visits} on day 1, +${c.dailyIncreasePct}% a day · ${c.concurrency} at a time`} />
     </div>
   );
 }
@@ -83,13 +83,13 @@ export function CampaignDetail({ id }: { id: number }) {
 
   // A run finished: reload the numbers, so the visits done go up without reloading the page.
   // (A short delay as well, for a server still on code that counts the run just after "done".)
-  const { report } = visit;
+  const { reports } = visit;
   useEffect(() => {
-    if (!report) return;
+    if (!reports) return;
     load();
     const t = setTimeout(load, 3000);
     return () => clearTimeout(t);
-  }, [report, load]);
+  }, [reports, load]);
 
   // Heartbeat: while an active campaign is open, ask the server every 5 minutes (and once now)
   // whether it and its visit are still up, and log the answer to the browser console.

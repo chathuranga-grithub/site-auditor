@@ -7,9 +7,9 @@
 import { existsSync } from "node:fs";
 import type { Browser } from "puppeteer-core";
 import { NO_WEBRTC_ARGS, NO_WEBRTC_SCRIPT } from "./no-webrtc";
-import { getProxyOrReuse } from "./proxy-api";
+import { ProxyWaitError, getProxyOrReuse, type ProxyConfig } from "./proxy-api";
+import { leaseProxyApi, restProxyApi } from "./proxy-pool";
 import { lookupExit, ownPublicIp } from "./proxy-ip";
-import { resolveProxyApi } from "./proxy-settings";
 
 /** The proxy's country: browser searches are only right for this one. */
 export const BROWSER_SEARCH_COUNTRY = "VN";
@@ -50,14 +50,39 @@ export interface BrowserSearch {
   close(): Promise<void>;
 }
 
-/** Opens a browser through a proxy from the proxy API; close() when done. */
+/** How long a search waits for a proxy link that isn't busy with a campaign visit. */
+const LEASE_WAIT_MS = 5 * 60_000;
+
+/**
+ * Opens a browser through a proxy from one of the proxy API links (src/lib/proxy-pool.ts: a link no
+ * visit is using, so getting a proxy doesn't change a running visit's IP); close() when done.
+ */
 export async function openBrowserSearch(): Promise<BrowserSearch> {
-  const apiUrl = await resolveProxyApi(undefined);
-  if (!apiUrl) throw new Error("no proxy API link saved (Settings)");
   const executablePath = BROWSER_PATHS.find((p): p is string => !!p && existsSync(p));
   if (!executablePath) throw new Error("no browser found (install Microsoft Edge or Google Chrome)");
 
-  const proxy = await getProxyOrReuse(apiUrl);
+  const waitFor = AbortSignal.timeout(LEASE_WAIT_MS);
+  for (;;) {
+    const lease = await leaseProxyApi(waitFor).catch((err: unknown) => {
+      throw waitFor.aborted ? new Error(`every proxy link was busy with campaign visits for ${LEASE_WAIT_MS / 60_000} minutes`) : err;
+    });
+    try {
+      const proxy = await getProxyOrReuse(lease.apiUrl);
+      const search = await openWithProxy(executablePath, proxy);
+      return { page: search.page, close: () => search.close().finally(lease.release) };
+    } catch (err) {
+      lease.release();
+      // That link only gives a new IP later (and has none to reuse): rest it and try another.
+      if (err instanceof ProxyWaitError) {
+        restProxyApi(lease.apiUrl, err.waitSec);
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+async function openWithProxy(executablePath: string, proxy: ProxyConfig): Promise<BrowserSearch> {
   // Loaded only here: the browser library isn't available on Vercel.
   const puppeteer = await import("puppeteer-core");
   const browser: Browser = await puppeteer.launch({

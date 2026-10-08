@@ -1,7 +1,8 @@
 "use client";
 
 // Auto CTR: the new-campaign form. Target (site, keyword) and Visit plan (duration, day 1 visits,
-// daily increase, compounded) are sent. Tracking (data sources) and Goals (CTR, position, click growth,
+// daily increase, compounded; concurrency: visits at the same time, up to the proxy API links saved in
+// Settings) are sent. Tracking (data sources) and Goals (CTR, position, click growth,
 // time on page) are kept for later but hidden (SHOW_LATER); they aren't sent, so the server uses its defaults.
 // Behavior (CTR, mobile share, dwell time) is form fields only: not sent or saved.
 // Laid out to fit one screen: the sections are rows of fields on the left, and a summary of what
@@ -11,6 +12,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { Activity, CalendarRange, Crosshair, Globe, Loader2, Play, Target, TrendingUp } from "lucide-react";
 import {
+  DEFAULT_CONCURRENCY,
   DEFAULT_DAILY_INCREASE_PCT,
   DEFAULT_DAY1_VISITS,
   DEFAULT_DURATION_DAYS,
@@ -40,6 +42,7 @@ export function NewCampaign() {
     durationDays: String(DEFAULT_DURATION_DAYS),
     day1Visits: String(DEFAULT_DAY1_VISITS),
     dailyIncreasePct: String(DEFAULT_DAILY_INCREASE_PCT),
+    concurrency: String(DEFAULT_CONCURRENCY),
     gscProperty: "",
     ga4Property: "",
     targetCtr: "5",
@@ -60,6 +63,14 @@ export function NewCampaign() {
 
   const set = (k: keyof typeof form) => (e: { target: { value: string } }) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const typical = expectedCtr(Number(form.targetPosition) || null);
+  // Each visit at the same time uses its own proxy API link (Settings). None saved yet: 1.
+  const maxConcurrency = Math.max(1, setup?.proxyApis ?? 1);
+  // Never above the max (or below 1): a bigger number typed or pasted becomes the max. Empty while typing.
+  const setConcurrency = (e: { target: { value: string } }) => {
+    const raw = e.target.value.trim();
+    const n = Math.trunc(Number(raw));
+    setForm((f) => ({ ...f, concurrency: raw === "" || !Number.isFinite(n) ? "" : String(Math.min(maxConcurrency, Math.max(1, n))) }));
+  };
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -74,6 +85,7 @@ export function NewCampaign() {
           durationDays: form.durationDays,
           day1Visits: form.day1Visits,
           dailyIncreasePct: form.dailyIncreasePct,
+          concurrency: form.concurrency,
         }),
       });
       // The visit through the proxy has started on the server; the campaign page shows its console.
@@ -103,7 +115,7 @@ export function NewCampaign() {
           </Section>
 
           <Section icon={<TrendingUp className="size-4" />} title="Visit plan" text="Configure how visits compound over the campaign duration.">
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <Field label="Duration (days)" hint={`1 – ${MAX_DURATION_DAYS}, checked daily`}>
                 <input className={input} type="number" min={1} max={MAX_DURATION_DAYS} value={form.durationDays} onChange={set("durationDays")} required />
               </Field>
@@ -112,6 +124,15 @@ export function NewCampaign() {
               </Field>
               <Field label="Daily Increase %" hint="Added to the day before, compounded">
                 <input className={input} type="number" min={0} max={MAX_DAILY_INCREASE_PCT} step={0.1} value={form.dailyIncreasePct} onChange={set("dailyIncreasePct")} required />
+              </Field>
+              <Field
+                label="Concurrency"
+                hint={`Max concurrency: ${maxConcurrency}`}
+              >
+                <span className="relative block">
+                  <input className={`${input} pr-14`} type="number" inputMode="numeric" min={1} max={maxConcurrency} step={1} value={form.concurrency} onChange={setConcurrency} required />
+                  <span className="pointer-events-none absolute top-1/2 right-8 -translate-y-1/2 font-mono text-xs text-subtle">/ {maxConcurrency}</span>
+                </span>
               </Field>
             </div>
             <EstimatedVisits plan={visitPlan(form)} />
@@ -221,6 +242,7 @@ function visitPlanRows(form: Record<string, string>): [string, ReactNode][] {
   if (!plan) return [["Visits", <span key="v" className="text-subtle">check the visit plan</span>]];
   return [
     ["Duration", `${plan.days} day${plan.days === 1 ? "" : "s"}`],
+    ["Concurrency", `${plan.concurrency} at a time`],
     ["Day 1", `${plan.day1.toLocaleString()} visits`],
     [`Day ${plan.days}`, `${plan.lastDay.toLocaleString()} visits`],
     ["Estimated total visits", <span key="t" className="font-semibold">{plan.total.toLocaleString()}</span>],
@@ -232,9 +254,10 @@ function visitPlan(form: Record<string, string>) {
   const days = Number(form.durationDays);
   const day1 = Number(form.day1Visits);
   const pct = form.dailyIncreasePct.trim() === "" ? NaN : Number(form.dailyIncreasePct);
+  const concurrency = Number(form.concurrency);
   const valid = Number.isInteger(days) && days >= 1 && days <= MAX_DURATION_DAYS && Number.isInteger(day1) && day1 >= 1 && day1 <= MAX_DAY1_VISITS;
-  if (!valid || !(pct >= 0 && pct <= MAX_DAILY_INCREASE_PCT)) return null;
-  return { days, day1, lastDay: plannedVisits(day1, pct, days), total: plannedVisitsTotal(day1, pct, days) };
+  if (!valid || !(pct >= 0 && pct <= MAX_DAILY_INCREASE_PCT) || !(Number.isInteger(concurrency) && concurrency >= 1)) return null;
+  return { days, day1, concurrency, lastDay: plannedVisits(day1, pct, days), total: plannedVisitsTotal(day1, pct, days) };
 }
 
 /** Under the Visit plan fields: the estimated total, from day 1 to the last day. */

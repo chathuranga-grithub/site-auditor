@@ -4,6 +4,7 @@
 // - Search Console clicks / impressions / CTR / device split, and GA4 time on page, for
 //   GSC_DELAY_DAYS ago (Google's data takes a few days to settle).
 
+import { resolveProxyApis } from "../proxy-settings";
 import { configuredProviders, searchGoogle } from "../serp";
 import { stripWwwHost } from "./site";
 import { listDays, setCampaignStatus, upsertDay } from "./db";
@@ -97,9 +98,12 @@ async function latestRankingUrl(campaignId: number): Promise<string | null> {
   return ranked[0]?.rankingUrl ?? null;
 }
 
-export function ctrSetup(): CtrSetup {
+export async function ctrSetup(): Promise<CtrSetup> {
   const email = serviceAccountEmail();
+  // No database or unreadable settings: count as none, the page still loads.
+  const proxyApis = (await resolveProxyApis().catch(() => [])).length;
   return {
+    proxyApis,
     database: !!process.env.DATABASE_URL,
     searchConsole: !!email,
     analytics: !!email,

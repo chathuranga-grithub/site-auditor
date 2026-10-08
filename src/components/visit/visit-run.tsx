@@ -4,7 +4,7 @@
 // every internal page found and opened, and what a visitor there experiences.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, CircleCheck, CircleMinus, CircleX, Copy, Loader2, TriangleAlert } from "lucide-react";
+import { Check, CircleCheck, CircleMinus, CircleX, Clock, Copy, Loader2, TriangleAlert } from "lucide-react";
 import {
   buildChecklist,
   checklistHeadline,
@@ -24,25 +24,77 @@ const ISSUES_SHOWN = 15;
 
 export type VisitRun = ReturnType<typeof useVisitRun>;
 
+/** One lane of a campaign's visit: the runs it does one after another, shown in its own tab. */
+interface Lane {
+  steps: string[];
+  pages: LoggedPage[];
+  discovery: Discovery | null;
+  /** The first page count went in the steps already. */
+  discovered: boolean;
+  /** Start time and time of the latest page, for the "time left" estimate. */
+  timing: { start: number; last: number };
+  report: VisitReport | null;
+  error: string | null;
+  waitUntil: number | null;
+  /** The run it's on now, e.g. 3 of 20. */
+  run: { n: number; of: number } | null;
+  /** Runs this lane has finished. */
+  finished: number;
+  /** The proxy link (number in Settings) and the proxy IP of the run going on now. */
+  link: { number: number; of: number } | null;
+  ip: string | null;
+}
+
+const newLane = (): Lane => ({ steps: [], pages: [], discovery: null, discovered: false, timing: { start: 0, last: 0 }, report: null, error: null, waitUntil: null, run: null, finished: 0, link: null, ip: null });
+
+/** A lane's next state for one console line. */
+function laneReducer(l: Lane, e: VisitEvent, at: number): Lane {
+  const timing = l.timing.start ? l.timing : { ...l.timing, start: at };
+  switch (e.type) {
+    case "step":
+      return { ...l, timing, steps: [...l.steps, e.message] };
+    case "run":
+      // The lane's next run starts: its steps, pages and results start over (the tab keeps its count).
+      return { ...newLane(), steps: [`Run ${e.n} of ${e.of}: new visit with a new proxy IP`], timing: { start: at, last: 0 }, run: { n: e.n, of: e.of }, finished: l.finished, link: e.link ?? null };
+    case "page": {
+      // The start page is sent again once its phone check is done: replace it, don't add it twice.
+      const logged: LoggedPage = { ...e.page, at };
+      const pages = logged.kind === "start" && l.pages.some((x) => x.kind === "start") ? l.pages.map((x) => (x.kind === "start" ? { ...logged, at: x.at } : x)) : [...l.pages, logged];
+      return { ...l, pages, timing: { ...timing, last: at } };
+    }
+    case "discovered":
+      // The first count goes in the step log; later ones (pages found while visiting) only update the progress bar.
+      return { ...l, timing, discovery: e.discovery, discovered: true, steps: l.discovered ? l.steps : [...l.steps, discoveryMessage(e.discovery)] };
+    case "done":
+      return { ...l, timing, report: e.report, waitUntil: null, finished: l.finished + 1 };
+    case "proxy":
+      return { ...l, timing, ip: e.exit?.ip ?? null };
+    case "wait":
+      return { ...l, timing, waitUntil: at + e.seconds * 1000 };
+    case "error":
+      return { ...l, timing, error: e.message };
+    default:
+      return l;
+  }
+}
+
 /**
- * One visit run's console: everything the live log and results need. Follows a campaign's run,
- * which the server runs on its own (Auto CTR).
+ * A campaign's visit console: everything the live logs and results need, per lane. A campaign with
+ * concurrency N runs N visits side by side (lanes 1..N); lines without a lane are about the whole visit.
  */
 export function useVisitRun() {
   const [env, setEnv] = useState<{ local: boolean } | null>(null);
   const [running, setRunning] = useState(false);
-  const [steps, setSteps] = useState<string[]>([]);
-  const [pages, setPages] = useState<LoggedPage[]>([]);
-  const [discovery, setDiscovery] = useState<Discovery | null>(null);
-  // Start time and time of the latest page, for the "time left" estimate.
-  const [timing, setTiming] = useState({ start: 0, last: 0 });
-  const [report, setReport] = useState<VisitReport | null>(null);
+  /** Lines about the whole visit (no lane). */
+  const [common, setCommon] = useState<string[]>([]);
+  const [lanes, setLanes] = useState<Record<number, Lane>>({});
+  const [selected, setSelected] = useState(1);
   const [error, setError] = useState<string | null>(null);
-  const [waitUntil, setWaitUntil] = useState<number | null>(null);
+  /** Runs finished in any lane, so the page can reload its numbers. */
+  const [reports, setReports] = useState(0);
   const [now, setNow] = useState(() => Date.now());
   const abortRef = useRef<AbortController | null>(null);
   const [openPage, setOpenPage] = useState<VisitPage | null>(null);
-  const discoveredRef = useRef(false);
   // Each start / follow gets a number; lines from an older one (still arriving) are ignored.
   const genRef = useRef(0);
 
@@ -53,16 +105,13 @@ export function useVisitRun() {
       .catch(() => setEnv({ local: true }));
   }, []);
 
-  // Countdown while the proxy provider makes us wait for a new IP.
+  // Countdown while the proxy provider makes a lane wait for a new IP.
+  const waiting = Object.values(lanes).some((l) => l.waitUntil && l.waitUntil > now);
   useEffect(() => {
-    if (!waitUntil) return;
-    const t = setInterval(() => {
-      setNow(Date.now());
-      if (Date.now() >= waitUntil) setWaitUntil(null);
-    }, 1000);
+    if (!waiting) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
-  }, [waitUntil]);
-  const waitLeft = waitUntil ? Math.max(0, Math.ceil((waitUntil - now) / 1000)) : 0;
+  }, [waiting]);
 
   /** Reads a newline-delimited JSON console until it ends. */
   const consume = useCallback(async (request: (signal: AbortSignal) => Promise<Response>) => {
@@ -70,59 +119,25 @@ export function useVisitRun() {
     const gen = ++genRef.current;
     const current = () => genRef.current === gen;
     setError(null);
-    setSteps([]);
-    setPages([]);
-    setDiscovery(null);
-    discoveredRef.current = false;
-    setReport(null);
-    setWaitUntil(null);
-    setTiming({ start: 0, last: 0 });
+    setCommon([]);
+    setLanes({});
+    setSelected(1);
     setRunning(true);
     const controller = new AbortController();
     abortRef.current = controller;
 
-    const handle = (e: VisitEvent & { at?: number }) => {
+    const handle = (e: VisitEvent & { at?: number; lane?: number }) => {
       const at = e.at ?? Date.now();
-      setTiming((t) => (t.start ? t : { ...t, start: at }));
-      switch (e.type) {
-        case "step":
-          setSteps((s) => [...s, e.message]);
-          break;
-        case "run":
-          // The next run of the visit starts. The step log carries on; the pages and results start over.
-          setSteps((s) => [...s, `Run ${e.n} of ${e.of}: new visit with a new proxy IP`]);
-          setPages([]);
-          setDiscovery(null);
-          discoveredRef.current = false;
-          setReport(null);
-          setWaitUntil(null);
-          setTiming({ start: at, last: 0 });
-          break;
-        case "page":
-          // The start page is sent again once its phone check is done: replace it, don't add it twice.
-          {
-            const logged: LoggedPage = { ...e.page, at };
-            setPages((p) => (logged.kind === "start" && p.some((x) => x.kind === "start") ? p.map((x) => (x.kind === "start" ? { ...logged, at: x.at } : x)) : [...p, logged]));
-          }
-          setTiming((t) => ({ ...t, last: at }));
-          break;
-        case "discovered":
-          // The first count goes in the step log; later ones (pages found while visiting) only update the progress bar.
-          if (!discoveredRef.current) setSteps((s) => [...s, discoveryMessage(e.discovery)]);
-          discoveredRef.current = true;
-          setDiscovery(e.discovery);
-          break;
-        case "done":
-          setReport(e.report);
-          break;
-        case "wait":
-          setNow(Date.now());
-          setWaitUntil(at + e.seconds * 1000);
-          break;
-        case "error":
-          setError(e.message);
-          break;
+      if (e.type === "wait") setNow(Date.now());
+      if (e.type === "done") setReports((n) => n + 1);
+      if (!e.lane) {
+        if (e.type === "step") setCommon((s) => [...s, e.message]);
+        else if (e.type === "error") setError(e.message);
+        else setLanes((all) => ({ ...all, 1: laneReducer(all[1] ?? newLane(), e, at) })); // older servers: one lane, no tag
+        return;
       }
+      const lane = e.lane;
+      setLanes((all) => ({ ...all, [lane]: laneReducer(all[lane] ?? newLane(), e, at) }));
     };
 
     try {
@@ -140,7 +155,7 @@ export function useVisitRun() {
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
         buffer = lines.pop() ?? "";
-        for (const line of lines) if (line.trim()) handle(JSON.parse(line) as VisitEvent & { at?: number });
+        for (const line of lines) if (line.trim()) handle(JSON.parse(line) as VisitEvent & { at?: number; lane?: number });
       }
     } catch (err) {
       if (!current()) return;
@@ -162,25 +177,32 @@ export function useVisitRun() {
     [consume],
   );
 
+  const laneNumbers = Object.keys(lanes)
+    .map(Number)
+    .sort((a, b) => a - b);
+  const shown = lanes[selected] ? selected : (laneNumbers[0] ?? 1);
   return {
     follow,
     running,
-    steps,
-    pages,
-    discovery,
-    timing,
-    report,
+    common,
+    lanes,
+    laneNumbers,
+    selected: shown,
+    setSelected,
     error,
-    waitLeft,
+    reports,
+    now,
     notLocal: !!env && !env.local,
     openPage,
     setOpenPage,
   };
 }
 
-/** The run's notices, live console and results. */
+/** The visit's notices, then its console: one tab per visit running side by side (when several do), and the chosen visit's results. */
 export function VisitRunView({ run }: { run: VisitRun }) {
-  const { running, steps, pages, discovery, timing, report, error, waitLeft, notLocal, openPage, setOpenPage } = run;
+  const { running, common, lanes, laneNumbers, selected, setSelected, error, now, notLocal, openPage, setOpenPage } = run;
+  const lane = lanes[selected] ?? null;
+  const tabbed = laneNumbers.length > 1;
   return (
     <>
       {notLocal && (
@@ -189,40 +211,181 @@ export function VisitRunView({ run }: { run: VisitRun }) {
           live site.
         </Notice>
       )}
-      {waitLeft > 0 && (
-        <Notice tone="info">
-          The proxy provider gives a new IP in <strong className="font-mono">{formatWait(waitLeft)}</strong>. The visit can run again then.
-        </Notice>
-      )}
       {error && <Notice tone="error">{error}</Notice>}
+      {!tabbed && common.length > 0 && <CommonSteps steps={common} />}
 
-      {(running || steps.length > 0) && (
-        <Panel title={running ? "Running" : "Steps"} bodyClassName="p-4">
-          <ol className="space-y-1.5 font-mono text-xs">
-            {steps.map((s, i) => {
-              const last = i === steps.length - 1 && running && !discovery;
-              return (
-                <li key={i} className={`flex gap-2 ${last ? "text-ink" : "text-muted"}`}>
-                  {last ? <Loader2 className="mt-0.5 size-3.5 shrink-0 animate-spin text-accent-2" /> : <Check className="mt-0.5 size-3.5 shrink-0 text-status-good" />}
-                  <span className="break-all">{s}</span>
-                </li>
-              );
-            })}
-          </ol>
-          {discovery && discovery.total > 0 && (
-            <Progress done={pages.filter((p) => p.kind === "internal").length} total={discovery.total} running={running} elapsedMs={timing.last - timing.start} />
+      {tabbed ? (
+        <section className="glass overflow-hidden rounded-xl">
+          <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 pt-3">
+            <h2 className="font-mono text-[11px] tracking-[0.18em] text-muted uppercase">Visits</h2>
+            <span className="text-xs text-subtle">
+              {laneNumbers.length} at the same time · {laneNumbers.reduce((n, k) => n + lanes[k].finished, 0)} finished
+            </span>
+          </header>
+          {common.length > 0 && (
+            <div className="px-4 pt-2">
+              <CommonSteps steps={common} />
+            </div>
           )}
-          {pages.length > 0 && <LiveLog pages={pages} total={discovery ? discovery.total + 1 : null} onOpen={setOpenPage} />}
-        </Panel>
+          <div role="tablist" aria-label="Visits running at the same time" className="mt-3 flex gap-1 overflow-x-auto border-b border-line px-2">
+            {laneNumbers.map((n) => (
+              <LaneTab key={n} n={n} lane={lanes[n]} active={n === selected} onSelect={() => setSelected(n)} running={running} now={now} />
+            ))}
+          </div>
+          {lane && (
+            <div role="tabpanel" id={`visit-lane-${selected}`} aria-labelledby={`visit-tab-${selected}`} className="p-4">
+              <LaneFacts lane={lane} />
+              <LaneNotices lane={lane} now={now} />
+              <LaneConsole lane={lane} running={running} onOpen={setOpenPage} />
+            </div>
+          )}
+        </section>
+      ) : (
+        lane && (
+          <>
+            <LaneNotices lane={lane} now={now} />
+            {(running || lane.steps.length > 0) && (
+              <Panel title={running ? "Running" : "Steps"} bodyClassName="p-4">
+                <LaneConsole lane={lane} running={running} onOpen={setOpenPage} />
+              </Panel>
+            )}
+          </>
+        )
       )}
 
-      {(report || pages.length > 0) && <Results report={report} pages={pages} />}
+      {lane && (lane.report || lane.pages.length > 0) && <Results report={lane.report} pages={lane.pages} />}
 
       {openPage && (
         <DetailDialog onClose={() => setOpenPage(null)}>
           <PageDetails page={openPage} heading={openPage.kind === "start" ? "Start page" : (openPage.title ?? "Page")} />
         </DetailDialog>
       )}
+    </>
+  );
+}
+
+type LaneState = "running" | "waiting" | "done" | "failed";
+
+function laneState(l: Lane, running: boolean, now: number): LaneState {
+  if (l.error) return "failed";
+  if (l.waitUntil && l.waitUntil > now) return "waiting";
+  return running ? "running" : "done";
+}
+
+const LANE_STATE: Record<LaneState, { icon: typeof CircleCheck; color: string; label: string }> = {
+  running: { icon: Loader2, color: "text-accent-2", label: "Running" },
+  waiting: { icon: Clock, color: "text-status-warning", label: "Waiting" },
+  done: { icon: CircleCheck, color: "text-status-good", label: "Done" },
+  failed: { icon: CircleX, color: "text-status-critical", label: "Failed" },
+};
+
+/** One visit's tab: its state, then which run and proxy link it's on. */
+function LaneTab({ n, lane: l, active, onSelect, running, now }: { n: number; lane: Lane; active: boolean; onSelect: () => void; running: boolean; now: number }) {
+  const state = laneState(l, running, now);
+  const { icon: Icon, color, label } = LANE_STATE[state];
+  const waitLeft = l.waitUntil ? Math.max(0, Math.ceil((l.waitUntil - now) / 1000)) : 0;
+  return (
+    <button
+      type="button"
+      role="tab"
+      id={`visit-tab-${n}`}
+      aria-selected={active}
+      aria-controls={`visit-lane-${n}`}
+      onClick={onSelect}
+      className={`relative flex shrink-0 items-center gap-2.5 rounded-t-lg px-3.5 py-2.5 text-left transition-colors ${
+        active ? "bg-surface-2 text-ink" : "text-muted hover:bg-surface hover:text-ink"
+      }`}
+    >
+      <Icon className={`size-4 shrink-0 ${color} ${state === "running" ? "animate-spin" : ""}`} aria-label={label} />
+      <span className="flex flex-col leading-tight">
+        <span className="text-sm font-medium">Visit {n}</span>
+        <span className="font-mono text-[11px] whitespace-nowrap text-subtle">
+          {state === "waiting" ? `new IP in ${formatWait(waitLeft)}` : l.run ? `run ${l.run.n}/${l.run.of}` : label.toLowerCase()}
+          {l.link ? ` · link #${l.link.number}` : ""}
+        </span>
+      </span>
+      {l.finished > 0 && (
+        <span className={`rounded-md px-1.5 font-mono text-[11px] tabular-nums ${active ? "bg-accent/20 text-ink" : "bg-surface-2 text-subtle"}`} title="Runs finished">
+          {l.finished}
+        </span>
+      )}
+      {active && <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-gradient-accent" aria-hidden />}
+    </button>
+  );
+}
+
+/** The open tab's facts: run, proxy link, IP, runs finished. */
+function LaneFacts({ lane: l }: { lane: Lane }) {
+  const facts: [string, string][] = [];
+  if (l.run) facts.push(["Run", `${l.run.n} of ${l.run.of}`]);
+  if (l.link) facts.push(["Proxy link", `#${l.link.number} of ${l.link.of}`]);
+  if (l.ip) facts.push(["IP", l.ip]);
+  facts.push(["Finished", String(l.finished)]);
+  return (
+    <dl className="mb-3 flex flex-wrap gap-2 text-xs">
+      {facts.map(([k, v]) => (
+        <div key={k} className="flex items-center gap-1.5 rounded-md bg-canvas/60 px-2 py-1 ring-1 ring-line">
+          <dt className="text-subtle">{k}</dt>
+          <dd className="font-mono text-ink">{v}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/** Lines about the whole visit (no lane). */
+function CommonSteps({ steps }: { steps: string[] }) {
+  return (
+    <ol className="space-y-1 font-mono text-xs text-muted">
+      {steps.map((s, i) => (
+        <li key={i} className="flex gap-2">
+          <Check className="mt-0.5 size-3.5 shrink-0 text-status-good" />
+          <span className="break-all">{s}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/** A lane's wait countdown and error. */
+function LaneNotices({ lane, now }: { lane: Lane; now: number }) {
+  const waitLeft = lane.waitUntil ? Math.max(0, Math.ceil((lane.waitUntil - now) / 1000)) : 0;
+  return (
+    <>
+      {waitLeft > 0 && (
+        <Notice tone="info" className="mb-3">
+          The proxy provider gives a new IP in <strong className="font-mono">{formatWait(waitLeft)}</strong>. The visit can run again then.
+        </Notice>
+      )}
+      {lane.error && (
+        <Notice tone="error" className="mb-3">
+          {lane.error}
+        </Notice>
+      )}
+    </>
+  );
+}
+
+/** A lane's steps, page progress and live log. */
+function LaneConsole({ lane, running, onOpen }: { lane: Lane; running: boolean; onOpen: (page: VisitPage) => void }) {
+  const { steps, pages, discovery, timing } = lane;
+  return (
+    <>
+      <ol className="space-y-1.5 font-mono text-xs">
+        {steps.map((s, i) => {
+          const last = i === steps.length - 1 && running && !discovery;
+          return (
+            <li key={i} className={`flex gap-2 ${last ? "text-ink" : "text-muted"}`}>
+              {last ? <Loader2 className="mt-0.5 size-3.5 shrink-0 animate-spin text-accent-2" /> : <Check className="mt-0.5 size-3.5 shrink-0 text-status-good" />}
+              <span className="break-all">{s}</span>
+            </li>
+          );
+        })}
+      </ol>
+      {discovery && discovery.total > 0 && (
+        <Progress done={pages.filter((p) => p.kind === "internal").length} total={discovery.total} running={running} elapsedMs={timing.last - timing.start} />
+      )}
+      {pages.length > 0 && <LiveLog pages={pages} total={discovery ? discovery.total + 1 : null} onOpen={onOpen} />}
     </>
   );
 }

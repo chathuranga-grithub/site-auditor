@@ -7,6 +7,7 @@ import { chromium, devices, type Browser, type BrowserContext, type Page } from 
 import { getProxy, getProxyOrReuse } from "./proxy-api";
 import { NO_WEBRTC_ARGS, NO_WEBRTC_SCRIPT } from "./no-webrtc";
 import { lookupExit, ownPublicIp } from "./proxy-ip";
+import { ProxyIpInUseError } from "./proxy-pool";
 import { clean, searchParams } from "./serp";
 import { BROWSER_SEARCH_COUNTRY, googleBlocked, googleResultsUrl, readOrganicResults } from "./serp-browser";
 import { readSitemap, type SitemapFetcher } from "./sitemap";
@@ -57,6 +58,11 @@ export interface VisitOptions {
    * (same country and language); then open the site directly (no click on a result).
    */
   searchFirst?: { keyword: string; country: string };
+  /**
+   * Claims the confirmed proxy IP before any page opens; null = another visit running now has it
+   * (then ProxyIpInUseError is thrown). Returns the release, called when the visit ends.
+   */
+  claimIp?: (ip: string) => (() => void) | null;
   signal: AbortSignal;
   send: (e: VisitEvent) => void;
 }
@@ -69,7 +75,7 @@ interface Target {
   note?: string;
 }
 
-export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = false, searchFirst, signal, send }: VisitOptions): Promise<VisitReport> {
+export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = false, searchFirst, claimIp, signal, send }: VisitOptions): Promise<VisitReport> {
   const report: VisitReport = {
     url,
     startedAt: new Date().toISOString(),
@@ -101,6 +107,7 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
   }
 
   let browser: Browser | null = null;
+  let releaseIp: (() => void) | null = null;
   const onAbort = () => browser?.close().catch(() => {});
   try {
     send({ type: "step", message: `Opening a browser through proxy ${proxy.address}…` });
@@ -130,6 +137,10 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
     report.stopReason = exitProblem(report.exit, ownIp);
     if (report.stopReason) return finish(report);
     const exit = report.exit!;
+    if (claimIp) {
+      releaseIp = claimIp(exit.ip);
+      if (!releaseIp) throw new ProxyIpInUseError(exit.ip);
+    }
     send({
       type: "step",
       message: `Proxy IP ${exit.ip}: ${exit.country}${exit.city ? `, ${exit.city}` : ""} · ${exit.network}${exit.org ? ` (${exit.org})` : ""}${exit.lookupMs != null ? ` · answered in ${(exit.lookupMs / 1000).toFixed(1)}s` : ""}.`,
@@ -249,6 +260,7 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
   } catch (err) {
     if (!stopped()) throw err;
   } finally {
+    releaseIp?.();
     signal.removeEventListener("abort", onAbort);
     await browser?.close().catch(() => {});
   }

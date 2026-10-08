@@ -12,6 +12,8 @@ export const DEFAULT_DAY1_VISITS = 10;
 export const MAX_DAY1_VISITS = 1000;
 export const DEFAULT_DAILY_INCREASE_PCT = 5;
 export const MAX_DAILY_INCREASE_PCT = 100;
+/** Visits run at the same time, each through its own proxy API link: at most the links saved in Settings. */
+export const DEFAULT_CONCURRENCY = 1;
 
 /** Visits planned for day `n` (1-based): day 1 visits, compounded by the daily increase. */
 export function plannedVisits(day1Visits: number, dailyIncreasePct: number, n: number): number {
@@ -46,6 +48,8 @@ export interface Campaign {
   /** Visit plan: visits on day 1, and the % they grow by each day (compounded). */
   day1Visits: number;
   dailyIncreasePct: number;
+  /** Visits run at the same time (each through its own proxy API link). */
+  concurrency: number;
   /** YYYY-MM-DD */
   startDate: string;
   endDate: string;
@@ -112,6 +116,7 @@ export interface NewCampaign {
   durationDays: number;
   day1Visits: number;
   dailyIncreasePct: number;
+  concurrency: number;
   targetCtr: number;
   targetPosition?: number | null;
   weeklyGrowthPct?: number | null;
@@ -126,6 +131,8 @@ export interface CtrSetup {
   searchConsole: boolean;
   analytics: boolean;
   serp: boolean;
+  /** Proxy API links saved in Settings: the most visits a campaign can run at the same time. */
+  proxyApis: number;
   /** The service account email to add in Search Console / GA4, when one is configured. */
   serviceAccountEmail: string | null;
 }

@@ -3,6 +3,7 @@
 import { isBlockedHost, parseSiteUrl } from "../url";
 import { NotConfiguredError } from "./db";
 import {
+  DEFAULT_CONCURRENCY,
   DEFAULT_DAILY_INCREASE_PCT,
   DEFAULT_DAY1_VISITS,
   DEFAULT_DURATION_DAYS,
@@ -22,8 +23,8 @@ export function badRequest(message: string) {
   return Response.json({ error: message }, { status: 400 });
 }
 
-/** Checks the form input; returns the campaign or an error message. */
-export function parseNewCampaign(body: Record<string, unknown>): NewCampaign | string {
+/** Checks the form input; returns the campaign or an error message. `proxyApis`: links saved in Settings. */
+export function parseNewCampaign(body: Record<string, unknown>, proxyApis: number): NewCampaign | string {
   const site = typeof body.siteUrl === "string" ? parseSiteUrl(body.siteUrl) : null;
   if (!site || !site.hostname.includes(".") || isBlockedHost(site.hostname)) return "Enter the website URL, e.g. https://example.vn";
   const keyword = typeof body.keyword === "string" ? body.keyword.trim() : "";
@@ -46,6 +47,14 @@ export function parseNewCampaign(body: Record<string, unknown>): NewCampaign | s
   if (!Number.isInteger(day1Visits) || day1Visits < 1 || day1Visits > MAX_DAY1_VISITS) return `Day 1 visits must be 1 to ${MAX_DAY1_VISITS}.`;
   const dailyIncreasePct = optional(body.dailyIncreasePct) ?? DEFAULT_DAILY_INCREASE_PCT;
   if (!(dailyIncreasePct >= 0 && dailyIncreasePct <= MAX_DAILY_INCREASE_PCT)) return `Daily increase must be 0 to ${MAX_DAILY_INCREASE_PCT}%.`;
+  // Each visit at the same time needs its own proxy API link. With none saved yet, 1 is still allowed.
+  const maxConcurrency = Math.max(1, proxyApis);
+  const concurrency = optional(body.concurrency) ?? DEFAULT_CONCURRENCY;
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > maxConcurrency) {
+    return maxConcurrency === 1
+      ? "Concurrency can only be 1: add more proxy API links in Settings to run visits at the same time."
+      : `Concurrency must be 1 to ${maxConcurrency} (the proxy API links saved in Settings).`;
+  }
   const targetCtr = optional(body.targetCtr) ?? DEFAULT_TARGET_CTR;
   if (!(targetCtr > 0 && targetCtr <= 100)) return "Target CTR must be between 0 and 100%.";
   const targetPosition = optional(body.targetPosition);
@@ -66,6 +75,7 @@ export function parseNewCampaign(body: Record<string, unknown>): NewCampaign | s
     durationDays,
     day1Visits,
     dailyIncreasePct,
+    concurrency,
     targetCtr,
     targetPosition,
     weeklyGrowthPct,

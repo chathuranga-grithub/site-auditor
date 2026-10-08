@@ -50,6 +50,8 @@ const SCHEMA = [
   // Visit plan, added later: older campaigns get the defaults.
   `ALTER TABLE ctr_campaigns ADD COLUMN IF NOT EXISTS day1_visits INT NOT NULL DEFAULT 10`,
   `ALTER TABLE ctr_campaigns ADD COLUMN IF NOT EXISTS daily_increase_pct NUMERIC NOT NULL DEFAULT 5`,
+  // Visits at the same time, added later: older campaigns run one at a time.
+  `ALTER TABLE ctr_campaigns ADD COLUMN IF NOT EXISTS concurrency INT NOT NULL DEFAULT 1`,
   `CREATE TABLE IF NOT EXISTS ctr_days (
     campaign_id INT NOT NULL REFERENCES ctr_campaigns(id) ON DELETE CASCADE,
     day DATE NOT NULL,
@@ -110,6 +112,7 @@ function toCampaign(r: Record<string, unknown>): Campaign {
     durationDays: Number(r.duration_days),
     day1Visits: Number(r.day1_visits),
     dailyIncreasePct: Number(r.daily_increase_pct),
+    concurrency: Number(r.concurrency),
     startDate: isoDay(r.start_date),
     endDate: isoDay(r.end_date),
     targetCtr: Number(r.target_ctr),
@@ -155,8 +158,8 @@ export async function createCampaign(input: NewCampaign, today: string): Promise
   end.setUTCDate(end.getUTCDate() + input.durationDays - 1);
   const rows = await q(
     `INSERT INTO ctr_campaigns (site_url, keyword, page_url, duration_days, start_date, end_date, target_ctr, target_position,
-       weekly_growth_pct, target_engagement_sec, gsc_property, ga4_property, day1_visits, daily_increase_pct)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
+       weekly_growth_pct, target_engagement_sec, gsc_property, ga4_property, day1_visits, daily_increase_pct, concurrency)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
     [
       input.siteUrl,
       input.keyword,
@@ -172,6 +175,7 @@ export async function createCampaign(input: NewCampaign, today: string): Promise
       input.ga4Property || null,
       input.day1Visits,
       input.dailyIncreasePct,
+      input.concurrency,
     ],
   );
   return toCampaign(rows[0]);
