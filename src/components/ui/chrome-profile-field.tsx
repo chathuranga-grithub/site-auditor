@@ -2,11 +2,12 @@
 
 // The Chrome profile: the picker on the Settings page. Lists this computer's Chrome profiles by name;
 // Save stores it for the app (behind the scenes, a copy in the app's own folder: Chrome won't let the
-// app use it in place), and Update saves it again after the profile was changed in Chrome. None = fresh
-// profiles. The words on screen are "save" and "update" only.
+// app use it in place), and Update saves it again after the profile was changed in Chrome. Open opens the
+// saved one in Chrome to add extensions and sign in (those don't carry over from Chrome's own profile).
+// None = fresh profiles. The words on screen are "save", "update" and "open" only.
 
 import { useEffect, useState } from "react";
-import { Loader2, RefreshCw, Trash2, UserRound } from "lucide-react";
+import { ExternalLink, Loader2, RefreshCw, Trash2, UserRound } from "lucide-react";
 
 interface Status {
   profiles: { name: string; folder: string; account: { name: string | null; email: string } | null }[];
@@ -14,9 +15,10 @@ interface Status {
   dir: string | null;
   source: "saved" | "env" | null;
   copiedAt: string | null;
+  open: boolean;
 }
 
-const EMPTY: Status = { profiles: [], selected: null, dir: null, source: null, copiedAt: null };
+const EMPTY: Status = { profiles: [], selected: null, dir: null, source: null, copiedAt: null, open: false };
 
 export function ChromeProfileField() {
   const [status, setStatus] = useState<Status | null>(null);
@@ -25,13 +27,18 @@ export function ChromeProfileField() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/browser-settings")
-      .then((r) => r.json())
-      .then((j: Status) => {
-        setStatus({ ...EMPTY, ...j });
-        setChoice(j.selected ?? "");
-      })
-      .catch(() => setStatus(EMPTY));
+    const load = () =>
+      fetch("/api/browser-settings")
+        .then((r) => r.json())
+        .then((j: Status) => {
+          setStatus({ ...EMPTY, ...j });
+          setChoice((c) => (c && c !== j.selected ? c : (j.selected ?? "")));
+        })
+        .catch(() => setStatus((s) => s ?? EMPTY));
+    void load();
+    // Back from the Chrome window opened with Open: show whether it's still open.
+    window.addEventListener("focus", load);
+    return () => window.removeEventListener("focus", load);
   }, []);
 
   async function call(method: "POST" | "DELETE", body?: object) {
@@ -92,7 +99,12 @@ export function ChromeProfileField() {
         )}
         {!changed && status?.selected && (
           <>
-            <button type="button" onClick={() => call("POST", { name: status.selected })} disabled={busy} className={button} title="Save it again after changing the profile in Chrome">
+            {status.dir && (
+              <button type="button" onClick={() => call("POST", { open: true })} disabled={busy || status.open} className={button} title="Open it in Chrome to add or turn on extensions and sign in">
+                <ExternalLink className="size-3" /> Open
+              </button>
+            )}
+            <button type="button" onClick={() => call("POST", { name: status.selected, update: true })} disabled={busy || status.open} className={button} title="Save it again from Chrome (replaces extensions and sign-ins added with Open)">
               <RefreshCw className="size-3" /> Update
             </button>
             <button type="button" onClick={() => call("DELETE")} disabled={busy} aria-label="Stop using a Chrome profile" title="Back to fresh profiles" className={`${button} hover:text-status-critical`}>
@@ -102,11 +114,16 @@ export function ChromeProfileField() {
         )}
       </div>
       <div className="text-xs text-subtle">
-        {status?.selected && status.dir ? (
+        {status?.selected && status.dir && status.open ? (
+          <>
+            Open in Chrome: add or turn on extensions and sign in, then close that Chrome window. Visits and ranking checks pick it up after.
+          </>
+        ) : status?.selected && status.dir ? (
           <>
             <span title={status.dir}>
               Using <b className="text-muted">{status.selected}</b>
-              {status.copiedAt ? ` (saved ${new Date(status.copiedAt).toLocaleString()})` : ""}.
+              {status.copiedAt ? ` (saved ${new Date(status.copiedAt).toLocaleString()})` : ""}. Click{" "}
+              <b className="text-muted">Open</b> to add extensions or sign in.
             </span>
           </>
         ) : status?.selected ? (

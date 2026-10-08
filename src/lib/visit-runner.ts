@@ -8,9 +8,9 @@ import { getProxyOrReuse, getUnvisitedProxy } from "./proxy-api";
 import { NO_WEBRTC_ARGS, NO_WEBRTC_SCRIPT } from "./no-webrtc";
 import { lookupExit, ownPublicIp } from "./proxy-ip";
 import { ProxyIpInUseError } from "./proxy-pool";
-import { PROFILE_ARGS, profileLockedMessage } from "./browser-profile";
+import { checkChromeProfile, PROFILE_ARGS, KEEP_EXTENSIONS, profileLockedMessage } from "./browser-profile";
 import { clean, searchParams } from "./serp";
-import { BROWSER_SEARCH_COUNTRY, googleBlocked, googleResultsUrl, readOrganicResults } from "./serp-browser";
+import { BROWSER_SEARCH_COUNTRY, CAPTCHA_WAIT_MS, googleBlocked, googleResultsUrl, readOrganicResults, waitForCaptcha } from "./serp-browser";
 import { readSitemap, type SitemapFetcher } from "./sitemap";
 import { isBlockedHost, isInternal, normalizeUrl, shouldSkipCrawl } from "./url";
 import {
@@ -117,11 +117,12 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
   const onAbort = () => void close?.();
   try {
     send({ type: "step", message: `Opening a browser through proxy ${proxy.address}…` });
-    if (profileDir) send({ type: "step", message: `Using the Chrome profile in ${profileDir}.` });
     const opened = await openContexts({ server, username, password }, profileDir, mobile);
     close = opened.close;
     signal.addEventListener("abort", onAbort, { once: true });
     const { context, phone } = opened;
+    // A saved Chrome profile: make sure it's Chrome on that profile, and say which (with its extensions).
+    if (profileDir) send({ type: "step", message: await checkChromeProfile(await context.newPage(), profileDir) });
     context.setDefaultNavigationTimeout(NAV_TIMEOUT);
     phone?.setDefaultNavigationTimeout(NAV_TIMEOUT);
     // No WebRTC in any page, so nothing can go around the proxy.
@@ -296,6 +297,8 @@ function launchOptions(proxy: ProxyLogin, extraArgs: string[] = []) {
   return {
     // Headed: a visible browser window, so the visit can be watched as it works.
     headless: false,
+    // Extensions are never turned off (a saved Chrome profile's run).
+    ignoreDefaultArgs: KEEP_EXTENSIONS,
     proxy: { ...proxy, bypass: BROWSER_BACKGROUND_HOSTS.join(",") },
     args: [
       `--host-resolver-rules=${BROWSER_BACKGROUND_HOSTS.map((h) => `MAP ${h} ~NOTFOUND`).join(", ")}`,
@@ -357,18 +360,16 @@ async function launchBrowser(proxy: ProxyLogin): Promise<Browser> {
   throw new Error("No browser found. Install Google Chrome or Microsoft Edge on this computer.");
 }
 
-/** The desktop browser on a Chrome profile folder (extensions stay off, as in every launch). */
+/** The desktop browser on a Chrome profile folder, with the profile's extensions: Google Chrome only (never Edge). */
 async function launchWithProfile(proxy: ProxyLogin, profileDir: string): Promise<BrowserContext> {
-  for (const channel of CHANNELS) {
-    try {
-      return await chromium.launchPersistentContext(profileDir, { channel, ...launchOptions(proxy, PROFILE_ARGS), ...DESKTOP });
-    } catch (err) {
-      // Open in another Chrome window: say so, rather than trying the next browser.
-      const locked = profileLockedMessage(err, profileDir);
-      if (locked) throw new Error(locked);
-    }
+  try {
+    return await chromium.launchPersistentContext(profileDir, { channel: "chrome", ...launchOptions(proxy, PROFILE_ARGS), ...DESKTOP });
+  } catch (err) {
+    // Open in another Chrome window: say so plainly.
+    const locked = profileLockedMessage(err, profileDir);
+    const first = (err instanceof Error ? err.message : String(err)).split("\n")[0];
+    throw new Error(locked ?? `Couldn't start Google Chrome with the saved Chrome profile (${first}).`);
   }
-  throw new Error("No browser found. Install Google Chrome or Microsoft Edge on this computer.");
 }
 
 /** Where the visit comes from, looked up inside the proxied browser. */
@@ -417,9 +418,17 @@ async function searchGoogleFirst(
   const tab = await context.newPage();
   try {
     await tab.goto(googleResultsUrl(params), { waitUntil: "domcontentloaded" });
-    const blocked = googleBlocked(tab.url(), !!(await tab.$("#captcha-form")));
+    let blocked = googleBlocked(tab.url(), !!(await tab.$("#captcha-form")));
+    if (blocked === "captcha") {
+      // Solved in the browser window (by you or the profile's extension): the search goes on.
+      send({ type: "step", message: `Google asked for a CAPTCHA. Solve it in the browser window (or let an extension do it): waiting up to ${CAPTCHA_WAIT_MS / 60_000} min…` });
+      if (await waitForCaptcha(async () => (tab.isClosed() ? "closed" : googleBlocked(tab.url(), !!(await tab.$("#captcha-form"))) === "captcha"))) {
+        blocked = null;
+        send({ type: "step", message: "The CAPTCHA was solved; reading Google's results…" });
+      }
+    }
     if (blocked) {
-      send({ type: "step", message: `Google ${blocked === "captcha" ? "asked for a CAPTCHA" : "showed its cookie consent page"}, so the search was skipped; opening the site directly.` });
+      send({ type: "step", message: `Google ${blocked === "captcha" ? "asked for a CAPTCHA and it wasn't solved" : "showed its cookie consent page"}, so the search was skipped; opening the site directly.` });
       return;
     }
     await tab.waitForSelector("#search", { timeout: 10_000 }).catch(() => {});

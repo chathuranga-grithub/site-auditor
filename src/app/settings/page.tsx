@@ -31,7 +31,7 @@ export default async function SettingsPage() {
       <Panel title={<Title icon={<AppWindow className="size-3.5" />} text="Browser" />} bodyClassName="space-y-3 p-4 sm:p-5">
         <p className="text-sm text-muted">
           The Chrome profile campaign visits and ranking checks use (its cookies, settings and history). Pick one of this computer&apos;s
-          Chrome profiles and save. After changing that profile in Chrome, click <b className="text-ink">Update</b>. Extensions stay off.
+          Chrome profiles and save. After changing that profile in Chrome, click <b className="text-ink">Update</b>. Extensions and sign-ins don&apos;t carry over from Chrome: click <b className="text-ink">Open</b> and add them there.
         </p>
         <ChromeProfileField />
       </Panel>

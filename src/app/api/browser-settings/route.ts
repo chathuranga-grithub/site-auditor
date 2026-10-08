@@ -1,11 +1,12 @@
 // The Chrome profile the app's browsers use (Settings): one of this computer's Chrome profiles, by
 // name, copied into the app's own folder. Not a secret.
-// GET → { profiles, selected, dir, source, copiedAt, updatedBy? }
-// POST { name } → pick it and copy it (again)   DELETE → back to fresh profiles   (admins only)
+// GET → { profiles, selected, dir, source, copiedAt, open, updatedBy? }
+// POST { name, update? } → pick it (copied the first time; update: true copies it again)   POST { open: true } → open the copy in Chrome (add extensions, sign in)
+// DELETE → back to fresh profiles   (admins only)
 
 import { cookies } from "next/headers";
 import { SESSION_COOKIE, readSessionToken } from "@/lib/auth/session";
-import { chromeProfileStatus, stopUsingChromeProfile, selectChromeProfile } from "@/lib/browser-profile";
+import { chromeProfileStatus, openChromeProfile, stopUsingChromeProfile, selectChromeProfile } from "@/lib/browser-profile";
 
 export const runtime = "nodejs";
 
@@ -28,14 +29,14 @@ export async function GET() {
 export async function POST(request: Request) {
   const who = await admin();
   if (!who) return forbidden();
-  let body: { name?: unknown };
+  let body: { name?: unknown; open?: unknown; update?: unknown };
   try {
     body = await request.json();
   } catch {
     return Response.json({ error: "Request body must be JSON." }, { status: 400 });
   }
   try {
-    const problem = await selectChromeProfile(typeof body.name === "string" ? body.name : "", who.username);
+    const problem = body.open === true ? await openChromeProfile() : await selectChromeProfile(typeof body.name === "string" ? body.name : "", who.username, body.update === true);
     if (problem) return Response.json({ error: problem }, { status: 400 });
     return Response.json(await chromeProfileStatus());
   } catch (err) {
