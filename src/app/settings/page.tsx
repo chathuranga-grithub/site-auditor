@@ -20,8 +20,9 @@ export default async function SettingsPage() {
 
       <Panel title={<Title icon={<KeyRound className="size-3.5" />} text="Proxy" />} bodyClassName="space-y-3 p-4 sm:p-5">
         <p className="text-sm text-muted">
-          The ShopLike proxy API link used for campaign visits and Google searches from Vietnam. Saved <b className="text-ink">encrypted</b> in the
-          database (the key isn&apos;t in the database), and never shown in full again after saving.
+          The ShopLike proxy API links used for campaign visits and Google searches from Vietnam: one, or a list (paste one per line). Saved{" "}
+          <b className="text-ink">encrypted</b> in the database (the key isn&apos;t in the database), and never shown in full again after saving.
+          For now visits and searches use link #1.
         </p>
         <ProxyApiField />
       </Panel>
