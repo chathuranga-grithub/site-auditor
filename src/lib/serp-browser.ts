@@ -9,6 +9,7 @@ import type { Browser } from "puppeteer-core";
 import { NO_WEBRTC_ARGS, NO_WEBRTC_SCRIPT } from "./no-webrtc";
 import { ProxyWaitError, getProxyOrReuse, type ProxyConfig } from "./proxy-api";
 import { leaseProxyApi, restProxyApi } from "./proxy-pool";
+import { leaseChromeProfile, profileLockedMessage, type ProfileLease } from "./browser-profile";
 import { lookupExit, ownPublicIp } from "./proxy-ip";
 
 /** The proxy's country: browser searches are only right for this one. */
@@ -65,14 +66,26 @@ export async function openBrowserSearch(): Promise<BrowserSearch> {
 
   const waitFor = AbortSignal.timeout(LEASE_WAIT_MS);
   for (;;) {
+    let profile: ProfileLease | null = null;
     const lease = await leaseProxyApi(waitFor).catch((err: unknown) => {
       throw waitFor.aborted ? new Error(`every proxy link was busy with campaign visits for ${LEASE_WAIT_MS / 60_000} minutes`) : err;
     });
     try {
       const proxy = await getProxyOrReuse(lease.apiUrl);
-      const search = await openWithProxy(executablePath, proxy);
-      return { page: search.page, close: () => search.close().finally(lease.release) };
+      // Its own Chrome profile folder, when one is set (Settings): never one another browser has open.
+      profile = await leaseChromeProfile("ranking");
+      const search = await openWithProxy(executablePath, proxy, profile?.dir);
+      const held = profile;
+      return {
+        page: search.page,
+        close: () =>
+          search.close().finally(() => {
+            held?.release();
+            lease.release();
+          }),
+      };
     } catch (err) {
+      profile?.release();
       lease.release();
       // That link only gives a new IP later (and has none to reuse): rest it and try another.
       if (err instanceof ProxyWaitError) {
@@ -84,20 +97,28 @@ export async function openBrowserSearch(): Promise<BrowserSearch> {
   }
 }
 
-async function openWithProxy(executablePath: string, proxy: ProxyConfig): Promise<BrowserSearch> {
+async function openWithProxy(executablePath: string, proxy: ProxyConfig, profileDir?: string): Promise<BrowserSearch> {
   // Loaded only here: the browser library isn't available on Vercel.
   const puppeteer = await import("puppeteer-core");
-  const browser: Browser = await puppeteer.launch({
-    executablePath,
-    // Headed: a visible browser window, like a person searching.
-    headless: false,
-    args: [
-      `--proxy-server=${proxy.server}`,
-      // WebRTC could otherwise go around the proxy and show this computer's IP (src/lib/no-webrtc.ts).
-      ...NO_WEBRTC_ARGS,
-      "--lang=vi-VN",
-    ],
-  });
+  const browser: Browser = await puppeteer
+    .launch({
+      executablePath,
+      // Headed: a visible browser window, like a person searching.
+      headless: false,
+      // A Chrome profile folder (Settings), else a fresh temporary profile. Extensions stay off either way.
+      ...(profileDir ? { userDataDir: profileDir } : {}),
+      args: [
+        `--proxy-server=${proxy.server}`,
+        // WebRTC could otherwise go around the proxy and show this computer's IP (src/lib/no-webrtc.ts).
+        ...NO_WEBRTC_ARGS,
+        "--lang=vi-VN",
+      ],
+    })
+    .catch((err: unknown) => {
+      // Open in another Chrome window: say so plainly.
+      const locked = profileDir ? profileLockedMessage(err, profileDir) : null;
+      throw locked ? new Error(locked) : err;
+    });
 
   // Where the searches really come from, before any search: wrong or unknown, no search at all.
   try {

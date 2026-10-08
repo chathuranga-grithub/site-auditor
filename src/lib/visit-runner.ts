@@ -8,6 +8,7 @@ import { getProxyOrReuse, getUnvisitedProxy } from "./proxy-api";
 import { NO_WEBRTC_ARGS, NO_WEBRTC_SCRIPT } from "./no-webrtc";
 import { lookupExit, ownPublicIp } from "./proxy-ip";
 import { ProxyIpInUseError } from "./proxy-pool";
+import { profileLockedMessage } from "./browser-profile";
 import { clean, searchParams } from "./serp";
 import { BROWSER_SEARCH_COUNTRY, googleBlocked, googleResultsUrl, readOrganicResults } from "./serp-browser";
 import { readSitemap, type SitemapFetcher } from "./sitemap";
@@ -63,6 +64,8 @@ export interface VisitOptions {
    * (then ProxyIpInUseError is thrown). Returns the release, called when the visit ends.
    */
   claimIp?: (ip: string) => (() => void) | null;
+  /** A Chrome profile folder for this visit's browser (src/lib/browser-profile.ts); none = a fresh temporary profile. */
+  profileDir?: string;
   signal: AbortSignal;
   send: (e: VisitEvent) => void;
 }
@@ -75,7 +78,7 @@ interface Target {
   note?: string;
 }
 
-export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = false, searchFirst, claimIp, signal, send }: VisitOptions): Promise<VisitReport> {
+export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = false, searchFirst, claimIp, profileDir, signal, send }: VisitOptions): Promise<VisitReport> {
   const report: VisitReport = {
     url,
     startedAt: new Date().toISOString(),
@@ -109,21 +112,17 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
     send({ type: "step", message: `The provider isn't giving a new IP yet, so the previous proxy (${proxy.address}) is reused.` });
   }
 
-  let browser: Browser | null = null;
+  let close: (() => Promise<void>) | null = null;
   let releaseIp: (() => void) | null = null;
-  const onAbort = () => browser?.close().catch(() => {});
+  const onAbort = () => void close?.();
   try {
     send({ type: "step", message: `Opening a browser through proxy ${proxy.address}…` });
-    browser = await launchBrowser({ server, username, password });
+    if (profileDir) send({ type: "step", message: `Using the Chrome profile in ${profileDir}.` });
+    const opened = await openContexts({ server, username, password }, profileDir, mobile);
+    close = opened.close;
     signal.addEventListener("abort", onAbort, { once: true });
-    const context = await browser.newContext({
-      viewport: { width: 1366, height: 768 },
-      locale: "vi-VN",
-      timezoneId: "Asia/Ho_Chi_Minh",
-      ignoreHTTPSErrors: false,
-    });
+    const { context, phone } = opened;
     context.setDefaultNavigationTimeout(NAV_TIMEOUT);
-    const phone = mobile ? await browser.newContext({ ...PHONE, locale: "vi-VN", timezoneId: "Asia/Ho_Chi_Minh" }) : null;
     phone?.setDefaultNavigationTimeout(NAV_TIMEOUT);
     // No WebRTC in any page, so nothing can go around the proxy.
     await context.addInitScript(NO_WEBRTC_SCRIPT);
@@ -265,7 +264,7 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
   } finally {
     releaseIp?.();
     signal.removeEventListener("abort", onAbort);
-    await browser?.close().catch(() => {});
+    await close?.();
   }
   return finish(report);
 }
@@ -287,23 +286,85 @@ const BROWSER_BACKGROUND_HOSTS = [
   "accounts.google.com",
 ];
 
-async function launchBrowser(proxy: { server: string; username?: string; password?: string }): Promise<Browser> {
-  // Uses a browser already installed on this computer: Google Chrome, else Microsoft Edge.
-  for (const channel of ["chrome", "msedge"]) {
+type ProxyLogin = { server: string; username?: string; password?: string };
+
+/** Uses a browser already installed on this computer: Google Chrome, else Microsoft Edge. */
+const CHANNELS = ["chrome", "msedge"];
+
+/** How every browser starts: visible, through the proxy only, background services blocked, no WebRTC. */
+function launchOptions(proxy: ProxyLogin) {
+  return {
+    // Headed: a visible browser window, so the visit can be watched as it works.
+    headless: false,
+    proxy: { ...proxy, bypass: BROWSER_BACKGROUND_HOSTS.join(",") },
+    args: [
+      `--host-resolver-rules=${BROWSER_BACKGROUND_HOSTS.map((h) => `MAP ${h} ~NOTFOUND`).join(", ")}`,
+      // WebRTC could otherwise show the site our real IP (src/lib/no-webrtc.ts).
+      ...NO_WEBRTC_ARGS,
+    ],
+  };
+}
+
+const DESKTOP = { viewport: { width: 1366, height: 768 }, locale: "vi-VN", timezoneId: "Asia/Ho_Chi_Minh", ignoreHTTPSErrors: false };
+const PHONE_CONTEXT = { ...PHONE, locale: "vi-VN", timezoneId: "Asia/Ho_Chi_Minh" };
+
+/**
+ * The visit's desktop context and, for the phone checks, a phone one. With a profile folder, the
+ * desktop visit runs in it (a profile holds one setup); the phone checks, with their own screen and
+ * touch, then run in a second, plain browser through the same proxy.
+ */
+async function openContexts(proxy: ProxyLogin, profileDir: string | undefined, mobile: boolean): Promise<{ context: BrowserContext; phone: BrowserContext | null; close(): Promise<void> }> {
+  if (!profileDir) {
+    const browser = await launchBrowser(proxy);
     try {
-      return await chromium.launch({
-        channel,
-        // Headed: a visible browser window, so the visit can be watched as it works.
-        headless: false,
-        proxy: { ...proxy, bypass: BROWSER_BACKGROUND_HOSTS.join(",") },
-        args: [
-          `--host-resolver-rules=${BROWSER_BACKGROUND_HOSTS.map((h) => `MAP ${h} ~NOTFOUND`).join(", ")}`,
-          // WebRTC could otherwise show the site our real IP (src/lib/no-webrtc.ts).
-          ...NO_WEBRTC_ARGS,
-        ],
-      });
+      const context = await browser.newContext(DESKTOP);
+      const phone = mobile ? await browser.newContext(PHONE_CONTEXT) : null;
+      return { context, phone, close: () => browser.close().catch(() => {}) };
+    } catch (err) {
+      await browser.close().catch(() => {});
+      throw err;
+    }
+  }
+  const context = await launchWithProfile(proxy, profileDir);
+  let other: Browser | null = null;
+  try {
+    other = mobile ? await launchBrowser(proxy) : null;
+    const phone = other ? await other.newContext(PHONE_CONTEXT) : null;
+    return {
+      context,
+      phone,
+      close: async () => {
+        await context.close().catch(() => {});
+        await other?.close().catch(() => {});
+      },
+    };
+  } catch (err) {
+    await context.close().catch(() => {});
+    await other?.close().catch(() => {});
+    throw err;
+  }
+}
+
+async function launchBrowser(proxy: ProxyLogin): Promise<Browser> {
+  for (const channel of CHANNELS) {
+    try {
+      return await chromium.launch({ channel, ...launchOptions(proxy) });
     } catch {
       /* try the next one */
+    }
+  }
+  throw new Error("No browser found. Install Google Chrome or Microsoft Edge on this computer.");
+}
+
+/** The desktop browser on a Chrome profile folder (extensions stay off, as in every launch). */
+async function launchWithProfile(proxy: ProxyLogin, profileDir: string): Promise<BrowserContext> {
+  for (const channel of CHANNELS) {
+    try {
+      return await chromium.launchPersistentContext(profileDir, { channel, ...launchOptions(proxy), ...DESKTOP });
+    } catch (err) {
+      // Open in another Chrome window: say so, rather than trying the next browser.
+      const locked = profileLockedMessage(err, profileDir);
+      if (locked) throw new Error(locked);
     }
   }
   throw new Error("No browser found. Install Google Chrome or Microsoft Edge on this computer.");

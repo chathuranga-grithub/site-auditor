@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
 import { cookies } from "next/headers";
-import { KeyRound, UserRound, Users } from "lucide-react";
+import { AppWindow, KeyRound, UserRound, Users } from "lucide-react";
 import { SESSION_COOKIE, readSessionToken } from "@/lib/auth/session";
 import { Panel } from "@/components/ui/primitives";
 import { ProxyApiField } from "@/components/ui/proxy-api-field";
+import { ChromeProfileField } from "@/components/ui/chrome-profile-field";
 
 export const metadata: Metadata = { title: "Settings" };
 
@@ -25,6 +26,15 @@ export default async function SettingsPage() {
           For now visits and searches use link #1.
         </p>
         <ProxyApiField />
+      </Panel>
+
+      <Panel title={<Title icon={<AppWindow className="size-3.5" />} text="Browser" />} bodyClassName="space-y-3 p-4 sm:p-5">
+        <p className="text-sm text-muted">
+          A Chrome profile for campaign visits and ranking checks (its cookies, settings and history). Pick one of this computer&apos;s
+          Chrome profiles: the app copies it into its own folder, because Chrome won&apos;t let the app use it in place, and each visit gets
+          its own copy. After changing the profile in Chrome, use <b className="text-ink">Copy again</b>. Extensions stay off.
+        </p>
+        <ChromeProfileField />
       </Panel>
 
       <Panel title={<Title icon={<Users className="size-3.5" />} text="Users" />} bodyClassName="space-y-2 p-4 text-sm text-muted sm:p-5">

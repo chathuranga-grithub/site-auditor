@@ -15,7 +15,7 @@ const TOOL_PATHS: Record<ToolId, string[]> = {
 export const TOOL_HOME: Record<ToolId, string> = { audit: "/audit", rankings: "/rankings", ctr: "/ctr/campaigns" };
 
 /** Pages only admins may open (app settings). */
-const ADMIN_PATHS = ["/settings", "/api/proxy-settings"];
+const ADMIN_PATHS = ["/settings", "/api/proxy-settings", "/api/browser-settings"];
 
 export function isToolId(v: unknown): v is ToolId {
   return typeof v === "string" && (TOOL_IDS as readonly string[]).includes(v);

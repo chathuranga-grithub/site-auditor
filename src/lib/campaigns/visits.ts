@@ -6,9 +6,11 @@
 // the keyword in the same browser, as Keyword Rankings does (never clicking a result), then opens the site.
 // The campaign's concurrency is how many run at the same time: that many lanes, each taking a random
 // free proxy API link from Settings (src/lib/proxy-pool.ts), so no two visits share a link or an IP.
+// With a Chrome profile folder set (Settings), each visit's browser gets its own one (src/lib/browser-profile.ts).
 // Every line of its console is kept in memory only (never saved), tagged with its lane, so any open
 // campaign page can replay it and then follow it live. Restarting the app clears it.
 
+import { leaseChromeProfile } from "../browser-profile";
 import { ProxyWaitError } from "../proxy-api";
 import { ProxyIpInUseError, claimProxyIp, leaseProxyApi, restProxyApi } from "../proxy-pool";
 import type { VisitEvent } from "../visit-types";
@@ -124,6 +126,8 @@ async function run(c: VisitCampaign, v: LiveVisit) {
           send({ type: "wait", seconds });
           send({ type: "step", message: `Waiting for a new proxy IP (the provider gives one in ${seconds}s); the previous IP isn't reused…` });
         });
+        // Its own Chrome profile folder, when one is set: never the same as another browser open now.
+        const profile = await leaseChromeProfile("visit");
         try {
           if (v.runs > 1) send({ type: "run", n: runNo, of: v.runs, link: { number: lease.number, of: lease.of } });
           if (lease.of > 1) send({ type: "step", message: `Using proxy link #${lease.number} of ${lease.of}.` });
@@ -134,6 +138,7 @@ async function run(c: VisitCampaign, v: LiveVisit) {
             freshProxy: true,
             searchFirst: { keyword: c.keyword, country: c.country },
             claimIp: claimProxyIp,
+            profileDir: profile?.dir,
             signal,
             send,
           });
@@ -161,6 +166,7 @@ async function run(c: VisitCampaign, v: LiveVisit) {
           }
           throw err;
         } finally {
+          profile?.release();
           lease.release();
         }
       }
