@@ -2,7 +2,7 @@
 
 // Auto CTR: the new-campaign form. Target (site, keyword) and Visit plan (duration, day 1 visits,
 // daily increase, compounded; concurrency: visits at the same time, up to the proxy API links saved in
-// Settings) are sent. Tracking (data sources) and Goals (CTR, position, click growth,
+// Settings, and starting at that max) are sent. Tracking (data sources) and Goals (CTR, position, click growth,
 // time on page) are kept for later but hidden (SHOW_LATER); they aren't sent, so the server uses its defaults.
 // Behavior (CTR, mobile share, dwell time) is form fields only: not sent or saved.
 // Laid out to fit one screen: the sections are rows of fields on the left, and a summary of what
@@ -58,7 +58,14 @@ export function NewCampaign() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api<{ setup: CtrSetup }>("/api/ctr/campaigns").then((d) => setSetup(d.setup), () => {});
+    api<{ setup: CtrSetup }>("/api/ctr/campaigns").then(
+      (d) => {
+        setSetup(d.setup);
+        // Concurrency starts at the max: one visit per proxy link saved in Settings (unless already changed).
+        setForm((f) => (f.concurrency === String(DEFAULT_CONCURRENCY) ? { ...f, concurrency: String(Math.max(1, d.setup.proxyApis)) } : f));
+      },
+      () => {},
+    );
   }, []);
 
   const set = (k: keyof typeof form) => (e: { target: { value: string } }) => setForm((f) => ({ ...f, [k]: e.target.value }));
