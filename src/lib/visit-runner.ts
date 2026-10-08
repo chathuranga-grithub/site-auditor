@@ -5,8 +5,10 @@
 
 import { chromium, devices, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { getProxy, getProxyOrReuse } from "./proxy-api";
-import { networkType } from "./network-type";
 import { NO_WEBRTC_ARGS, NO_WEBRTC_SCRIPT } from "./no-webrtc";
+import { lookupExit, ownPublicIp } from "./proxy-ip";
+import { clean, searchParams } from "./serp";
+import { BROWSER_SEARCH_COUNTRY, googleBlocked, googleResultsUrl, readOrganicResults } from "./serp-browser";
 import { readSitemap, type SitemapFetcher } from "./sitemap";
 import { isBlockedHost, isInternal, normalizeUrl, shouldSkipCrawl } from "./url";
 import {
@@ -50,6 +52,11 @@ export interface VisitOptions {
   mobile: boolean;
   /** Always a new proxy IP: never reuse the previous one (ProxyWaitError until the provider gives one). */
   freshProxy?: boolean;
+  /**
+   * Search Google for this keyword first, in the same browser and exactly as Keyword Rankings does
+   * (same country and language); then open the site directly (no click on a result).
+   */
+  searchFirst?: { keyword: string; country: string };
   signal: AbortSignal;
   send: (e: VisitEvent) => void;
 }
@@ -62,7 +69,7 @@ interface Target {
   note?: string;
 }
 
-export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = false, signal, send }: VisitOptions): Promise<VisitReport> {
+export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = false, searchFirst, signal, send }: VisitOptions): Promise<VisitReport> {
   const report: VisitReport = {
     url,
     startedAt: new Date().toISOString(),
@@ -127,6 +134,13 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
       type: "step",
       message: `Proxy IP ${exit.ip}: ${exit.country}${exit.city ? `, ${exit.city}` : ""} · ${exit.network}${exit.org ? ` (${exit.org})` : ""}${exit.lookupMs != null ? ` · answered in ${(exit.lookupMs / 1000).toFixed(1)}s` : ""}.`,
     });
+    // Optional: the keyword searched on Google first, in this same browser. Only searches and reads
+    // the results; never clicks one. A failed search doesn't stop the visit.
+    if (searchFirst) {
+      await searchGoogleFirst(context, searchFirst, url, send);
+      if (stopped()) return finish(report);
+    }
+
     // The sitemap is read through the proxy too, so every request to the site comes from there.
     const sitemap = readSitemap(new URL(url).origin, proxiedFetcher(context)).catch(() => null);
 
@@ -264,7 +278,8 @@ async function launchBrowser(proxy: { server: string; username?: string; passwor
     try {
       return await chromium.launch({
         channel,
-        headless: true,
+        // Headed: a visible browser window, so the visit can be watched as it works.
+        headless: false,
         proxy: { ...proxy, bypass: BROWSER_BACKGROUND_HOSTS.join(",") },
         args: [
           `--host-resolver-rules=${BROWSER_BACKGROUND_HOSTS.map((h) => `MAP ${h} ~NOTFOUND`).join(", ")}`,
@@ -279,56 +294,16 @@ async function launchBrowser(proxy: { server: string; username?: string; passwor
   throw new Error("No browser found. Install Microsoft Edge or Google Chrome on this computer.");
 }
 
-/** IP lookup services, tried in order. Both return { ip, country (2-letter code) }. */
-const IP_SERVICES = ["https://ipinfo.io/json", "https://api.country.is/"];
-
-function toExitInfo(j: Record<string, string> | undefined, lookupMs: number): ExitInfo | null {
-  if (!j?.ip) return null;
-  const names = new Intl.DisplayNames(["en"], { type: "region" });
-  return {
-    ip: j.ip,
-    countryCode: j.country ?? null,
-    country: j.country ? (names.of(j.country) ?? j.country) : null,
-    city: j.city ?? null,
-    org: j.org ?? null,
-    network: networkType(j.org ?? null),
-    lookupMs,
-  };
-}
-
 /** Where the visit comes from, looked up inside the proxied browser. */
-async function exitLocation(context: BrowserContext): Promise<ExitInfo | null> {
-  for (const service of IP_SERVICES) {
+function exitLocation(context: BrowserContext): Promise<ExitInfo | null> {
+  return lookupExit(async (url) => {
     const page = await context.newPage();
     try {
-      const t0 = Date.now();
-      const res = await page.goto(service, { timeout: 20_000 });
-      const info = toExitInfo((await res?.json()) as Record<string, string> | undefined, Date.now() - t0);
-      if (info) return info;
-    } catch {
-      /* try the next service */
+      return await (await page.goto(url, { timeout: 20_000 }))?.json();
     } finally {
       await page.close().catch(() => {});
     }
-  }
-  return null;
-}
-
-/**
- * This computer's own public IP, asked directly (not through the proxy). Only the IP service sees
- * it, never the site. Null if no service answered.
- */
-async function ownPublicIp(): Promise<string | null> {
-  for (const service of IP_SERVICES) {
-    try {
-      const res = await fetch(service, { signal: AbortSignal.timeout(10_000), headers: { Accept: "application/json" } });
-      const ip = ((await res.json()) as { ip?: string }).ip;
-      if (ip) return ip;
-    } catch {
-      /* try the next service */
-    }
-  }
-  return null;
+  });
 }
 
 /** Why the test must not continue from this IP, or null when it's the right country through the proxy. */
@@ -342,6 +317,48 @@ function exitProblem(exit: ExitInfo | null, ownIp: string | null): string | null
     return `The proxy's IP (${exit.ip}) is in ${exit.country ?? "an unknown country"}, not ${where}, so no pages were opened. Get a ${where} proxy and run again.`;
   }
   return null;
+}
+
+/**
+ * Searches Google for the keyword in the visit's own browser, the way Keyword Rankings does
+ * (src/lib/serp.ts: same country and language, same results page, same reading of the results),
+ * and says where the site ranks. It never clicks a result: the site is then opened directly,
+ * with no Google referer. The proxy IP was already confirmed in Vietnam before this runs.
+ */
+async function searchGoogleFirst(
+  context: BrowserContext,
+  { keyword, country }: NonNullable<VisitOptions["searchFirst"]>,
+  siteUrl: string,
+  send: VisitOptions["send"],
+): Promise<void> {
+  if (country.toUpperCase() !== BROWSER_SEARCH_COUNTRY) {
+    send({ type: "step", message: "Only Vietnam can be searched (the proxy is in Vietnam), so the Google search was skipped; opening the site directly." });
+    return;
+  }
+  const params = searchParams(keyword, country);
+  send({ type: "step", message: `Searching Google for “${keyword}” (as in Vietnam: gl=${params.gl}, hl=${params.hl})…` });
+  const tab = await context.newPage();
+  try {
+    await tab.goto(googleResultsUrl(params), { waitUntil: "domcontentloaded" });
+    const blocked = googleBlocked(tab.url(), !!(await tab.$("#captcha-form")));
+    if (blocked) {
+      send({ type: "step", message: `Google ${blocked === "captcha" ? "asked for a CAPTCHA" : "showed its cookie consent page"}, so the search was skipped; opening the site directly.` });
+      return;
+    }
+    await tab.waitForSelector("#search", { timeout: 10_000 }).catch(() => {});
+    const results = clean(await tab.evaluate(readOrganicResults));
+    await scrollPage(tab, MOBILE_SCROLL).catch(() => null);
+    const host = new URL(siteUrl).hostname.replace(/^www\./, "").toLowerCase();
+    const hit = results.find((r) => r.domain.toLowerCase() === host);
+    send({
+      type: "step",
+      message: `${hit ? `The site is #${hit.position} on Google's first page` : "The site isn't on Google's first page"} for “${keyword}”. Opening it directly (no click on a result)…`,
+    });
+  } catch (err) {
+    send({ type: "step", message: `The Google search didn't work (${friendly(err)}); opening the site directly.` });
+  } finally {
+    await tab.close().catch(() => {});
+  }
 }
 
 /** Downloads through the browser context, so it uses the same proxy as the visit. */

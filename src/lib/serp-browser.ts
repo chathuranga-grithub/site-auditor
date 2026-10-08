@@ -1,12 +1,14 @@
 // Server-only, local only: Google results read in a real browser (Puppeteer) through the Vietnam
 // proxy, instead of a paid SERP API. It only searches and reads the result list: it never clicks a
-// result. Google sometimes answers a proxy IP with a CAPTCHA; then that search fails and the next
-// one gets a new proxy IP.
+// result. Before searching it checks the proxy's IP: in Vietnam, and not this computer's own IP.
+// Google sometimes answers a proxy IP with a CAPTCHA; then the search fails, and the daily check
+// tries again later that day (src/lib/campaigns/scheduler.ts).
 
 import { existsSync } from "node:fs";
 import type { Browser } from "puppeteer-core";
 import { NO_WEBRTC_ARGS, NO_WEBRTC_SCRIPT } from "./no-webrtc";
 import { getProxyOrReuse } from "./proxy-api";
+import { lookupExit, ownPublicIp } from "./proxy-ip";
 import { resolveProxyApi } from "./proxy-settings";
 
 /** The proxy's country: browser searches are only right for this one. */
@@ -60,7 +62,8 @@ export async function openBrowserSearch(): Promise<BrowserSearch> {
   const puppeteer = await import("puppeteer-core");
   const browser: Browser = await puppeteer.launch({
     executablePath,
-    headless: true,
+    // Headed: a visible browser window, like a person searching.
+    headless: false,
     args: [
       `--proxy-server=${proxy.server}`,
       // WebRTC could otherwise go around the proxy and show this computer's IP (src/lib/no-webrtc.ts).
@@ -68,6 +71,28 @@ export async function openBrowserSearch(): Promise<BrowserSearch> {
       "--lang=vi-VN",
     ],
   });
+
+  // Where the searches really come from, before any search: wrong or unknown, no search at all.
+  try {
+    const [exit, ownIp] = await Promise.all([
+      lookupExit(async (url) => {
+        const tab = await browser.newPage();
+        try {
+          if (proxy.username) await tab.authenticate({ username: proxy.username, password: proxy.password ?? "" });
+          return await (await tab.goto(url, { timeout: NAV_TIMEOUT }))?.json();
+        } finally {
+          await tab.close().catch(() => {});
+        }
+      }),
+      ownPublicIp(),
+    ]);
+    if (!exit) throw new Error(`couldn't confirm the proxy's IP and country (proxy ${proxy.address})`);
+    if (ownIp && exit.ip === ownIp) throw new Error(`the search would come from this computer's own IP (${ownIp}), not the proxy`);
+    if (exit.countryCode !== BROWSER_SEARCH_COUNTRY) throw new Error(`the proxy's IP (${exit.ip}) is in ${exit.country ?? "an unknown country"}, not Vietnam`);
+  } catch (err) {
+    await browser.close().catch(() => {});
+    throw err;
+  }
 
   return {
     async page(p, n) {
@@ -77,29 +102,44 @@ export async function openBrowserSearch(): Promise<BrowserSearch> {
         await tab.evaluateOnNewDocument(NO_WEBRTC_SCRIPT);
         await tab.emulateTimezone("Asia/Ho_Chi_Minh");
         await tab.setViewport({ width: 1366, height: 768 });
-        const url = new URL("https://www.google.com/search");
-        url.search = new URLSearchParams({ q: p.q, gl: p.gl, hl: p.hl, num: "10", pws: "0", ...(n > 1 ? { start: String((n - 1) * 10) } : {}) }).toString();
-        await tab.goto(url.toString(), { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
+        await tab.goto(googleResultsUrl(p, n), { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
 
-        const at = tab.url();
-        if (at.includes("/sorry/") || (await tab.$("#captcha-form"))) throw new Error(`Google asked for a CAPTCHA (proxy ${proxy.address})`);
-        if (at.includes("consent.google.")) throw new Error("Google showed its cookie consent page");
+        const blocked = googleBlocked(tab.url(), !!(await tab.$("#captcha-form")));
+        if (blocked) throw new Error(blocked === "captcha" ? `Google asked for a CAPTCHA (proxy ${proxy.address})` : "Google showed its cookie consent page");
         await tab.waitForSelector("#search", { timeout: 10_000 }).catch(() => {});
-
-        // Organic results: links with a heading inside the results column (ads sit outside it).
-        return await tab.evaluate(() =>
-          Array.from(document.querySelectorAll<HTMLAnchorElement>("#search a[href]"))
-            .filter((a) => a.querySelector("h3") && /^https?:/.test(a.href) && !/(^|\.)google\./.test(new URL(a.href).hostname))
-            .map((a) => {
-              const block = a.closest("[data-hveid], .g") ?? a.parentElement;
-              const snippet = block?.querySelector<HTMLElement>("[data-sncf], .VwiC3b")?.innerText ?? "";
-              return { title: a.querySelector("h3")!.textContent?.trim() ?? "", link: a.href, snippet: snippet.trim() };
-            }),
-        );
+        return await tab.evaluate(readOrganicResults);
       } finally {
         await tab.close().catch(() => {});
       }
     },
     close: () => browser.close().catch(() => {}),
   };
+}
+
+/** The Google results page for a search (page 1 = top 10, 2 = 11–20). Shared with campaign visits. */
+export function googleResultsUrl(p: BrowserSearchParams, n = 1): string {
+  const url = new URL("https://www.google.com/search");
+  url.search = new URLSearchParams({ q: p.q, gl: p.gl, hl: p.hl, num: "10", pws: "0", ...(n > 1 ? { start: String((n - 1) * 10) } : {}) }).toString();
+  return url.toString();
+}
+
+/** Why Google didn't show results, from the page's URL and whether it has a CAPTCHA form; null when it did. */
+export function googleBlocked(at: string, captchaForm: boolean): "captcha" | "consent" | null {
+  if (at.includes("/sorry/") || captchaForm) return "captcha";
+  if (at.includes("consent.google.")) return "consent";
+  return null;
+}
+
+/**
+ * Runs inside the results page (Puppeteer or Playwright evaluate): the organic results, links with
+ * a heading inside the results column (ads sit outside it). Self-contained: it's sent to the page as text.
+ */
+export function readOrganicResults(): BrowserResult[] {
+  return Array.from(document.querySelectorAll<HTMLAnchorElement>("#search a[href]"))
+    .filter((a) => a.querySelector("h3") && /^https?:/.test(a.href) && !/(^|\.)google\./.test(new URL(a.href).hostname))
+    .map((a) => {
+      const block = a.closest("[data-hveid], .g") ?? a.parentElement;
+      const snippet = block?.querySelector<HTMLElement>("[data-sncf], .VwiC3b")?.innerText ?? "";
+      return { title: a.querySelector("h3")!.textContent?.trim() ?? "", link: a.href, snippet: snippet.trim() };
+    });
 }

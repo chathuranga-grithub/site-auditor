@@ -73,7 +73,8 @@ export function summarize(c: Campaign, days: CampaignDay[], today: string): Camp
     visitsDone: sum(sorted.map((d) => d.visitsDone)),
     visitsDoneToday: sorted.find((d) => d.day === today)?.visitsDone ?? 0,
     dayNumber: Math.min(dayNumber, c.durationDays),
-    daysLeft: Math.max(0, daysBetween(today, c.endDate)),
+    // Today counts: on the last day (the end date) there's still 1 day left.
+    daysLeft: Math.max(0, daysBetween(today, c.endDate) + 1),
     health,
   };
 }

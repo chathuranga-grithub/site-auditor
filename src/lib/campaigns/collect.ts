@@ -11,6 +11,9 @@ import { stopCampaignVisit } from "./visits";
 import { engagementSeconds, searchConsoleDay, serviceAccountEmail } from "./google";
 import type { Campaign, CtrSetup } from "./types";
 
+/** The day's ranking note when the site isn't in the results: a result, not a failure. */
+export const NOT_IN_TOP_10 = "Not in the top 10 today.";
+
 /** Search Console and GA4 numbers are read for this many days ago. */
 export const GSC_DELAY_DAYS = 3;
 
@@ -45,7 +48,7 @@ export async function collectCampaign(c: Campaign, today: string): Promise<Colle
       const hit = serp.results.find((r) => (c.pageUrl ? sameUrl(r.url, c.pageUrl) : stripWwwHost(r.url) === host));
       position = hit?.position ?? null;
       rankingUrl = hit?.url ?? null;
-      await upsertDay(c.id, today, { position, rankingUrl: hit?.url ?? null, notes: { serp: hit ? "" : "Not in the top 10 today." } });
+      await upsertDay(c.id, today, { position, rankingUrl: hit?.url ?? null, notes: { serp: hit ? "" : NOT_IN_TOP_10 } });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       problems.push(`Google position: ${msg}`);
@@ -80,7 +83,8 @@ export async function collectCampaign(c: Campaign, today: string): Promise<Colle
     }
   }
 
-  if (today >= c.endDate && c.status === "active") {
+  // The end date is the campaign's last day, with its own visits: it finishes the day after.
+  if (today > c.endDate && c.status === "active") {
     await setCampaignStatus(c.id, "finished");
     stopCampaignVisit(c.id);
   }

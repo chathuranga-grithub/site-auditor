@@ -2,7 +2,8 @@
 // src/lib/visit-runner.ts). It runs on the server, not in a browser tab: it starts when a campaign is
 // created or resumed, runs again once a day (src/lib/campaigns/scheduler.ts), and stops when it's
 // paused, stopped or deleted. Each time it's the day's target visits from the campaign's visit plan
-// (day 1 visits, grown by the daily increase), one after another, each with a new proxy IP. Every line of its console is kept in memory only (never saved), so any open campaign page
+// (day 1 visits, grown by the daily increase), one after another, each with a new proxy IP; each first searches Google for the
+// keyword in the same browser, as Keyword Rankings does (never clicking a result), then opens the site. Every line of its console is kept in memory only (never saved), so any open campaign page
 // can replay it and then follow it live. Restarting the app clears it.
 
 import { ProxyWaitError } from "../proxy-api";
@@ -35,7 +36,7 @@ const visits = (g.__campaignVisits ??= new Map<number, LiveVisit>());
 /** Visits need a real browser: only when the app runs on a computer, not on Vercel. */
 export const canRunVisits = () => !process.env.VERCEL;
 
-type VisitCampaign = Pick<Campaign, "id" | "siteUrl" | "startDate" | "durationDays" | "day1Visits" | "dailyIncreasePct">;
+type VisitCampaign = Pick<Campaign, "id" | "siteUrl" | "keyword" | "country" | "startDate" | "endDate" | "durationDays" | "day1Visits" | "dailyIncreasePct">;
 
 /** The campaign's target visits for today (Vietnam date), from its visit plan. */
 export function targetVisitsToday(c: VisitCampaign): number {
@@ -47,6 +48,8 @@ export function targetVisitsToday(c: VisitCampaign): number {
 export function startCampaignVisit(c: VisitCampaign): void {
   if (!canRunVisits()) return;
   stopCampaignVisit(c.id);
+  // After its last day (the end date): no more visits; the daily check marks it finished.
+  if (todayInVietnam() > c.endDate) return;
   const runs = targetVisitsToday(c);
   const v: LiveVisit = { startedAt: Date.now(), runs, run: 1, events: [], running: true, controller: new AbortController(), listeners: new Set() };
   visits.set(c.id, v);
@@ -75,7 +78,7 @@ export function forgetCampaignVisit(campaignId: number): void {
   visits.delete(campaignId);
 }
 
-async function run(c: Pick<Campaign, "id" | "siteUrl">, v: LiveVisit) {
+async function run(c: VisitCampaign, v: LiveVisit) {
   const { signal } = v.controller;
   const send = (e: VisitEvent) => {
     const line = { ...e, at: Date.now() } as LoggedVisitEvent;
@@ -100,10 +103,15 @@ async function run(c: Pick<Campaign, "id" | "siteUrl">, v: LiveVisit) {
     if (done > 0) send({ type: "step", message: `${done} of today's ${v.runs} visits are already done; running the other ${v.runs - done}.` });
     // Each run starts only when the one before has finished.
     for (v.run = done + 1; v.run <= v.runs && !signal.aborted; v.run++) {
+      // A visit still going after midnight on the last day stops: the campaign is over.
+      if (todayInVietnam() > c.endDate) {
+        send({ type: "step", message: "The campaign's last day is over, so no more visits." });
+        break;
+      }
       if (v.runs > 1) send({ type: "run", n: v.run, of: v.runs });
       for (;;) {
         try {
-          const report = await runVisitTest({ url: c.siteUrl, proxyApiUrl, mobile: true, freshProxy: true, signal, send });
+          const report = await runVisitTest({ url: c.siteUrl, proxyApiUrl, mobile: true, freshProxy: true, searchFirst: { keyword: c.keyword, country: c.country }, signal, send });
           // Counted when finished (not stopped by hand, and not stopped by the run itself: wrong or
           // unconfirmed proxy IP, proxy died), for the visits done per day; before "done", so a page
           // that reloads its numbers on "done" already sees it.
