@@ -264,7 +264,8 @@ async function launchBrowser(proxy: { server: string; username?: string; passwor
     try {
       return await chromium.launch({
         channel,
-        headless: true,
+        // Headed: a visible browser window, so the visit can be watched as it works.
+        headless: false,
         proxy: { ...proxy, bypass: BROWSER_BACKGROUND_HOSTS.join(",") },
         args: [
           `--host-resolver-rules=${BROWSER_BACKGROUND_HOSTS.map((h) => `MAP ${h} ~NOTFOUND`).join(", ")}`,
