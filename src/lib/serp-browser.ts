@@ -62,7 +62,8 @@ export async function openBrowserSearch(): Promise<BrowserSearch> {
   const puppeteer = await import("puppeteer-core");
   const browser: Browser = await puppeteer.launch({
     executablePath,
-    headless: true,
+    // Headed: a visible browser window, like a person searching.
+    headless: false,
     args: [
       `--proxy-server=${proxy.server}`,
       // WebRTC could otherwise go around the proxy and show this computer's IP (src/lib/no-webrtc.ts).
