@@ -191,7 +191,7 @@ async function openWithProxy(executablePath: string, proxy: ProxyConfig, profile
       let blocked = googleBlocked(tab.url(), !!(await tab.$("#captcha-form")));
       if (blocked === "captcha") {
         console.log(`[ranking] Google asked for a CAPTCHA (proxy ${proxy.address}): waiting up to ${CAPTCHA_WAIT_MS / 1000}s for it to be solved in the browser window…`);
-        blocked = (await waitForCaptcha(async () => (tab.isClosed() ? "closed" : googleBlocked(tab.url(), !!(await tab.$("#captcha-form"))) === "captcha"))) ? null : "captcha";
+        blocked = (await waitForCaptcha(async () => (tab.isClosed() ? "closed" : googleBlocked(tab.url(), !!(await tab.$("#captcha-form"))) === "captcha"))) === "solved" ? null : "captcha";
       }
       // The browser was closed (by hand, or the app stopping): the check ends, it isn't tried again.
       if (tab.isClosed() || !browser.connected) throw new Error("the browser was closed");
@@ -225,23 +225,58 @@ export const CAPTCHA_WAIT_MS = (Number(process.env.CAPTCHA_WAIT_SEC) || 30) * 10
 export class GoogleBlockedError extends Error {}
 
 /**
- * Waits until the CAPTCHA is gone (Google then goes on to the results), checking every 2 seconds, for
- * up to waitMs (CAPTCHA_WAIT_MS; Infinity = until it's solved). True when it's gone; false when it's
- * still there, or the tab was closed ("closed": the visit or check was stopped, so no more waiting).
+ * While a CAPTCHA is being solved (something in it keeps changing: a new picture, an answer typed…),
+ * the wait goes on past CAPTCHA_WAIT_MS, until nothing has changed in it for this long.
  */
-export async function waitForCaptcha(stillThere: () => Promise<boolean | "closed">, waitMs = CAPTCHA_WAIT_MS): Promise<boolean> {
-  const until = Date.now() + waitMs;
-  while (Date.now() < until) {
+export const CAPTCHA_STALL_MS = 30_000;
+
+/** The longest a CAPTCHA is waited for, even while it's still being solved. */
+export const CAPTCHA_MAX_MS = 5 * 60_000;
+
+/**
+ * How a CAPTCHA wait ended: solved; the tab closed (the visit or check was stopped); nothing happening
+ * in it for waitMs ("idle"); its solving stopped for CAPTCHA_STALL_MS ("stuck"); still being solved
+ * after CAPTCHA_MAX_MS ("too-long"); or Google refusing to give a CAPTCHA at all ("refused").
+ */
+export type CaptchaEnd = "solved" | "closed" | "idle" | "stuck" | "too-long" | "refused";
+
+/**
+ * Waits until the CAPTCHA is gone (Google then goes on to the results), checking every 2 seconds, for
+ * up to waitMs (CAPTCHA_WAIT_MS; Infinity = until it's solved). With `activity` (what the CAPTCHA
+ * shows now, as text; "refused" when Google won't give one), the wait goes on past waitMs while that
+ * keeps changing (the CAPTCHA being solved), calling onBusy once when it does.
+ */
+export async function waitForCaptcha(
+  stillThere: () => Promise<boolean | "closed">,
+  { waitMs = CAPTCHA_WAIT_MS, activity, onBusy }: { waitMs?: number; activity?: () => Promise<string>; onBusy?: () => void } = {},
+): Promise<CaptchaEnd> {
+  const start = Date.now();
+  let last: string | undefined;
+  let changedAt: number | null = null;
+  let told = false;
+  for (;;) {
     await new Promise((r) => setTimeout(r, 2000));
     try {
       const there = await stillThere();
-      if (there === "closed") return false;
-      if (!there) return true;
+      if (there === "closed") return "closed";
+      if (!there) return "solved";
+      const now = await activity?.();
+      if (now === "refused") return "refused";
+      if (now !== undefined && now !== last) {
+        if (last !== undefined) changedAt = Date.now();
+        last = now;
+      }
     } catch {
       /* the page is moving on (Google redirecting to the results): check again */
     }
+    const t = Date.now();
+    if (t < start + waitMs) continue;
+    if (changedAt === null) return "idle";
+    if (t >= start + CAPTCHA_MAX_MS) return "too-long";
+    if (t - changedAt >= CAPTCHA_STALL_MS) return "stuck";
+    if (!told) onBusy?.();
+    told = true;
   }
-  return false;
 }
 
 /** Why Google didn't show results, from the page's URL and whether it has a CAPTCHA form; null when it did. */
