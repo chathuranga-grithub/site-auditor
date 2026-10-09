@@ -284,7 +284,7 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
     const readCap = dwellSec ? Math.min(READ_MAX_SEC, Math.max(10, Math.round(dwellSec / 4))) : READ_MAX_SEC;
     const start = fromGoogle
       ? // A link through Google's /url redirect: recorded as the site (where it lands is finalUrl).
-        await checkPage(page, /(^|\.)google\./.test(new URL(fromGoogle.link).hostname) ? url : fromGoogle.link, "start", () => clickResult(page, fromGoogle.link), START_SCROLL, readPages && { until: dwellEnds, maxSec: readCap })
+        await checkPage(page, /(^|\.)google\./.test(new URL(fromGoogle.link).hostname) ? url : fromGoogle.link, "start", () => clickResult(page, fromGoogle.link, url, (message) => send({ type: "step", message })), START_SCROLL, readPages && { until: dwellEnds, maxSec: readCap })
       : await checkPage(page, url, "start", () => page.goto(url, { waitUntil: "domcontentloaded" }), START_SCROLL, readPages && { until: dwellEnds, maxSec: readCap });
     report.start = start;
     report.scroll = start.scroll ?? null;
@@ -667,7 +667,7 @@ async function searchGoogleFirst(
     const host = new URL(siteUrl).hostname.replace(/^www\./, "").toLowerCase();
     const hit = results.find((r) => r.domain.toLowerCase() === host);
     // Not among the results read (e.g. a phone's layout): any link to the site on the page, not an ad.
-    const link = hit?.url ?? (await tab.evaluate(findSiteLink, host).catch(() => null));
+    const link = hit?.url ?? ((await tab.evaluate(findSiteLinks, host).catch(() => []))[0] ?? null);
     const where = hit
       ? `The site is #${hit.position} on Google's first page`
       : link
@@ -694,7 +694,7 @@ async function searchGoogleFirst(
  * TEMPORARY (testing): true = a CAPTCHA not solved the first time opens the site directly by its URL.
  * Remove once there's a proper solution for Google's CAPTCHA (campaign visits must click the result).
  */
-const TEMP_OPEN_DIRECTLY_ON_CAPTCHA = true;
+const TEMP_OPEN_DIRECTLY_ON_CAPTCHA = false;
 
 /** How many browsers a visit opens on one proxy IP for an unsolved CAPTCHA, before getting a new IP. */
 const CAPTCHA_TRIES = 3;
@@ -703,11 +703,11 @@ const CAPTCHA_TRIES = 3;
 class CaptchaTimeoutError extends GoogleBlockedError {}
 
 /**
- * Runs inside Google's results page: the first link to the site (host, without www) that isn't an
- * ad, whatever the layout (desktop or phone), also through Google's /url?q= redirect. Its href, or
- * null. Self-contained: it's sent to the page as text.
+ * Runs inside Google's results page: the links to the site (host, without www) that aren't ads,
+ * whatever the layout (desktop or phone), also through Google's /url?q= redirect. Their hrefs, in
+ * page order, each once. Self-contained: it's sent to the page as text.
  */
-function findSiteLink(host: string): string | null {
+function findSiteLinks(host: string): string[] {
   const target = (href: string): string | null => {
     try {
       const u = new URL(href);
@@ -717,39 +717,87 @@ function findSiteLink(host: string): string | null {
       return null;
     }
   };
+  const found: string[] = [];
   for (const a of Array.from(document.querySelectorAll<HTMLAnchorElement>("a[href]"))) {
     if (a.closest("#tads, #bottomads, [data-text-ad]")) continue;
     const t = target(a.href);
-    if (t === host || t?.endsWith(`.${host}`)) return a.href;
+    if ((t === host || t?.endsWith(`.${host}`)) && !found.includes(a.href)) found.push(a.href);
   }
-  return null;
+  return found;
 }
 
 /**
  * Clicks the site's result on Google's results page (as a person would: Google is the referer), in
- * the same tab, and resolves once the site's page has its content (DOMContentLoaded).
+ * the same tab, and resolves once the site's page has its content (DOMContentLoaded). A click that
+ * doesn't open the site is tried again, CLICK_TRIES times in all, each on a different link to the
+ * site when Google shows several (the result first, then its other results and sitelinks; back to
+ * the first when there are fewer) and each a different way (the mouse on the link, the mouse moved
+ * there by hand, the keyboard); only then is the result opened in this tab directly, still from
+ * Google (its referer), instead of the visit failing.
  */
-async function clickResult(tab: Page, link: string): Promise<{ status(): number } | null> {
-  const anchor = await tab.evaluateHandle((href) => {
-    // In this tab, never a new one: no target on the links, and Google's own window.open goes here too.
-    document.querySelectorAll("a[target]").forEach((a) => a.removeAttribute("target"));
-    window.open = (u?: string | URL) => {
-      if (u) location.href = String(u);
-      return null;
-    };
-    return Array.from(document.querySelectorAll<HTMLAnchorElement>("a[href]")).find((el) => el.href === href) ?? null;
-  }, link);
-  const el = anchor.asElement();
-  if (!el) throw new Error("The site's result wasn't on Google's results page any more.");
+async function clickResult(tab: Page, link: string, siteUrl: string, say: (message: string) => void): Promise<{ status(): number } | null> {
   const googleUrl = tab.url();
+  const host = new URL(siteUrl).hostname.replace(/^www\./, "").toLowerCase();
   const offGoogle = (u: URL) => !/(^|\.)google\./.test(u.hostname);
-  const nav = tab.waitForNavigation({ url: offGoogle, waitUntil: "domcontentloaded" });
-  nav.catch(() => {}); // not waited for when the click did nothing (below)
-  await el.click();
-  // The click did nothing (still on Google after CLICK_WAIT_MS): the result is opened in this tab
-  // directly, still from Google (its referer), instead of the visit waiting and failing.
-  const moved = await Promise.race([nav.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), CLICK_WAIT_MS))]);
-  if (moved || offGoogle(new URL(tab.url()))) return nav;
+  for (let attempt = 1; attempt <= CLICK_TRIES; attempt++) {
+    // A try that left the results for another Google page (a redirect notice…): back to the results.
+    if (attempt > 1 && tab.url() !== googleUrl) {
+      await tab.goBack({ waitUntil: "domcontentloaded" }).catch(() => null);
+      if (tab.url() !== googleUrl) await tab.goto(googleUrl, { waitUntil: "domcontentloaded", referer: googleUrl }).catch(() => null);
+    }
+    const anchor = await tab.evaluateHandle(
+      ([href, siteHost, find, n]) => {
+        // In this tab, never a new one: no target on the links, and Google's own window.open goes here too.
+        document.querySelectorAll("a[target]").forEach((a) => a.removeAttribute("target"));
+        window.open = (u?: string | URL) => {
+          if (u) location.href = String(u);
+          return null;
+        };
+        const links = Array.from(document.querySelectorAll<HTMLAnchorElement>("a[href]"));
+        // The site's links that can be seen (a hidden one can't be clicked), the result found first.
+        const visible = (h: string) => links.some((el) => el.href === h && el.getClientRects().length > 0);
+        const all = (new Function(`return (${find})`)() as (h: string) => string[])(siteHost).filter(visible);
+        const order = all.includes(href) ? [href, ...all.filter((h) => h !== href)] : all;
+        // Try n on the site's n-th link; back to the first when there are fewer.
+        const pick = order[n - 1] ?? order[0];
+        return pick ? (links.find((el) => el.href === pick && el.getClientRects().length > 0) ?? null) : null;
+      },
+      [link, host, findSiteLinks.toString(), attempt] as const,
+    );
+    const el = anchor.asElement();
+    if (!el) {
+      say(`Click ${attempt} of ${CLICK_TRIES}: the site's result isn't on Google's results page${attempt < CLICK_TRIES ? "; trying again…" : "."}`);
+      continue;
+    }
+    const href = await el.evaluate((a) => (a as HTMLAnchorElement).href).catch(() => link);
+    if (attempt > 1) say(`Click ${attempt} of ${CLICK_TRIES}: ${href === link ? "the site's result again" : `another link to the site (${href.slice(0, 100)})`}…`);
+    const nav = tab.waitForNavigation({ url: offGoogle, waitUntil: "domcontentloaded" });
+    nav.catch(() => {}); // not waited for when the click did nothing (below)
+    try {
+      await el.scrollIntoViewIfNeeded({ timeout: 5_000 }).catch(() => {});
+      if (attempt === 1) {
+        await el.click({ timeout: 10_000 });
+      } else if (attempt === 2) {
+        // The mouse moved onto the link in small steps, then pressed: nothing in the way is waited for.
+        const box = await el.boundingBox();
+        if (!box) throw new Error("the result isn't visible");
+        const x = box.x + Math.min(box.width / 2, 40 + Math.random() * 40);
+        const y = box.y + box.height / 2;
+        await tab.mouse.move(x, y, { steps: 12 });
+        await tab.mouse.click(x, y, { delay: 60 + Math.random() * 80 });
+      } else {
+        await el.focus();
+        await tab.keyboard.press("Enter");
+      }
+    } catch (err) {
+      say(`Click ${attempt} of ${CLICK_TRIES} on the site's result didn't work (${friendly(err)})${attempt < CLICK_TRIES ? "; trying again…" : "."}`);
+      continue;
+    }
+    const moved = await Promise.race([nav.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), CLICK_WAIT_MS))]);
+    if (moved || offGoogle(new URL(tab.url()))) return nav;
+    say(`Click ${attempt} of ${CLICK_TRIES} on the site's result didn't open it in ${CLICK_WAIT_MS / 1000}s${attempt < CLICK_TRIES ? "; clicking again…" : "."}`);
+  }
+  say(`The site's result didn't open after ${CLICK_TRIES} clicks: opening it from Google's results page directly.`);
   return tab.goto(link, { waitUntil: "domcontentloaded", referer: googleUrl });
 }
 
@@ -762,8 +810,11 @@ async function saveShot(tab: Page): Promise<string> {
 /** The IP check at the end of a visit: at most this long. */
 const END_CHECK_MS = 8_000;
 
-/** How long a click on Google's result has to start opening the site before it's opened directly. */
+/** How long each click on Google's result has to start opening the site before the next try. */
 const CLICK_WAIT_MS = 15_000;
+
+/** How many times the site's result on Google is clicked before it's opened directly (at least 3). */
+const CLICK_TRIES = 3;
 
 /** Downloads through the browser context, so it uses the same proxy as the visit. */
 function proxiedFetcher(context: BrowserContext): SitemapFetcher {
