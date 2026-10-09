@@ -7,9 +7,11 @@ import StealthPlugin from "puppeteer-extra-plugin-stealth";
 /**
  * Left out, as the app sets these itself: the user agent and its hints (device profiles:
  * src/lib/device-profiles.ts), the languages (Vietnamese, from Chrome's --lang and the Accept-Language),
- * and navigator.vendor (an iPhone's Safari says "Apple Computer, Inc.", not "Google Inc.").
+ * navigator.vendor (an iPhone's Safari says "Apple Computer, Inc.", not "Google Inc."), and the
+ * graphics chip: the plugin makes every browser an "Intel Iris" (a Mac's), which a phone or a Windows
+ * PC can't have; each device reports its own instead (a Windows PC: this computer's real one).
  */
-const LEFT_OUT = ["user-agent-override", "navigator.languages", "navigator.vendor"];
+const LEFT_OUT = ["user-agent-override", "navigator.languages", "navigator.vendor", "webgl.vendor"];
 
 /** A new stealth plugin (one per browser library: a plugin instance can't be shared). */
 export function stealthPlugin() {
@@ -19,15 +21,9 @@ export function stealthPlugin() {
 }
 
 /**
- * Whether the stealth plugin is working in this tab: its WebGL evasion reports the graphics card as
- * "Intel Inc." / "Intel Iris OpenGL Engine" (real Chrome says e.g. "Google Inc. (Intel)").
+ * Whether the stealth plugin is working in this tab: a browser run by the app says it's automated
+ * (navigator.webdriver), and the plugin hides that.
  */
 export async function stealthOn(tab: { evaluate<T>(fn: () => T): Promise<T> }): Promise<boolean> {
-  return tab
-    .evaluate(() => {
-      const gl = document.createElement("canvas").getContext("webgl");
-      const info = gl?.getExtension("WEBGL_debug_renderer_info");
-      return !!gl && !!info && gl.getParameter(info.UNMASKED_VENDOR_WEBGL) === "Intel Inc." && gl.getParameter(info.UNMASKED_RENDERER_WEBGL) === "Intel Iris OpenGL Engine";
-    })
-    .catch(() => false);
+  return tab.evaluate(() => !navigator.webdriver).catch(() => false);
 }

@@ -16,6 +16,7 @@ import { ProxyIpInUseError } from "./proxy-pool";
 import { checkChromeProfile, EXTENSION_ARGS, KEEP_EXTENSIONS, PROFILE_ARGS, profileExtensionDirs, profileLockedMessage } from "./browser-profile";
 import { takeGoogleTurn } from "./google-turn";
 import { searchParams } from "./serp";
+import { restoreGoogleCookies, saveGoogleCookies } from "./google-cookies";
 import { BROWSER_SEARCH_COUNTRY, CAPTCHA_MAX_MS, CAPTCHA_STALL_MS, CAPTCHA_WAIT_MS, GoogleBlockedError, googleBlocked, googleResultsUrl, waitForCaptcha } from "./serp-browser";
 import { readSitemap, type SitemapFetcher } from "./sitemap";
 import { isBlockedHost, isInternal, normalizeUrl, shouldSkipCrawl } from "./url";
@@ -231,8 +232,14 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
       // Optional: the keyword searched on Google first, in this same browser, and the site's result
       // clicked (that tab becomes the start page). A failed search doesn't stop the visit.
       if (!searchFirst) break;
+      // Google's cookies from an earlier visit on this IP (e.g. its pass after a solved CAPTCHA), so
+      // this browser isn't a stranger to Google (src/lib/google-cookies.ts).
+      const restored = await restoreGoogleCookies(context, exit.ip);
+      if (restored) send({ type: "step", message: `Google's cookies from an earlier visit on this IP put back (${restored}).` });
       try {
         fromGoogle = await searchGoogleFirst(main, searchFirst, url, send, signal);
+        // Got through to the results: Google's cookies kept for the next visit on this IP.
+        await saveGoogleCookies(context, exit.ip);
         break;
       } catch (err) {
         if (err instanceof CaptchaRefusedError && !stopped()) {
@@ -641,11 +648,11 @@ async function searchGoogleFirst(
   try {
     // The site looked for on Google's first SEARCH_PAGES pages, going on with "Next" like a person.
     for (let n = 1; n <= SEARCH_PAGES; n++) {
-      if (n === 1) await tab.goto(googleResultsUrl(params), { waitUntil: "domcontentloaded" });
+      if (n === 1) await typeSearch(tab, params);
       else await nextResultsPage(tab, params, n);
       let found: Awaited<ReturnType<typeof readSiteResults>> = { organic: 0, titles: 0, links: [] };
       // A CAPTCHA, and sometimes another one right after it's solved (up to CAPTCHAS_PER_PAGE).
-      for (let captchas = 0; ; ) {
+      for (let captchas = 0, typedAgain = false; ; ) {
         const blocked = googleBlocked(tab.url(), !!(await tab.$("#captcha-form").catch(() => null)));
         if (blocked === "captcha" && captchas < CAPTCHAS_PER_PAGE) {
           captchas++;
@@ -660,6 +667,12 @@ async function searchGoogleFirst(
         if (blocked) {
           send({ type: "step", message: "Google showed its cookie consent page, so the search was skipped; opening the site directly." });
           return null;
+        }
+        // A CAPTCHA on Google's home page goes back there once solved, not to the results: typed again.
+        if (n === 1 && !typedAgain && !isResultsPage(tab.url())) {
+          typedAgain = true;
+          await typeSearch(tab, params);
+          continue;
         }
         // Read again every second for up to RESULTS_WAIT_MS until results are there: right after a
         // CAPTCHA, Google is still loading them (or shows another CAPTCHA: back to the top).
@@ -695,6 +708,47 @@ async function searchGoogleFirst(
     return null;
   } finally {
     release();
+  }
+}
+
+/** Whether the tab is on Google's results (not its home page, a CAPTCHA…). */
+function isResultsPage(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return /(^|\.)google\./.test(u.hostname) && u.pathname === "/search";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The search made as a person makes it: Google's home page opened, the keyword typed into its box a
+ * key at a time, and Enter pressed (not the results' address opened directly, which people rarely do).
+ * Stops where Google goes: the results, or a CAPTCHA (the caller deals with it). No box to type in
+ * (Google showed something else): the results page is opened from there instead.
+ */
+async function typeSearch(tab: Page, params: ReturnType<typeof searchParams>): Promise<void> {
+  const home = `https://www.google.com/?hl=${params.hl}&gl=${params.gl}`;
+  await tab.goto(home, { waitUntil: "domcontentloaded" });
+  if (googleBlocked(tab.url(), false)) return;
+  const pause = (min: number, max: number) => new Promise((r) => setTimeout(r, min + Math.random() * (max - min)));
+  try {
+    const box = tab.locator('textarea[name="q"], input[name="q"]').first();
+    await box.waitFor({ state: "visible", timeout: 10_000 });
+    await pause(600, 1500);
+    await box.click();
+    await box.fill("");
+    for (const key of params.q) {
+      await tab.keyboard.type(key);
+      await pause(60, 220);
+    }
+    await pause(400, 1100);
+    const went = tab.waitForURL((u) => isResultsPage(u.toString()) || googleBlocked(u.toString(), false) !== null, { timeout: 30_000, waitUntil: "domcontentloaded" });
+    await tab.keyboard.press("Enter");
+    await went;
+  } catch {
+    if (isResultsPage(tab.url()) || googleBlocked(tab.url(), false)) return;
+    await tab.goto(googleResultsUrl(params), { waitUntil: "domcontentloaded", referer: home });
   }
 }
 

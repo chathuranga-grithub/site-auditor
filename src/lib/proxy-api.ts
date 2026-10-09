@@ -2,6 +2,9 @@
 // ShopLike's: { status: "success", data: { proxy: "ip:port", location, nextChange, auth: { account } } }.
 // The API link (with its access token) comes from the form or PROXY_API_URL in .env.local.
 
+import { readFileSync } from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { ProxyInfo } from "./visit-types";
 import { isBlockedHost } from "./url";
 
@@ -24,20 +27,51 @@ export class ProxyWaitError extends Error {
 // On globalThis: one copy for the whole server (`next dev` loads this file more than once, e.g. for
 // ranking checks and for visits, and again on a code reload), so what one marks the other sees.
 const shared = globalThis as typeof globalThis & {
-  __proxyApi?: { lastProxy: Map<string, { config: ProxyConfig; expiresAt: number; visited: boolean }>; googleBlocked: Set<string>; visitsPerIp: Map<string, number> };
+  __proxyApi?: { lastProxy: Map<string, { config: ProxyConfig; expiresAt: number; visited: boolean }>; visitsPerIp: Map<string, number> };
+  __googleBlockedAt?: Map<string, number>;
 };
-const state = (shared.__proxyApi ??= { lastProxy: new Map(), googleBlocked: new Set(), visitsPerIp: new Map() });
+const state = (shared.__proxyApi ??= { lastProxy: new Map(), visitsPerIp: new Map() });
 const lastProxy = state.lastProxy;
 
-// Proxy addresses Google kept blocking (CAPTCHAs not solved): never reused as the link's current IP.
-const googleBlocked = state.googleBlocked;
+// Proxy addresses Google kept blocking (CAPTCHAs not solved), with when: not handed to a visit for
+// BLOCKED_MS (residential IPs move between people, and Google's block wears off). Saved in a file, so
+// the app remembers them after a restart.
+const BLOCKED_FILE = path.join(process.env.LOCALAPPDATA ?? process.cwd(), "SiteAuditor", "google-blocked.json");
+const BLOCKED_MS = 24 * 60 * 60_000;
+const googleBlocked = (shared.__googleBlockedAt ??= loadBlocked());
 
-/** Google showed that IP a CAPTCHA (e.g. in a ranking check): never hand it to a visit. */
+function loadBlocked(): Map<string, number> {
+  try {
+    const saved = JSON.parse(readFileSync(BLOCKED_FILE, "utf8")) as Record<string, unknown>;
+    return new Map(Object.entries(saved).filter((e): e is [string, number] => typeof e[1] === "number" && Date.now() - e[1] < BLOCKED_MS));
+  } catch {
+    return new Map(); // no file yet (or not on this computer, e.g. on Vercel)
+  }
+}
+
+/** Whether Google blocked that address in the last BLOCKED_MS. */
+function isGoogleBlocked(address: string): boolean {
+  const at = googleBlocked.get(address);
+  if (at === undefined) return false;
+  if (Date.now() - at < BLOCKED_MS) return true;
+  googleBlocked.delete(address);
+  return false;
+}
+
+/** Google showed that IP a CAPTCHA (e.g. in a ranking check): not handed to a visit for BLOCKED_MS. */
 export function burnProxy(apiUrl: string, address: string): void {
-  googleBlocked.add(address);
+  googleBlocked.set(address, Date.now());
   const last = lastProxy.get(apiUrl);
   if (last && last.config.address === address) last.visited = true;
+  for (const [a, at] of googleBlocked) if (Date.now() - at >= BLOCKED_MS) googleBlocked.delete(a);
+  void fs
+    .mkdir(path.dirname(BLOCKED_FILE), { recursive: true })
+    .then(() => fs.writeFile(BLOCKED_FILE, JSON.stringify(Object.fromEntries(googleBlocked), null, 1)))
+    .catch(() => {});
 }
+
+/** How long a visit waits when the provider's new IP is one Google blocked (it then gives another). */
+const BLOCKED_IP_WAIT_SEC = 30;
 
 /** How many campaign visits may use one proxy IP (a new IP when the provider gives one, else the current one again). */
 export const MAX_VISITS_PER_IP = 3;
@@ -60,19 +94,22 @@ function countVisitOn<T extends ProxyConfig>(config: T): T {
  */
 export async function getUnvisitedProxy(apiUrl: string): Promise<ProxyConfig & { fromEarlier: boolean; current: boolean; visitNo: number }> {
   const last = lastProxy.get(apiUrl);
-  if (last && !last.visited && !googleBlocked.has(last.config.address) && Date.now() < last.expiresAt) {
+  if (last && !last.visited && !isGoogleBlocked(last.config.address) && Date.now() < last.expiresAt) {
     last.visited = true;
     const config = countVisitOn(last.config);
     return { ...config, fromEarlier: true, current: false, visitNo: visitsPerIp.get(config.address)! };
   }
   try {
-    const config = countVisitOn(await getProxy(apiUrl));
+    const fresh = await getProxy(apiUrl);
     lastProxy.get(apiUrl)!.visited = true;
+    // A new IP Google blocked not long ago (the provider's IPs come round again): waited past for another.
+    if (isGoogleBlocked(fresh.address)) throw new ProxyWaitError(BLOCKED_IP_WAIT_SEC);
+    const config = countVisitOn(fresh);
     return { ...config, fromEarlier: false, current: false, visitNo: visitsPerIp.get(config.address)! };
   } catch (err) {
     if (!(err instanceof ProxyWaitError)) throw err;
     const current = await getCurrentProxy(apiUrl).catch(() => null);
-    if (!current || googleBlocked.has(current.address) || (visitsPerIp.get(current.address) ?? 0) >= MAX_VISITS_PER_IP) throw err;
+    if (!current || isGoogleBlocked(current.address) || (visitsPerIp.get(current.address) ?? 0) >= MAX_VISITS_PER_IP) throw err;
     const latest = lastProxy.get(apiUrl);
     if (latest?.config.address === current.address) latest.visited = true;
     countVisitOn(current);

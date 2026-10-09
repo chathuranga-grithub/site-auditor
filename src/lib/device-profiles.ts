@@ -20,7 +20,22 @@ export interface DeviceProfile {
   osVersion: string;
   /** Android phones: the model code in the client hints (e.g. SM-S921B). */
   model?: string;
+  /**
+   * The graphics chip the device's browser reports (WebGL), as it reports it. None for a Windows PC:
+   * this computer's own is shown, and it is one.
+   */
+  gpu?: { vendor: string; renderer: string };
 }
+
+// Graphics chips, as each device's browser reports them (WebGL's unmasked vendor and renderer).
+const XCLIPSE_940 = { vendor: "Samsung Electronics Co., Ltd.", renderer: "Samsung Xclipse 940" };
+const ADRENO_740 = { vendor: "Qualcomm", renderer: "Adreno (TM) 740" };
+const XCLIPSE_530 = { vendor: "Samsung Electronics Co., Ltd.", renderer: "Samsung Xclipse 530" };
+const ADRENO_610 = { vendor: "Qualcomm", renderer: "Adreno (TM) 610" };
+const MALI_G710 = { vendor: "ARM", renderer: "Mali-G710" };
+const MALI_G715 = { vendor: "ARM", renderer: "Mali-G715" };
+const APPLE_GPU = { vendor: "Apple Inc.", renderer: "Apple GPU" };
+const appleM = (chip: string) => ({ vendor: "Google Inc. (Apple)", renderer: `ANGLE (Apple, ANGLE Metal Renderer: Apple ${chip}, Unspecified Version)` });
 
 /** Share of phone visits on Android (the rest on an iPhone), and of computer visits on Windows (the rest on a Mac), in Vietnam. */
 const ANDROID_SHARE = 0.7;
@@ -35,26 +50,27 @@ function phoneScreen(name: string): DeviceProfile["screen"] {
 }
 
 const ANDROID: DeviceProfile[] = [
-  { name: "Samsung Galaxy S24", kind: "android", screen: phoneScreen("Galaxy S24"), osVersion: "14", model: "SM-S921B" },
-  { name: "Samsung Galaxy S23", kind: "android", screen: phoneScreen("Galaxy S24"), osVersion: "14", model: "SM-S911B" },
-  { name: "Samsung Galaxy A55", kind: "android", screen: phoneScreen("Galaxy A55"), osVersion: "14", model: "SM-A556E" },
+  { name: "Samsung Galaxy S24", kind: "android", screen: phoneScreen("Galaxy S24"), osVersion: "14", model: "SM-S921B", gpu: XCLIPSE_940 },
+  { name: "Samsung Galaxy S23", kind: "android", screen: phoneScreen("Galaxy S24"), osVersion: "14", model: "SM-S911B", gpu: ADRENO_740 },
+  { name: "Samsung Galaxy A55", kind: "android", screen: phoneScreen("Galaxy A55"), osVersion: "14", model: "SM-A556E", gpu: XCLIPSE_530 },
   {
     name: "Xiaomi Redmi Note 13",
     kind: "android",
     screen: { viewport: { width: 393, height: 783 }, screen: { width: 393, height: 873 }, deviceScaleFactor: 2.75, isMobile: true, hasTouch: true },
     osVersion: "14",
     model: "23129RAA4G",
+    gpu: ADRENO_610,
   },
-  { name: "Google Pixel 7", kind: "android", screen: phoneScreen("Pixel 7"), osVersion: "14", model: "Pixel 7" },
-  { name: "Google Pixel 8", kind: "android", screen: phoneScreen("Pixel 8"), osVersion: "15", model: "Pixel 8" },
+  { name: "Google Pixel 7", kind: "android", screen: phoneScreen("Pixel 7"), osVersion: "14", model: "Pixel 7", gpu: MALI_G710 },
+  { name: "Google Pixel 8", kind: "android", screen: phoneScreen("Pixel 8"), osVersion: "15", model: "Pixel 8", gpu: MALI_G715 },
 ];
 
 const IPHONE: DeviceProfile[] = [
-  { name: "iPhone 13", kind: "iphone", screen: phoneScreen("iPhone 13"), osVersion: "18_6" },
-  { name: "iPhone 14", kind: "iphone", screen: phoneScreen("iPhone 14"), osVersion: "18_6" },
-  { name: "iPhone 15", kind: "iphone", screen: phoneScreen("iPhone 15"), osVersion: "18_6" },
-  { name: "iPhone 15 Pro", kind: "iphone", screen: phoneScreen("iPhone 15 Pro"), osVersion: "18_6" },
-  { name: "iPhone 16", kind: "iphone", screen: phoneScreen("iPhone 16"), osVersion: "18_6" },
+  { name: "iPhone 13", kind: "iphone", screen: phoneScreen("iPhone 13"), osVersion: "18_6", gpu: APPLE_GPU },
+  { name: "iPhone 14", kind: "iphone", screen: phoneScreen("iPhone 14"), osVersion: "18_6", gpu: APPLE_GPU },
+  { name: "iPhone 15", kind: "iphone", screen: phoneScreen("iPhone 15"), osVersion: "18_6", gpu: APPLE_GPU },
+  { name: "iPhone 15 Pro", kind: "iphone", screen: phoneScreen("iPhone 15 Pro"), osVersion: "18_6", gpu: APPLE_GPU },
+  { name: "iPhone 16", kind: "iphone", screen: phoneScreen("iPhone 16"), osVersion: "18_6", gpu: APPLE_GPU },
 ];
 
 /** A computer's screen; the page area is smaller (the browser's own bars and the taskbar / menu bar). */
@@ -75,9 +91,9 @@ const WINDOWS: DeviceProfile[] = [
 ];
 
 const MAC: DeviceProfile[] = [
-  { name: "MacBook Air 1440×900", kind: "mac", screen: desktop(1440, 900, 2, 110), osVersion: "15.5.0" },
-  { name: "MacBook Pro 1512×982", kind: "mac", screen: desktop(1512, 982, 2, 110), osVersion: "15.5.0" },
-  { name: "MacBook Air 1470×956", kind: "mac", screen: desktop(1470, 956, 2, 110), osVersion: "14.7.0" },
+  { name: "MacBook Air 1440×900", kind: "mac", screen: desktop(1440, 900, 2, 110), osVersion: "15.5.0", gpu: appleM("M2") },
+  { name: "MacBook Pro 1512×982", kind: "mac", screen: desktop(1512, 982, 2, 110), osVersion: "15.5.0", gpu: appleM("M3 Pro") },
+  { name: "MacBook Air 1470×956", kind: "mac", screen: desktop(1470, 956, 2, 110), osVersion: "14.7.0", gpu: appleM("M3") },
 ];
 
 const pick = <T>(list: T[]): T => list[Math.floor(Math.random() * list.length)];
@@ -178,6 +194,28 @@ function applyDevice(page: Page, d: DeviceProfile): Promise<void> {
 }
 
 /**
+ * Runs in every page before its own scripts: WebGL reports this graphics chip (its unmasked vendor and
+ * renderer, which sites read to tell devices apart). The replaced function still looks built in.
+ * Self-contained: it's sent to the page as text.
+ */
+function reportGpu({ vendor, renderer }: { vendor: string; renderer: string }): void {
+  const VENDOR = 0x9245; // UNMASKED_VENDOR_WEBGL
+  const RENDERER = 0x9246; // UNMASKED_RENDERER_WEBGL
+  for (const proto of [WebGLRenderingContext.prototype, typeof WebGL2RenderingContext === "undefined" ? null : WebGL2RenderingContext.prototype]) {
+    if (!proto) continue;
+    const original = proto.getParameter;
+    const getParameter = function (this: WebGLRenderingContext, p: GLenum) {
+      if (p === VENDOR) return vendor;
+      if (p === RENDERER) return renderer;
+      return original.call(this, p);
+    };
+    Object.defineProperty(getParameter, "name", { value: "getParameter" });
+    Object.defineProperty(getParameter, "toString", { value: () => "function getParameter() { [native code] }" });
+    Object.defineProperty(proto, "getParameter", { value: getParameter, writable: true, configurable: true, enumerable: true });
+  }
+}
+
+/**
  * Every page the context opens gets the device's identity: pages the app opens (newPage) before they
  * load anything; pages a site opens itself (a link in a new tab) as soon as they appear.
  */
@@ -185,7 +223,10 @@ export function actAsDevice(context: BrowserContext, d: DeviceProfile): void {
   let set!: (ua: string) => void;
   userAgents.set(context, { ua: new Promise<string>((resolve) => (set = resolve)), set: (ua) => set(ua) });
   // Safari has no navigator.userAgentData at all (Chrome's would be there, empty).
-  const ready = d.kind === "iphone" ? context.addInitScript(() => void delete (Navigator.prototype as { userAgentData?: unknown }).userAgentData).catch(() => {}) : Promise.resolve();
+  const noHints = d.kind === "iphone" ? context.addInitScript(() => void delete (Navigator.prototype as { userAgentData?: unknown }).userAgentData).catch(() => {}) : null;
+  // The device's own graphics chip (a phone reporting this computer's would give it away).
+  const gpu = d.gpu ? context.addInitScript(reportGpu, d.gpu).catch(() => {}) : null;
+  const ready = Promise.all([noHints, gpu]);
   const newPage = context.newPage.bind(context);
   context.newPage = async () => {
     await ready;
