@@ -32,9 +32,9 @@ let quitting = false;
 let toldAboutTray = false;
 
 // ---------------------------------------------------------------------------------------------
-// Settings: { databaseUrl, authSecret, googleServiceAccountJson, port }, the secrets encrypted.
+// Settings: { databaseUrl, authSecret, port, startAtLogin }, the secrets encrypted.
 
-const SECRET_KEYS = ["databaseUrl", "authSecret", "googleServiceAccountJson"];
+const SECRET_KEYS = ["databaseUrl", "authSecret"];
 
 function readConfig() {
   try {
@@ -63,6 +63,18 @@ function writeConfig(config) {
 }
 
 const configured = (c) => !!(c.databaseUrl && c.authSecret);
+
+/** The app's own events and errors (not the server's): logs\app.log. */
+function logApp(message) {
+  try {
+    fs.mkdirSync(LOG_DIR(), { recursive: true });
+    fs.appendFileSync(path.join(LOG_DIR(), "app.log"), `${new Date().toISOString()} ${message}\n`);
+  } catch {
+    /* nowhere to write: nothing more to do */
+  }
+}
+process.on("uncaughtException", (err) => logApp(`error: ${err.stack || err}`));
+process.on("unhandledRejection", (err) => logApp(`error: ${(err && err.stack) || err}`));
 
 // ---------------------------------------------------------------------------------------------
 // The server
@@ -124,7 +136,6 @@ async function startServer() {
       HOSTNAME: "127.0.0.1",
       DATABASE_URL: config.databaseUrl,
       AUTH_SECRET: config.authSecret,
-      ...(config.googleServiceAccountJson ? { GOOGLE_SERVICE_ACCOUNT_JSON: config.googleServiceAccountJson } : {}),
     },
   });
   server.stdout?.on("data", (d) => log.write(d));
@@ -204,7 +215,7 @@ function showSetup() {
   if (setupWin) return setupWin.focus();
   setupWin = new BrowserWindow({
     width: 620,
-    height: 720,
+    height: 600,
     resizable: false,
     title: "Site Auditor setup",
     icon: ICON,
@@ -221,34 +232,39 @@ function showSetup() {
 
 ipcMain.handle("setup:load", () => {
   const c = readConfig();
-  return { databaseUrl: c.databaseUrl || "", authSecret: c.authSecret || "", googleServiceAccountJson: c.googleServiceAccountJson || "", startAtLogin: c.startAtLogin, version: app.getVersion() };
+  return { databaseUrl: c.databaseUrl || "", authSecret: c.authSecret || "", startAtLogin: c.startAtLogin, version: app.getVersion() };
 });
 
+/** A value as copied from .env.local: without "NAME=" in front or quotes around it. */
+const cleanValue = (v, name) =>
+  String(v || "")
+    .trim()
+    .replace(new RegExp(`^${name}\\s*=\\s*`), "")
+    .replace(/^(["'])(.*)\1$/, "$2")
+    .trim();
+
 ipcMain.handle("setup:save", async (_e, values) => {
-  const databaseUrl = String(values.databaseUrl || "").trim();
-  const authSecret = String(values.authSecret || "").trim();
-  if (!/^postgres(ql)?:\/\//i.test(databaseUrl)) return { error: "The database link starts with postgresql://" };
-  if (authSecret.length < 16) return { error: "The secret key is too short (copy it exactly as it is on the other computers)." };
-  const json = String(values.googleServiceAccountJson || "").trim();
-  if (json) {
-    try {
-      JSON.parse(json.startsWith("{") ? json : Buffer.from(json, "base64").toString("utf8"));
-    } catch {
-      return { error: "The Google service account key isn't valid (paste the whole JSON file, or it in base64)." };
-    }
-  }
-  const startAtLogin = values.startAtLogin !== false;
-  writeConfig({ ...readConfig(), databaseUrl, authSecret, googleServiceAccountJson: json, startAtLogin });
-  setStartAtLogin(startAtLogin);
+  // Every failure comes back to the screen as a message (and into logs\app.log), never silently.
   try {
+    const databaseUrl = cleanValue(values.databaseUrl, "DATABASE_URL");
+    const authSecret = cleanValue(values.authSecret, "AUTH_SECRET");
+    if (!/^postgres(ql)?:\/\//i.test(databaseUrl)) return { error: "The database link should start with postgresql://" };
+    if (authSecret.length < 16) return { error: "The secret key is too short (copy it exactly as it is on the other computers)." };
+    const startAtLogin = values.startAtLogin !== false;
+    logApp("setup: saving the settings");
+    writeConfig({ ...readConfig(), databaseUrl, authSecret, startAtLogin });
+    setStartAtLogin(startAtLogin);
+    logApp("setup: starting the server");
     await restartServer();
+    logApp(`setup: the server answers on ${serverUrl}`);
+    setupWin?.destroy();
+    setupWin = null;
+    showMain();
+    return { ok: true };
   } catch (err) {
-    return { error: String(err.message || err) };
+    logApp(`setup failed: ${err.stack || err}`);
+    return { error: `${err.message || err} (details in ${path.join(LOG_DIR(), "app.log")})` };
   }
-  setupWin?.destroy();
-  setupWin = null;
-  showMain();
-  return { ok: true };
 });
 
 // ---------------------------------------------------------------------------------------------

@@ -40,7 +40,7 @@
       textarea { height: 90px; resize: vertical; }
       .row { display: flex; gap: 8px; align-items: center; margin-top: 16px; }
       .row input { margin: 0; }
-      .error { color: var(--error); min-height: 20px; margin-top: 14px; }
+      .error { color: var(--error); font-weight: 600; min-height: 20px; margin-top: 14px; }
       button {
         margin-top: 6px; padding: 9px 20px; border: 0; border-radius: 6px; background: var(--accent);
         color: #fff; font: 600 14px "Segoe UI", sans-serif; cursor: pointer;
@@ -62,9 +62,6 @@
       <div class="hint">The AUTH_SECRET: logins and saved settings (like the proxy link) are locked with it.</div>
       <input id="authSecret" type="password" autocomplete="off" spellcheck="false" />
 
-      <label for="googleServiceAccountJson">Google service account key <span style="font-weight: 400">(optional)</span></label>
-      <div class="hint">For campaigns' Search Console and GA4 numbers (the GOOGLE_SERVICE_ACCOUNT_JSON): the whole JSON key, as is or base64.</div>
-      <textarea id="googleServiceAccountJson" spellcheck="false"></textarea>
 
       <div class="row">
         <input id="startAtLogin" type="checkbox" checked />
@@ -82,7 +79,6 @@
       window.setup.load().then((v) => {
         $("databaseUrl").value = v.databaseUrl;
         $("authSecret").value = v.authSecret;
-        $("googleServiceAccountJson").value = v.googleServiceAccountJson;
         $("startAtLogin").checked = v.startAtLogin !== false;
         $("version").textContent = `Version ${v.version}`;
       });
@@ -92,13 +88,17 @@
       $("save").addEventListener("click", async () => {
         $("error").textContent = "";
         $("save").disabled = true;
-        $("save").textContent = "Starting…";
-        const r = await window.setup.save({
-          databaseUrl: $("databaseUrl").value,
-          authSecret: $("authSecret").value,
-          googleServiceAccountJson: $("googleServiceAccountJson").value,
-          startAtLogin: $("startAtLogin").checked,
-        });
+        $("save").textContent = "Starting… (up to a minute)";
+        let r;
+        try {
+          r = await window.setup.save({
+            databaseUrl: $("databaseUrl").value,
+            authSecret: $("authSecret").value,
+            startAtLogin: $("startAtLogin").checked,
+          });
+        } catch (err) {
+          r = { error: String((err && err.message) || err) };
+        }
         if (r && r.error) {
           $("error").textContent = r.error;
           $("save").disabled = false;
