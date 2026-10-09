@@ -54,7 +54,7 @@ function countVisitOn<T extends ProxyConfig>(config: T): T {
  */
 export async function getUnvisitedProxy(apiUrl: string): Promise<ProxyConfig & { fromEarlier: boolean; current: boolean; visitNo: number }> {
   const last = lastProxy.get(apiUrl);
-  if (last && !last.visited && Date.now() < last.expiresAt) {
+  if (last && !last.visited && !googleBlocked.has(last.config.address) && Date.now() < last.expiresAt) {
     last.visited = true;
     const config = countVisitOn(last.config);
     return { ...config, fromEarlier: true, current: false, visitNo: visitsPerIp.get(config.address)! };
@@ -183,6 +183,9 @@ async function requestProxy(apiUrl: string, requestUrl: string): Promise<ProxyCo
   };
   // proxyTimeout = seconds the proxy stays usable (1800 in ShopLike's responses); keep a small margin.
   const timeout = typeof data.proxyTimeout === "number" ? data.proxyTimeout : typeof body.proxyTimeout === "number" ? body.proxyTimeout : 600;
-  lastProxy.set(apiUrl, { config, expiresAt: Date.now() + Math.max(0, timeout - 60) * 1000, visited: false });
+  // The same IP again (e.g. asked with getCurrentProxy): it keeps "a visit has used it".
+  const before = lastProxy.get(apiUrl);
+  const visited = before?.config.address === config.address && before.visited;
+  lastProxy.set(apiUrl, { config, expiresAt: Date.now() + Math.max(0, timeout - 60) * 1000, visited });
   return config;
 }

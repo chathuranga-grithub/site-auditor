@@ -184,6 +184,8 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
       // No WebRTC in any page, so nothing can go around the proxy.
       await context.addInitScript(NO_WEBRTC_SCRIPT);
       await phone?.addInitScript(NO_WEBRTC_SCRIPT);
+      // A site asking "Leave this page?" never keeps the visit on it (by default the answer is "stay").
+      context.on("page", (p) => p.on("dialog", (d) => void (d.type() === "beforeunload" ? d.accept() : d.dismiss()).catch(() => {})));
       main = await context.newPage();
       // A saved Chrome profile: make sure it's Chrome on that profile, and say which (with its extensions).
       if (profileDir) send({ type: "step", message: await checkChromeProfile(main, profileDir) });
@@ -380,7 +382,8 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
     // 6. Same IP and country at the end?
     if (!stopped() && targets.length) {
       send({ type: "step", message: "Checking the proxy IP again…" });
-      report.exitEnd = await exitLocation(main);
+      // Only a record of where the visit came from: never more than END_CHECK_MS at the end of a visit.
+      report.exitEnd = await Promise.race([exitLocation(main, 3_000), new Promise<null>((r) => setTimeout(() => r(null), END_CHECK_MS))]);
     }
   } catch (err) {
     if (!stopped()) throw err;
@@ -540,8 +543,10 @@ async function loadExtensions(context: BrowserContext, profileDir: string): Prom
  * Where the visit comes from, looked up inside the proxied browser: in the visit's own tab, emptied
  * first, in the background (the IP service's page is never shown).
  */
-async function exitLocation(tab: Page): Promise<ExitInfo | null> {
-  await tab.goto("about:blank").catch(() => {});
+async function exitLocation(tab: Page, leaveMs = 10_000): Promise<ExitInfo | null> {
+  // Some sites' pages hold the tab for a long time when it leaves them: not waited for past leaveMs.
+  const left = await tab.goto("about:blank", { waitUntil: "commit", timeout: leaveMs }).then(() => true, () => false);
+  if (!left && tab.url() !== "about:blank") return null;
   return lookupExit((url) => tab.evaluate(fetchJsonInPage, url));
 }
 
@@ -700,6 +705,9 @@ async function clickResult(tab: Page, link: string): Promise<{ status(): number 
   if (moved || offGoogle(new URL(tab.url()))) return nav;
   return tab.goto(link, { waitUntil: "domcontentloaded", referer: googleUrl });
 }
+
+/** The IP check at the end of a visit: at most this long. */
+const END_CHECK_MS = 8_000;
 
 /** How long a click on Google's result has to start opening the site before it's opened directly. */
 const CLICK_WAIT_MS = 15_000;
