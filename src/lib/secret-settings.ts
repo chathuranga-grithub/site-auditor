@@ -6,6 +6,7 @@
 
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "node:crypto";
 import { neon } from "@neondatabase/serverless";
+import { withDbRetry } from "./db-retry";
 
 const SCHEMA = `CREATE TABLE IF NOT EXISTS app_secret_settings (
   name TEXT PRIMARY KEY,
@@ -29,7 +30,7 @@ async function db(): Promise<Query> {
     const url = process.env.DATABASE_URL;
     if (!url) throw new Error("The database isn't connected (DATABASE_URL).");
     const sql = neon(url);
-    q = (text, params = []) => sql.query(text, params) as Promise<Record<string, unknown>[]>;
+    q = (text, params = []) => withDbRetry(() => sql.query(text, params) as Promise<Record<string, unknown>[]>);
   }
   const run = q;
   ready ??= run(SCHEMA).then(

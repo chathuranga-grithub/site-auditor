@@ -14,6 +14,17 @@ export const DEFAULT_DAILY_INCREASE_PCT = 5;
 export const MAX_DAILY_INCREASE_PCT = 100;
 /** Visits run at the same time, each through its own proxy API link: at most the links saved in Settings. */
 export const DEFAULT_CONCURRENCY = 1;
+/** Dwell time: how long each visit stays on the site, a random number of seconds between the min and the max. */
+export const DEFAULT_MIN_DWELL_SEC = 30;
+export const DEFAULT_MAX_DWELL_SEC = 120;
+export const MAX_DWELL_SEC = 3600;
+/** Mobile traffic: the % of each day's visits made on a phone; the rest are on a desktop. */
+export const DEFAULT_MOBILE_PCT = 70;
+
+/** Of `visits`, how many are on a phone at `mobilePct`% (the rest are on a desktop). */
+export function mobileVisits(visits: number, mobilePct: number): number {
+  return Math.round((visits * mobilePct) / 100);
+}
 
 /** Visits planned for day `n` (1-based): day 1 visits, compounded by the daily increase. */
 export function plannedVisits(day1Visits: number, dailyIncreasePct: number, n: number): number {
@@ -50,6 +61,14 @@ export interface Campaign {
   dailyIncreasePct: number;
   /** Visits run at the same time (each through its own proxy API link). */
   concurrency: number;
+  /** Dwell time: each visit stays on the site a random number of seconds from min to max. */
+  minDwellSec: number;
+  maxDwellSec: number;
+  /** % of the visits made on a phone (0–100); the rest are on a desktop. */
+  mobilePct: number;
+  /** The computer that runs its visits and ranking checks (others only show it); null = none yet. */
+  computerId: string | null;
+  computerName: string | null;
   /** YYYY-MM-DD */
   startDate: string;
   endDate: string;
@@ -89,6 +108,8 @@ export interface CampaignDay {
   engagementSec: number | null;
   /** Site visit runs that finished that day (Vietnam date). */
   visitsDone: number;
+  /** Of those, the ones made on a phone. */
+  mobileVisitsDone: number;
   /** What couldn't be read that day, per source, in plain words. */
   notes: DayNotes;
 }
@@ -98,7 +119,7 @@ export type DayNotes = Partial<Record<DaySource, string>>;
 
 /** The columns of a day that one source fills in. */
 /** (Visit runs are counted on their own, addVisitDone.) */
-export type DayFields = Partial<Omit<CampaignDay, "campaignId" | "day" | "visitsDone">>;
+export type DayFields = Partial<Omit<CampaignDay, "campaignId" | "day" | "visitsDone" | "mobileVisitsDone">>;
 
 export interface CampaignNote {
   id: number;
@@ -117,6 +138,9 @@ export interface NewCampaign {
   day1Visits: number;
   dailyIncreasePct: number;
   concurrency: number;
+  minDwellSec: number;
+  maxDwellSec: number;
+  mobilePct: number;
   targetCtr: number;
   targetPosition?: number | null;
   weeklyGrowthPct?: number | null;

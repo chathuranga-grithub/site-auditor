@@ -23,6 +23,15 @@ function toExitInfo(j: Record<string, string> | undefined, lookupMs: number): Ex
 }
 
 /**
+ * Runs inside the browser's blank tab (Puppeteer or Playwright evaluate): asks an IP service in the
+ * background (fetch, through the proxy), so no page with its answer is shown. Self-contained.
+ */
+export async function fetchJsonInPage(url: string): Promise<unknown> {
+  const res = await fetch(url, { headers: { accept: "application/json" }, cache: "no-store", signal: AbortSignal.timeout(20_000) });
+  return res.json();
+}
+
+/**
  * The IP and location a proxied browser's requests come from. `open` loads a URL in that browser
  * (through the proxy) and returns the JSON it shows. Null if no service answered.
  */

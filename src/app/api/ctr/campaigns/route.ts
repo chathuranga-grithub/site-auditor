@@ -1,6 +1,6 @@
 // GET  /api/ctr/campaigns → { items: { campaign, summary }[], setup }
-// POST /api/ctr/campaigns  body: NewCampaign → saves it, starts its visits, and starts the first
-//   check in the background (the page doesn't wait for the Google search).
+// POST /api/ctr/campaigns  body: NewCampaign → saves it (run by this computer), starts its visits, and
+//   starts the first check in the background (the page doesn't wait for the Google search).
 
 import { badRequest, errorResponse, parseNewCampaign } from "@/lib/campaigns/api";
 import { collectCampaign, ctrSetup } from "@/lib/campaigns/collect";
@@ -8,6 +8,7 @@ import { NotConfiguredError, createCampaign, listCampaigns, listDaysFor } from "
 import { summarize } from "@/lib/campaigns/metrics";
 import { todayInVietnam } from "@/lib/campaigns/site";
 import { startCampaignVisit } from "@/lib/campaigns/visits";
+import { thisComputer } from "@/lib/this-computer";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -38,7 +39,8 @@ export async function POST(request: Request) {
   if (typeof input === "string") return badRequest(input);
   try {
     const today = todayInVietnam();
-    const campaign = await createCampaign(input, today);
+    // It runs on this computer (on Vercel: none, the first computer that starts takes it).
+    const campaign = await createCampaign(input, today, await thisComputer());
     // An active campaign runs its visit through the proxy (on the server; pages follow its console).
     startCampaignVisit(campaign);
     // First reading right away, so the campaign isn't empty until tomorrow. In the background: the

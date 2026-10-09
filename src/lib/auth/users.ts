@@ -5,6 +5,7 @@
 import { randomBytes, scrypt as scryptCb, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 import { neon } from "@neondatabase/serverless";
+import { withDbRetry } from "../db-retry";
 import { isToolId, type ToolId } from "./permissions";
 import type { Role } from "./session";
 
@@ -48,7 +49,7 @@ async function db(): Promise<Query> {
     const url = process.env.DATABASE_URL;
     if (!url) throw new Error("The database isn't connected (DATABASE_URL).");
     const sql = neon(url);
-    q = (text, params = []) => sql.query(text, params) as Promise<Record<string, unknown>[]>;
+    q = (text, params = []) => withDbRetry(() => sql.query(text, params) as Promise<Record<string, unknown>[]>);
   }
   const run = q;
   ready ??= (async () => {

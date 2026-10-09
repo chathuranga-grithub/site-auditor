@@ -7,7 +7,14 @@
 
 import { findCountry, googleCountryParam, searchLanguage, type LanguageChoice } from "./countries";
 import type { SerpResponse, SerpResult } from "./rankings-types";
-import { BROWSER_SEARCH_COUNTRY, canSearchInBrowser, openBrowserSearch, type BrowserResult, type BrowserSearchParams } from "./serp-browser";
+import {
+  BROWSER_SEARCH_COUNTRY,
+  canSearchInBrowser,
+  openBrowserSearch,
+  type BrowserResult,
+  type BrowserSearch,
+  type BrowserSearchParams,
+} from "./serp-browser";
 
 type Provider = SerpResponse["provider"];
 
@@ -22,6 +29,8 @@ export async function searchGoogle(
   country: string,
   count: number,
   languageChoice: LanguageChoice = "local",
+  /** Stops the search (a campaign stopped, paused or deleted): its browser closes, no more tries. */
+  signal?: AbortSignal,
 ): Promise<SerpResponse> {
   if (!canSearchInBrowser()) throw new SerpError("Google search only works when the app runs on a computer (it uses a browser through the Vietnam proxy).", 503);
   if (country.toUpperCase() !== BROWSER_SEARCH_COUNTRY) throw new SerpError("Only Vietnam can be searched: the proxy is in Vietnam.", 400);
@@ -29,36 +38,59 @@ export async function searchGoogle(
   const language = searchLanguage(country, languageChoice);
   const params = searchParams(keyword, country, languageChoice);
 
-  const session = await openBrowserSearch().catch((err: unknown) => {
-    throw new SerpError(`Search failed: ${err instanceof Error ? err.message : String(err)}`, 502);
-  });
-  try {
-    const raw = await session.page(params, 1);
-    let results = clean(raw);
-    let searchesUsed = 1;
-    if (results.length < count && raw.length > 0) {
-      // Page 1 was short: top up from page 2. Page 2 failing isn't fatal.
-      const more = await session.page(params, 2).catch(() => [] as BrowserResult[]);
-      searchesUsed = 2;
-      results = clean([...raw, ...more]);
+  // One try: Google blocking it (a CAPTCHA not solved in CAPTCHA_WAIT_MS…) fails the search, and the
+  // daily check tries again later (src/lib/campaigns/scheduler.ts).
+  const stopped = () => new SerpError("Search stopped.", 499);
+  {
+    if (signal?.aborted) throw stopped();
+    const session = await openBrowserSearch({ signal }).catch((err: unknown) => {
+      throw signal?.aborted ? stopped() : new SerpError(`Search failed: ${err instanceof Error ? err.message : String(err)}`, 502);
+    });
+    // Stopped while it searches: close its browser now.
+    const onStop = () => void session.close();
+    signal?.addEventListener("abort", onStop, { once: true });
+    try {
+      return await searchIn(session, keyword, country, count, params, language);
+    } catch (err) {
+      if (signal?.aborted) throw stopped();
+      throw new SerpError(`Search failed: ${err instanceof Error ? err.message : String(err)}`, 502);
+    } finally {
+      signal?.removeEventListener("abort", onStop);
+      await session.close();
     }
-    return {
-      keyword,
-      country,
-      language: language.hl,
-      languageName: language.name,
-      location: findCountry(country)?.name ?? country,
-      provider: "browser",
-      results: results.slice(0, count),
-      searchesUsed,
-      requested: count,
-      searchedAt: new Date().toISOString(),
-    };
-  } catch (err) {
-    throw new SerpError(`Search failed: ${err instanceof Error ? err.message : String(err)}`, 502);
-  } finally {
-    await session.close();
   }
+}
+
+/** The search in one open browser. */
+async function searchIn(
+  session: BrowserSearch,
+  keyword: string,
+  country: string,
+  count: number,
+  params: BrowserSearchParams,
+  language: ReturnType<typeof searchLanguage>,
+): Promise<SerpResponse> {
+  const raw = await session.page(params, 1);
+  let results = clean(raw);
+  let searchesUsed = 1;
+  if (results.length < count && raw.length > 0) {
+    // Page 1 was short: top up from page 2. Page 2 failing isn't fatal.
+    const more = await session.page(params, 2).catch(() => [] as BrowserResult[]);
+    searchesUsed = 2;
+    results = clean([...raw, ...more]);
+  }
+  return {
+    keyword,
+    country,
+    language: language.hl,
+    languageName: language.name,
+    location: findCountry(country)?.name ?? country,
+    provider: "browser",
+    results: results.slice(0, count),
+    searchesUsed,
+    requested: count,
+    searchedAt: new Date().toISOString(),
+  };
 }
 
 /** The country (gl) and search language (hl) Google is asked for. Shared with campaign visits. */

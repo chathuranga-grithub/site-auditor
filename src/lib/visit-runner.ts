@@ -3,14 +3,16 @@
 // external links or ads), then opens each page once, scrolls it and checks it loads cleanly.
 // This is a QA check that the site works for a visitor in that location, not a traffic tool.
 
-import { chromium, devices, type Browser, type BrowserContext, type Page } from "playwright-core";
-import { getProxyOrReuse, getUnvisitedProxy } from "./proxy-api";
+import { chromium, devices, type Browser, type BrowserContext, type BrowserContextOptions, type Page } from "playwright-core";
+import { actAsDevice, deviceLabel, deviceUserAgent, type DeviceProfile } from "./device-profiles";
+import { MAX_VISITS_PER_IP, burnProxy, getProxyOrReuse, getUnvisitedProxy } from "./proxy-api";
 import { NO_WEBRTC_ARGS, NO_WEBRTC_SCRIPT } from "./no-webrtc";
-import { lookupExit, ownPublicIp } from "./proxy-ip";
+import { fetchJsonInPage, lookupExit, ownPublicIp } from "./proxy-ip";
 import { ProxyIpInUseError } from "./proxy-pool";
-import { checkChromeProfile, PROFILE_ARGS, KEEP_EXTENSIONS, profileLockedMessage } from "./browser-profile";
+import { checkChromeProfile, EXTENSION_ARGS, KEEP_EXTENSIONS, PROFILE_ARGS, profileExtensionDirs, profileLockedMessage } from "./browser-profile";
+import { takeGoogleTurn } from "./google-turn";
 import { clean, searchParams } from "./serp";
-import { BROWSER_SEARCH_COUNTRY, CAPTCHA_WAIT_MS, googleBlocked, googleResultsUrl, readOrganicResults, waitForCaptcha } from "./serp-browser";
+import { BROWSER_SEARCH_COUNTRY, CAPTCHA_WAIT_MS, GoogleBlockedError, googleBlocked, googleResultsUrl, readOrganicResults, waitForCaptcha } from "./serp-browser";
 import { readSitemap, type SitemapFetcher } from "./sitemap";
 import { isBlockedHost, isInternal, normalizeUrl, shouldSkipCrawl } from "./url";
 import {
@@ -22,6 +24,7 @@ import {
   type MenuCheck,
   type MobileCheck,
   type ScrollResult,
+  type VisitDevice,
   type VisitEvent,
   type VisitPage,
   type VisitReport,
@@ -42,6 +45,13 @@ const RISKY_LINK = /(log-?out|sign-?out|wp-admin|wp-login|\/login|\/cart|\/check
 const START_SCROLL = { stepWaitMs: 350, maxSteps: 40, settleMs: 800 };
 const PAGE_SCROLL = { stepWaitMs: 200, maxSteps: 30, settleMs: 500 };
 const MOBILE_SCROLL = { stepWaitMs: 150, maxSteps: 25, settleMs: 300 };
+/**
+ * Reading a page (readPages): about 5s plus 1s per 40 words of text, capped at 60s, then times a random
+ * 0.6–1.4, so every page gets its own time and a long article more than a contact page.
+ */
+const READ_BASE_SEC = 5;
+const READ_WORDS_PER_SEC = 40;
+const READ_MAX_SEC = 60;
 /** Phone check: how long to wait for the full load (the desktop check already reported slow files). */
 const MOBILE_LOAD_WAIT = 15_000;
 /** An Android phone (most visitors in Vietnam), at 1x pixels; the layout is the same as on the real phone. */
@@ -50,15 +60,29 @@ const PHONE = { ...devices["Pixel 7"], deviceScaleFactor: 1 };
 export interface VisitOptions {
   url: string;
   proxyApiUrl: string;
-  /** Also open every page on a phone-sized screen, and test the phone menu. */
+  /** Also open every page on a phone-sized screen, and test the phone menu (desktop visits only). */
   mobile: boolean;
-  /** Always a new proxy IP: never reuse the previous one (ProxyWaitError until the provider gives one). */
+  /** What the visit is made on: desktop (default) or a phone (phone screen, touch and browser, throughout). */
+  device?: VisitDevice;
+  /**
+   * The exact device (model, screen, browser identity: src/lib/device-profiles.ts), picked at random
+   * for each campaign visit. None = the plain desktop or phone (a Pixel 7) of the Visit test.
+   */
+  deviceProfile?: DeviceProfile;
+  /**
+   * A new proxy IP when the provider gives one; while it makes us wait, the link's current IP
+   * (getCurrentProxy) is used again, unless Google kept blocking it (then ProxyWaitError).
+   */
   freshProxy?: boolean;
   /**
    * Search Google for this keyword first, in the same browser and exactly as Keyword Rankings does
-   * (same country and language); then open the site directly (no click on a result).
+   * (same country and language), and click the site's result; not on the first page = the site is
+   * opened directly. A CAPTCHA is waited for until it's solved in the browser window.
+   * neverSkip: Google not showing results (the browser closed on its CAPTCHA, its consent page, the search
+   * failing) ends the visit with GoogleBlockedError (the caller tries again in a new browser with a
+   * new IP), instead of opening the site without the search.
    */
-  searchFirst?: { keyword: string; country: string };
+  searchFirst?: { keyword: string; country: string; neverSkip?: boolean };
   /**
    * Claims the confirmed proxy IP before any page opens; null = another visit running now has it
    * (then ProxyIpInUseError is thrown). Returns the release, called when the visit ends.
@@ -66,6 +90,17 @@ export interface VisitOptions {
   claimIp?: (ip: string) => (() => void) | null;
   /** A Chrome profile folder for this visit's browser (src/lib/browser-profile.ts); none = a fresh temporary profile. */
   profileDir?: string;
+  /**
+   * Dwell time: seconds spent on the site, counted from opening it. When it's up, the visit leaves
+   * (pages still loading are cut off, the rest aren't opened); with every page visited sooner, it stays
+   * on the start page until it's up. None = every page once, however long that takes.
+   */
+  dwellSec?: number;
+  /**
+   * Like a visitor reading: one page at a time, and on each page a pause based on how much text it has
+   * (random, so no two are alike), with small scrolls while it "reads". Off = a few pages at a time, quickly.
+   */
+  readPages?: boolean;
   signal: AbortSignal;
   send: (e: VisitEvent) => void;
 }
@@ -78,7 +113,7 @@ interface Target {
   note?: string;
 }
 
-export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = false, searchFirst, claimIp, profileDir, signal, send }: VisitOptions): Promise<VisitReport> {
+export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = false, searchFirst, claimIp, profileDir, dwellSec, readPages = false, device = "desktop", deviceProfile, signal, send }: VisitOptions): Promise<VisitReport> {
   const report: VisitReport = {
     url,
     startedAt: new Date().toISOString(),
@@ -94,7 +129,11 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
     issues: [],
     cancelled: false,
     mobileChecked: mobile,
+    device,
+    ...(deviceProfile ? { deviceName: deviceLabel(deviceProfile) } : {}),
   };
+  // A visit on a phone is already a phone check.
+  if (device === "phone") mobile = report.mobileChecked = false;
   const stopped = () => {
     if (signal.aborted) report.cancelled = true;
     return signal.aborted;
@@ -102,78 +141,127 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
 
   // 1. Proxy
   send({ type: "step", message: "Getting a proxy from the proxy API…" });
-  const proxy = freshProxy ? { ...(await getUnvisitedProxy(proxyApiUrl)), reused: false } : { ...(await getProxyOrReuse(proxyApiUrl)), fromEarlier: false };
-  const { server, username, password, ...publicProxy } = proxy;
+  const proxy = freshProxy
+    ? await getUnvisitedProxy(proxyApiUrl).then(({ current, ...p }) => ({ ...p, reused: current }))
+    : { ...(await getProxyOrReuse(proxyApiUrl)), fromEarlier: false, visitNo: null };
+  const { server, username, password, visitNo, ...publicProxy } = proxy;
   report.proxy = publicProxy;
   if (proxy.fromEarlier) {
     send({ type: "step", message: `Using the IP this proxy link gave just before (no visit has used it yet): ${proxy.address}.` });
   }
   if (proxy.reused) {
-    send({ type: "step", message: `The provider isn't giving a new IP yet, so the previous proxy (${proxy.address}) is reused.` });
+    send({ type: "step", message: `The provider isn't giving a new IP yet, so its current IP (${proxy.address}) is used again${visitNo ? ` (visit ${visitNo} of ${MAX_VISITS_PER_IP} on it)` : ""}.` });
   }
 
   let close: (() => Promise<void>) | null = null;
   let releaseIp: (() => void) | null = null;
   const onAbort = () => void close?.();
+  // Dwell time: set when the site opens. At the end, the tabs still loading a page are closed.
+  let dwellEnds: number | null = null;
+  let dwellTimer: ReturnType<typeof setTimeout> | null = null;
+  const openTabs = new Set<Page>();
+  const timeUp = () => dwellEnds !== null && Date.now() >= dwellEnds;
   try {
-    send({ type: "step", message: `Opening a browser through proxy ${proxy.address}…` });
-    const opened = await openContexts({ server, username, password }, profileDir, mobile);
-    close = opened.close;
     signal.addEventListener("abort", onAbort, { once: true });
-    const { context, phone } = opened;
-    // A saved Chrome profile: make sure it's Chrome on that profile, and say which (with its extensions).
-    if (profileDir) send({ type: "step", message: await checkChromeProfile(await context.newPage(), profileDir) });
-    context.setDefaultNavigationTimeout(NAV_TIMEOUT);
-    phone?.setDefaultNavigationTimeout(NAV_TIMEOUT);
-    // No WebRTC in any page, so nothing can go around the proxy.
-    await context.addInitScript(NO_WEBRTC_SCRIPT);
-    await phone?.addInitScript(NO_WEBRTC_SCRIPT);
-
-    // 2. Where does the visit come from? Looked up inside the proxied browser (through the proxy;
-    // nothing is sent from this computer's own IP). Wrong or unknown location: stop before opening
-    // any page. With a proxy set, the browser never falls back to a direct connection.
-    send({ type: "step", message: "Checking the proxy IP (location, network, speed)…" });
-    const [exitInfo, ownIp] = await Promise.all([exitLocation(context), ownPublicIp()]);
-    report.exit = exitInfo;
-    send({ type: "proxy", proxy: publicProxy, exit: report.exit });
-    if (stopped()) return finish(report);
-    report.stopReason = exitProblem(report.exit, ownIp);
-    if (report.stopReason) return finish(report);
-    const exit = report.exit!;
-    if (claimIp) {
-      releaseIp = claimIp(exit.ip);
-      if (!releaseIp) throw new ProxyIpInUseError(exit.ip);
-    }
-    send({
-      type: "step",
-      message: `Proxy IP ${exit.ip}: ${exit.country}${exit.city ? `, ${exit.city}` : ""} · ${exit.network}${exit.org ? ` (${exit.org})` : ""}${exit.lookupMs != null ? ` · answered in ${(exit.lookupMs / 1000).toFixed(1)}s` : ""}.`,
-    });
-    // Optional: the keyword searched on Google first, in this same browser. Only searches and reads
-    // the results; never clicks one. A failed search doesn't stop the visit.
-    if (searchFirst) {
-      await searchGoogleFirst(context, searchFirst, url, send);
+    let context: BrowserContext;
+    let phone: BrowserContext | null;
+    // The visit's one tab: profile check, IP check, Google, then the site, all in it.
+    let main: Page;
+    let fromGoogle: { link: string } | null = null;
+    let claimedIp: string | null = null;
+    // A Google CAPTCHA not solved in CAPTCHA_WAIT_MS: the browser is closed and opened again
+    // through the same proxy (same IP), up to CAPTCHA_TRIES times; then the run gets a new IP.
+    for (let attempt = 1; ; attempt++) {
+      const on = deviceProfile ? ` as a ${deviceLabel(deviceProfile)}` : device === "phone" ? " as a phone" : "";
+      send({ type: "stage", stage: "browser" });
+      send({ type: "step", message: `Opening a browser${on} through proxy ${proxy.address}…` });
+      const opened = await openContexts({ server, username, password }, profileDir, mobile, device, deviceProfile);
+      close = opened.close;
       if (stopped()) return finish(report);
+      ({ context, phone } = opened);
+      context.setDefaultNavigationTimeout(NAV_TIMEOUT);
+      phone?.setDefaultNavigationTimeout(NAV_TIMEOUT);
+      // No WebRTC in any page, so nothing can go around the proxy.
+      await context.addInitScript(NO_WEBRTC_SCRIPT);
+      await phone?.addInitScript(NO_WEBRTC_SCRIPT);
+      main = await context.newPage();
+      // A saved Chrome profile: make sure it's Chrome on that profile, and say which (with its extensions).
+      if (profileDir) send({ type: "step", message: await checkChromeProfile(main, profileDir) });
+
+      // 2. Where does the visit come from? Looked up inside the proxied browser (through the proxy;
+      // nothing is sent from this computer's own IP). Wrong or unknown location: stop before opening
+      // any page. With a proxy set, the browser never falls back to a direct connection.
+      send({ type: "step", message: "Checking the proxy IP (location, network, speed)…" });
+      const [exitInfo, ownIp] = await Promise.all([exitLocation(main), ownPublicIp()]);
+      report.exit = exitInfo;
+      send({ type: "proxy", proxy: publicProxy, exit: report.exit });
+      if (stopped()) return finish(report);
+      report.stopReason = exitProblem(report.exit, ownIp);
+      if (report.stopReason) return finish(report);
+      const exit = report.exit!;
+      // Claimed once; again only if the proxy came back on another IP after a reopen.
+      if (claimIp && exit.ip !== claimedIp) {
+        releaseIp?.();
+        releaseIp = claimIp(exit.ip);
+        if (!releaseIp) throw new ProxyIpInUseError(exit.ip);
+        claimedIp = exit.ip;
+      }
+      send({
+        type: "step",
+        message: `Proxy IP ${exit.ip}: ${exit.country}${exit.city ? `, ${exit.city}` : ""} · ${exit.network}${exit.org ? ` (${exit.org})` : ""}${exit.lookupMs != null ? ` · answered in ${(exit.lookupMs / 1000).toFixed(1)}s` : ""}.`,
+      });
+      // Optional: the keyword searched on Google first, in this same browser, and the site's result
+      // clicked (that tab becomes the start page). A failed search doesn't stop the visit.
+      if (!searchFirst) break;
+      try {
+        fromGoogle = await searchGoogleFirst(main, searchFirst, url, send, signal);
+        break;
+      } catch (err) {
+        if (!(err instanceof CaptchaTimeoutError) || stopped()) throw err;
+        if (attempt >= CAPTCHA_TRIES) {
+          // Google keeps blocking this IP: never used again as the link's current IP.
+          burnProxy(proxyApiUrl, proxy.address);
+          throw new GoogleBlockedError(`The CAPTCHA wasn't solved in ${CAPTCHA_WAIT_MS / 1000}s, ${CAPTCHA_TRIES} times on this IP`);
+        }
+        send({ type: "step", message: `The CAPTCHA wasn't solved in ${CAPTCHA_WAIT_MS / 1000}s: closing the browser and opening it again with the same proxy IP (try ${attempt + 1} of ${CAPTCHA_TRIES})…` });
+        await close();
+        close = null;
+      }
     }
+    if (stopped()) return finish(report);
 
     // The sitemap is read through the proxy too, so every request to the site comes from there.
     const sitemap = readSitemap(new URL(url).origin, proxiedFetcher(context)).catch(() => null);
 
-    // 3. Start page: open and scroll
-    send({ type: "step", message: `Opening ${url}…` });
-    const page = await context.newPage();
-    const start = await checkPage(page, url, "start", () => page.goto(url, { waitUntil: "domcontentloaded" }), START_SCROLL);
+    // 3. Start page: open and scroll. The dwell time starts now.
+    send({ type: "stage", stage: fromGoogle ? "click" : "visit" });
+    const opening = fromGoogle ? `Clicking the site's result on Google (${fromGoogle.link})` : `Opening ${url}`;
+    send({ type: "step", message: dwellSec ? `${opening} (staying on the site for ${dwellSec}s)…` : `${opening}…` });
+    if (dwellSec) {
+      dwellEnds = Date.now() + dwellSec * 1000;
+      // Pages still loading are cut off: other tabs closed, the visit's own tab emptied (closing it could end the browser).
+      dwellTimer = setTimeout(() => openTabs.forEach((t) => void (t === main ? t.goto("about:blank") : t.close()).catch(() => {})), dwellSec * 1000);
+    }
+    const page = main;
+    // Reading one page takes at most a quarter of the time on the site (10s at least), so a visit sees several pages.
+    const readCap = dwellSec ? Math.min(READ_MAX_SEC, Math.max(10, Math.round(dwellSec / 4))) : READ_MAX_SEC;
+    const start = fromGoogle
+      ? // A link through Google's /url redirect: recorded as the site (where it lands is finalUrl).
+        await checkPage(page, /(^|\.)google\./.test(new URL(fromGoogle.link).hostname) ? url : fromGoogle.link, "start", () => clickResult(page, fromGoogle.link), START_SCROLL, readPages && { until: dwellEnds, maxSec: readCap })
+      : await checkPage(page, url, "start", () => page.goto(url, { waitUntil: "domcontentloaded" }), START_SCROLL, readPages && { until: dwellEnds, maxSec: readCap });
     report.start = start;
     report.scroll = start.scroll ?? null;
     send({ type: "page", page: start });
     if (report.scroll) send({ type: "scroll", scroll: report.scroll });
+    // The site didn't open: not a visit (it isn't counted, and the run tries again).
+    if (!start.ok && !stopped()) report.stopReason = `The site didn't open (${start.error ?? "no response"}).`;
     if (!start.ok || stopped()) return finish(report);
+    send({ type: "stage", stage: "visit" });
 
     // 4. Find every internal page
     send({ type: "step", message: "Finding all internal pages (sitemap and start-page links)…" });
     const siteHost = new URL(start.finalUrl).hostname;
     const links = await startPageLinks(page, start.finalUrl, siteHost);
-
-    await page.close().catch(() => {});
 
     // The start page on a phone, and the phone menu (once: the same menu is on every page)
     if (phone) {
@@ -193,8 +281,9 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
     send({ type: "discovered", discovery });
     if (stopped()) return finish(report);
 
-    // 5. Visit every page, a few at a time. Internal links found on each page are added to the
-    // queue, so pages missing from the sitemap (or sites with no sitemap) are still covered.
+    // 5. Visit every page, a few at a time (reading: one at a time, in a random order). Internal links
+    // found on each page are added to the queue, so pages missing from the sitemap (or sites with no
+    // sitemap) are still covered.
     const seen = new Set(targets.map((t) => normalizeUrl(t.href)!));
     seen.add(normalizeUrl(start.url)!);
     seen.add(normalizeUrl(start.finalUrl)!);
@@ -217,27 +306,43 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
     let next = 0;
     let active = 0;
     let proxyFailures = 0;
-    const worker = async () => {
-      let tab = await context.newPage();
-      let ptab = phone ? await phone.newPage() : null;
-      while (!stopped() && !report.stopReason) {
+    // The first worker (the only one when reading) carries on in the visit's own tab.
+    const worker = async (_: unknown, n: number) => {
+      if (timeUp()) return;
+      const newTab = async (ctx: BrowserContext) => {
+        const t = await ctx.newPage();
+        openTabs.add(t);
+        return t;
+      };
+      openTabs.add(main);
+      let tab = n === 0 && !main.isClosed() ? main : await newTab(context);
+      let ptab = phone ? await newTab(phone) : null;
+      while (!stopped() && !report.stopReason && !timeUp()) {
         if (next >= targets.length) {
           if (active === 0) break;
           await new Promise((r) => setTimeout(r, 200)); // another tab may still find new pages
           continue;
         }
+        // Reading (campaign visits): the next page is any one not yet visited, at random, not the list's order.
+        if (readPages) {
+          const pick = next + Math.floor(Math.random() * (targets.length - next));
+          [targets[next], targets[pick]] = [targets[pick], targets[next]];
+        }
         const t = targets[next++];
         active++;
-        if (tab.isClosed()) tab = await context.newPage();
+        if (tab.isClosed()) tab = await newTab(context);
         const referer = t.foundIn === "start page" ? start.finalUrl : undefined;
-        const result = await checkPage(tab, t.href, "internal", () => tab.goto(t.href, { waitUntil: "domcontentloaded", referer }), PAGE_SCROLL);
+        const result = await checkPage(tab, t.href, "internal", () => tab.goto(t.href, { waitUntil: "domcontentloaded", referer }), PAGE_SCROLL, readPages && { until: dwellEnds, maxSec: readCap });
         if (result.ok && isInternal(result.finalUrl, siteHost)) addFound(await pageLinks(tab, siteHost).catch(() => []));
         if (phone && result.ok && !stopped()) {
-          if (!ptab || ptab.isClosed()) ptab = await phone.newPage();
+          if (!ptab || ptab.isClosed()) ptab = await newTab(phone);
           result.mobile = await checkMobile(ptab, result.finalUrl);
         } else if (phone) result.mobile = null; // didn't open on desktop, so not tried on a phone
         active--;
         if (stopped()) break;
+        // Cut off by the end of the dwell time: not a problem with the page, so not reported.
+        if (timeUp() && !result.ok) break;
+        if (timeUp() && result.mobile && !result.mobile.ok) result.mobile = null;
         result.foundIn = t.foundIn;
         if (t.linkText) result.linkText = t.linkText;
         if (t.clickable !== undefined) result.clickable = t.clickable;
@@ -250,19 +355,37 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
         report.pages.push(result);
         send({ type: "page", page: result });
       }
-      await tab.close().catch(() => {});
+      if (tab !== main) await tab.close().catch(() => {});
       await ptab?.close().catch(() => {});
     };
-    await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+    // Reading: one page at a time, as a visitor does.
+    await Promise.all(Array.from({ length: readPages ? 1 : CONCURRENCY }, worker));
+    // Dwell time: leave when it's up, or stay on the start page until it is.
+    if (dwellEnds !== null && !stopped() && !report.stopReason) {
+      if (timeUp()) {
+        send({ type: "step", message: `The dwell time (${dwellSec}s) is up after ${report.pages.length} of ${targets.length} other pages; leaving the site.` });
+      } else {
+        const left = Math.ceil((dwellEnds - Date.now()) / 1000);
+        send({ type: "step", message: `Every page was visited; staying on the start page for the rest of the dwell time (${left}s of ${dwellSec}s)…` });
+        send({ type: "wait", seconds: left, reason: "the end of the dwell time (staying on the site)" });
+        await main.goto(start.finalUrl, { waitUntil: "domcontentloaded" }).catch(() => {});
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, Math.max(0, dwellEnds! - Date.now()));
+          signal.addEventListener("abort", () => (clearTimeout(timer), resolve()), { once: true });
+        });
+        send({ type: "waited" });
+      }
+    }
 
     // 6. Same IP and country at the end?
     if (!stopped() && targets.length) {
       send({ type: "step", message: "Checking the proxy IP again…" });
-      report.exitEnd = await exitLocation(context);
+      report.exitEnd = await exitLocation(main);
     }
   } catch (err) {
     if (!stopped()) throw err;
   } finally {
+    if (dwellTimer) clearTimeout(dwellTimer);
     releaseIp?.();
     signal.removeEventListener("abort", onAbort);
     await close?.();
@@ -311,17 +434,31 @@ function launchOptions(proxy: ProxyLogin, extraArgs: string[] = []) {
 
 const DESKTOP = { viewport: { width: 1366, height: 768 }, locale: "vi-VN", timezoneId: "Asia/Ho_Chi_Minh", ignoreHTTPSErrors: false };
 const PHONE_CONTEXT = { ...PHONE, locale: "vi-VN", timezoneId: "Asia/Ho_Chi_Minh" };
+/** The browser's screen, touch, language and time zone. */
+type ContextScreen = Omit<BrowserContextOptions, "proxy">;
 
 /**
- * The visit's desktop context and, for the phone checks, a phone one. With a profile folder, the
- * desktop visit runs in it (a profile holds one setup); the phone checks, with their own screen and
- * touch, then run in a second, plain browser through the same proxy.
+ * The visit's context (desktop, or a phone for a visit on a phone) and, for the phone checks, a phone
+ * one. With a profile folder, the visit runs in it (a profile holds one setup); the phone checks, with
+ * their own screen and touch, then run in a second, plain browser through the same proxy.
  */
-async function openContexts(proxy: ProxyLogin, profileDir: string | undefined, mobile: boolean): Promise<{ context: BrowserContext; phone: BrowserContext | null; close(): Promise<void> }> {
+async function openContexts(
+  proxy: ProxyLogin,
+  profileDir: string | undefined,
+  mobile: boolean,
+  device: VisitDevice,
+  deviceProfile?: DeviceProfile,
+): Promise<{ context: BrowserContext; phone: BrowserContext | null; close(): Promise<void> }> {
+  const screen: ContextScreen = deviceProfile
+    ? { ...deviceProfile.screen, locale: "vi-VN", timezoneId: "Asia/Ho_Chi_Minh" }
+    : device === "phone"
+      ? PHONE_CONTEXT
+      : DESKTOP;
   if (!profileDir) {
     const browser = await launchBrowser(proxy);
     try {
-      const context = await browser.newContext(DESKTOP);
+      const context = await browser.newContext(screen);
+      if (deviceProfile) actAsDevice(context, deviceProfile);
       const phone = mobile ? await browser.newContext(PHONE_CONTEXT) : null;
       return { context, phone, close: () => browser.close().catch(() => {}) };
     } catch (err) {
@@ -329,7 +466,8 @@ async function openContexts(proxy: ProxyLogin, profileDir: string | undefined, m
       throw err;
     }
   }
-  const context = await launchWithProfile(proxy, profileDir);
+  const context = await launchWithProfile(proxy, profileDir, screen);
+  if (deviceProfile) actAsDevice(context, deviceProfile);
   let other: Browser | null = null;
   try {
     other = mobile ? await launchBrowser(proxy) : null;
@@ -361,9 +499,21 @@ async function launchBrowser(proxy: ProxyLogin): Promise<Browser> {
 }
 
 /** The desktop browser on a Chrome profile folder, with the profile's extensions: Google Chrome only (never Edge). */
-async function launchWithProfile(proxy: ProxyLogin, profileDir: string): Promise<BrowserContext> {
+async function launchWithProfile(proxy: ProxyLogin, profileDir: string, screen: ContextScreen): Promise<BrowserContext> {
   try {
-    return await chromium.launchPersistentContext(profileDir, { channel: "chrome", ...launchOptions(proxy, PROFILE_ARGS), ...DESKTOP });
+    const context = await chromium.launchPersistentContext(profileDir, { channel: "chrome", ...launchOptions(proxy, [...PROFILE_ARGS, ...EXTENSION_ARGS]), ...screen });
+    await loadExtensions(context, profileDir);
+    // The empty tab Chrome starts with: closed once the app opens its own. A tab an extension opens
+    // by itself (e.g. Adobe Acrobat's welcome page, as each loads like a new install): closed at once.
+    // The app's own tabs always start empty (about:blank).
+    const [blank] = context.pages();
+    // Never the last tab open: closing it would close Chrome, and the visit with it.
+    const closeTab = (t: Page) => context.pages().filter((p) => !p.isClosed()).length > 1 && void t.close().catch(() => {});
+    context.on("page", (tab) => {
+      if (tab.url() !== "about:blank") return void closeTab(tab);
+      if (blank && blank !== tab && !blank.isClosed()) closeTab(blank);
+    });
+    return context;
   } catch (err) {
     // Open in another Chrome window: say so plainly.
     const locked = profileLockedMessage(err, profileDir);
@@ -372,16 +522,27 @@ async function launchWithProfile(proxy: ProxyLogin, profileDir: string): Promise
   }
 }
 
-/** Where the visit comes from, looked up inside the proxied browser. */
-function exitLocation(context: BrowserContext): Promise<ExitInfo | null> {
-  return lookupExit(async (url) => {
-    const page = await context.newPage();
-    try {
-      return await (await page.goto(url, { timeout: 20_000 }))?.json();
-    } finally {
-      await page.close().catch(() => {});
-    }
-  });
+/**
+ * Loads the profile's extensions into its browser, switched on (Chrome drops a copied profile's
+ * extensions: src/lib/browser-profile.ts). One that won't load is left out; the visit goes on.
+ */
+async function loadExtensions(context: BrowserContext, profileDir: string): Promise<void> {
+  const browser = context.browser();
+  if (!browser) return;
+  const session = await browser.newBrowserCDPSession();
+  // Not in Playwright's protocol types.
+  const send = session.send.bind(session) as (method: string, params: object) => Promise<unknown>;
+  for (const dir of await profileExtensionDirs(profileDir)) await send("Extensions.loadUnpacked", { path: dir }).catch(() => {});
+  await session.detach().catch(() => {});
+}
+
+/**
+ * Where the visit comes from, looked up inside the proxied browser: in the visit's own tab, emptied
+ * first, in the background (the IP service's page is never shown).
+ */
+async function exitLocation(tab: Page): Promise<ExitInfo | null> {
+  await tab.goto("about:blank").catch(() => {});
+  return lookupExit((url) => tab.evaluate(fetchJsonInPage, url));
 }
 
 /** Why the test must not continue from this IP, or null when it's the right country through the proxy. */
@@ -400,58 +561,156 @@ function exitProblem(exit: ExitInfo | null, ownIp: string | null): string | null
 /**
  * Searches Google for the keyword in the visit's own browser, the way Keyword Rankings does
  * (src/lib/serp.ts: same country and language, same results page, same reading of the results),
- * and says where the site ranks. It never clicks a result: the site is then opened directly,
- * with no Google referer. The proxy IP was already confirmed in Vietnam before this runs.
+ * and says where the site ranks. A CAPTCHA is waited for until it's solved in the browser window
+ * (up to CAPTCHA_WAIT_MS). In the visit's own tab, which stays on the results: the site on the first
+ * page returns the result's link, for the visit to click it (clickResult); otherwise null, and the
+ * site is opened directly.
+ * The proxy IP was already confirmed in Vietnam before this runs.
  */
 async function searchGoogleFirst(
-  context: BrowserContext,
-  { keyword, country }: NonNullable<VisitOptions["searchFirst"]>,
+  tab: Page,
+  { keyword, country, neverSkip }: NonNullable<VisitOptions["searchFirst"]>,
   siteUrl: string,
   send: VisitOptions["send"],
-): Promise<void> {
+  signal: AbortSignal,
+): Promise<{ link: string } | null> {
   if (country.toUpperCase() !== BROWSER_SEARCH_COUNTRY) {
     send({ type: "step", message: "Only Vietnam can be searched (the proxy is in Vietnam), so the Google search was skipped; opening the site directly." });
-    return;
+    return null;
   }
   const params = searchParams(keyword, country);
+  // One Google search at a time across all the app's browsers (src/lib/google-turn.ts).
+  let waited = false;
+  const release = await takeGoogleTurn(signal, () => {
+    waited = true;
+    send({ type: "wait", seconds: null, reason: "its turn to search Google (one browser at a time)" });
+    send({ type: "step", message: "Waiting for the other browser to finish its Google search (one at a time, so Google doesn't see them together)…" });
+  });
+  if (waited) send({ type: "waited" });
+  send({ type: "stage", stage: "search" });
   send({ type: "step", message: `Searching Google for “${keyword}” (as in Vietnam: gl=${params.gl}, hl=${params.hl})…` });
-  const tab = await context.newPage();
   try {
     await tab.goto(googleResultsUrl(params), { waitUntil: "domcontentloaded" });
     let blocked = googleBlocked(tab.url(), !!(await tab.$("#captcha-form")));
     if (blocked === "captcha") {
-      // Solved in the browser window (by you or the profile's extension): the search goes on.
-      send({ type: "step", message: `Google asked for a CAPTCHA. Solve it in the browser window (or let an extension do it): waiting up to ${CAPTCHA_WAIT_MS / 60_000} min…` });
-      if (await waitForCaptcha(async () => (tab.isClosed() ? "closed" : googleBlocked(tab.url(), !!(await tab.$("#captcha-form"))) === "captcha"))) {
+      // Solved in the browser window (by you or the profile's extension): the search goes on. Not
+      // solved in CAPTCHA_WAIT_MS: the visit reopens the browser on the same IP (runVisitTest).
+      // The search has reached Google: the next browser's search needn't wait for this CAPTCHA.
+      release();
+      send({ type: "stage", stage: "captcha" });
+      send({ type: "step", message: `Google asked for a CAPTCHA. Solve it in the browser window (or let an extension do it): waiting up to ${CAPTCHA_WAIT_MS / 1000}s…` });
+      send({ type: "wait", seconds: CAPTCHA_WAIT_MS / 1000, reason: "the CAPTCHA to be solved in the browser window" });
+      const solved = await waitForCaptcha(async () => (tab.isClosed() ? "closed" : googleBlocked(tab.url(), !!(await tab.$("#captcha-form"))) === "captcha"));
+      send({ type: "waited" });
+      if (solved) {
         blocked = null;
         send({ type: "step", message: "The CAPTCHA was solved; reading Google's results…" });
+      } else if (!signal.aborted) {
+        // Its tab (or the browser) was closed while waiting: the visit can't go on in it; tried again.
+        if (tab.isClosed()) throw new GoogleBlockedError("The browser window was closed while waiting for the CAPTCHA");
+        throw new CaptchaTimeoutError(`The CAPTCHA wasn't solved in ${CAPTCHA_WAIT_MS / 1000}s`);
       }
     }
+    if (blocked === "consent" && neverSkip) throw new GoogleBlockedError("Google showed its cookie consent page instead of results");
     if (blocked) {
       send({ type: "step", message: `Google ${blocked === "captcha" ? "asked for a CAPTCHA and it wasn't solved" : "showed its cookie consent page"}, so the search was skipped; opening the site directly.` });
-      return;
+      return null;
     }
-    await tab.waitForSelector("#search", { timeout: 10_000 }).catch(() => {});
+    // The results (desktop: #search; a phone's page may differ), up to 15s after a CAPTCHA.
+    await tab.waitForSelector("#search, #rso, #main", { timeout: 15_000 }).catch(() => {});
     const results = clean(await tab.evaluate(readOrganicResults));
     await scrollPage(tab, MOBILE_SCROLL).catch(() => null);
     const host = new URL(siteUrl).hostname.replace(/^www\./, "").toLowerCase();
     const hit = results.find((r) => r.domain.toLowerCase() === host);
-    send({
-      type: "step",
-      message: `${hit ? `The site is #${hit.position} on Google's first page` : "The site isn't on Google's first page"} for “${keyword}”. Opening it directly (no click on a result)…`,
-    });
+    // Not among the results read (e.g. a phone's layout): any link to the site on the page, not an ad.
+    const link = hit?.url ?? (await tab.evaluate(findSiteLink, host).catch(() => null));
+    const where = hit
+      ? `The site is #${hit.position} on Google's first page`
+      : link
+        ? "The site is on Google's first page"
+        : results.length
+          ? "The site isn't on Google's first page"
+          : "Couldn't find the site on Google's results page";
+    send({ type: "step", message: `${where} for “${keyword}”.${link ? "" : " Opening it directly…"}` });
+    return link ? { link } : null;
   } catch (err) {
+    if (err instanceof GoogleBlockedError) throw err;
+    // Never skipped: the visit starts again in a new browser with a new IP.
+    if (neverSkip && !signal.aborted) throw new GoogleBlockedError(`The Google search didn't work (${friendly(err)})`);
     send({ type: "step", message: `The Google search didn't work (${friendly(err)}); opening the site directly.` });
+    return null;
   } finally {
-    await tab.close().catch(() => {});
+    release();
   }
 }
+
+/** How many browsers a visit opens on one proxy IP for an unsolved CAPTCHA, before getting a new IP. */
+const CAPTCHA_TRIES = 3;
+
+/** The CAPTCHA wasn't solved in CAPTCHA_WAIT_MS: the browser is reopened on the same IP. */
+class CaptchaTimeoutError extends GoogleBlockedError {}
+
+/**
+ * Runs inside Google's results page: the first link to the site (host, without www) that isn't an
+ * ad, whatever the layout (desktop or phone), also through Google's /url?q= redirect. Its href, or
+ * null. Self-contained: it's sent to the page as text.
+ */
+function findSiteLink(host: string): string | null {
+  const target = (href: string): string | null => {
+    try {
+      const u = new URL(href);
+      const real = /(^|\.)google\./.test(u.hostname) && u.pathname === "/url" ? new URL(u.searchParams.get("q") ?? u.searchParams.get("url") ?? "") : u;
+      return real.hostname.replace(/^www\./, "").toLowerCase();
+    } catch {
+      return null;
+    }
+  };
+  for (const a of Array.from(document.querySelectorAll<HTMLAnchorElement>("a[href]"))) {
+    if (a.closest("#tads, #bottomads, [data-text-ad]")) continue;
+    const t = target(a.href);
+    if (t === host || t?.endsWith(`.${host}`)) return a.href;
+  }
+  return null;
+}
+
+/**
+ * Clicks the site's result on Google's results page (as a person would: Google is the referer), in
+ * the same tab, and resolves once the site's page has its content (DOMContentLoaded).
+ */
+async function clickResult(tab: Page, link: string): Promise<{ status(): number } | null> {
+  const anchor = await tab.evaluateHandle((href) => {
+    // In this tab, never a new one: no target on the links, and Google's own window.open goes here too.
+    document.querySelectorAll("a[target]").forEach((a) => a.removeAttribute("target"));
+    window.open = (u?: string | URL) => {
+      if (u) location.href = String(u);
+      return null;
+    };
+    return Array.from(document.querySelectorAll<HTMLAnchorElement>("a[href]")).find((el) => el.href === href) ?? null;
+  }, link);
+  const el = anchor.asElement();
+  if (!el) throw new Error("The site's result wasn't on Google's results page any more.");
+  const googleUrl = tab.url();
+  const offGoogle = (u: URL) => !/(^|\.)google\./.test(u.hostname);
+  const nav = tab.waitForNavigation({ url: offGoogle, waitUntil: "domcontentloaded" });
+  nav.catch(() => {}); // not waited for when the click did nothing (below)
+  await el.click();
+  // The click did nothing (still on Google after CLICK_WAIT_MS): the result is opened in this tab
+  // directly, still from Google (its referer), instead of the visit waiting and failing.
+  const moved = await Promise.race([nav.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), CLICK_WAIT_MS))]);
+  if (moved || offGoogle(new URL(tab.url()))) return nav;
+  return tab.goto(link, { waitUntil: "domcontentloaded", referer: googleUrl });
+}
+
+/** How long a click on Google's result has to start opening the site before it's opened directly. */
+const CLICK_WAIT_MS = 15_000;
 
 /** Downloads through the browser context, so it uses the same proxy as the visit. */
 function proxiedFetcher(context: BrowserContext): SitemapFetcher {
   return async (url, accept) => {
     if (isBlockedHost(new URL(url).hostname)) throw new Error(`Blocked address: ${url}`);
-    const res = await context.request.get(url, { headers: { accept }, timeout: 20_000, maxRedirects: 5 });
+    // As the visit's device (its pages' user agent), not the browser's own.
+    const ua = await deviceUserAgent(context);
+    const res = await context.request.get(url, { headers: { accept, ...(ua ? { "user-agent": ua } : {}) }, timeout: 20_000, maxRedirects: 5 });
     return { ok: res.ok(), finalUrl: res.url(), text: () => res.text() };
   };
 }
@@ -463,6 +722,8 @@ async function checkPage(
   kind: VisitPage["kind"],
   navigate: () => Promise<{ status(): number } | null>,
   scrollOpts: typeof PAGE_SCROLL,
+  /** Read the page after it loads, until `until` (ms) at the latest: the end of the dwell time. */
+  read: false | { until: number | null; maxSec: number } = false,
 ): Promise<VisitPage> {
   const consoleErrors: string[] = [];
   const failedRequests: string[] = [];
@@ -514,6 +775,8 @@ async function checkPage(
     if (!result.ok) result.error = `The page returned HTTP ${result.status ?? "no response"}.`;
 
     result.scroll = await scrollPage(page, scrollOpts).catch(() => null);
+    // Not part of the load time: measured above. Cut short (dwell time up, stopped): no time recorded.
+    if (read && result.ok) result.readSec = await readPage(page, read.until, read.maxSec).catch(() => undefined);
   } catch (err) {
     result.error = friendly(err);
   } finally {
@@ -526,6 +789,22 @@ async function checkPage(
     page.off("requestfailed", onDone);
   }
   return result;
+}
+
+/** Stays on the page as if reading it: a pause from its amount of text, with a small scroll every few seconds. Returns the seconds spent. */
+async function readPage(page: Page, until: number | null, maxSec = READ_MAX_SEC): Promise<number> {
+  const words = await page.evaluate(() => (document.body?.innerText.match(/\S+/g) ?? []).length).catch(() => 0);
+  const base = Math.min(maxSec / 1.4, READ_BASE_SEC + words / READ_WORDS_PER_SEC); // up to 1.4x below: never over maxSec
+  const started = Date.now();
+  const ends = Math.min(started + Math.round(base * (0.6 + Math.random() * 0.8) * 1000), until ?? Infinity);
+  for (;;) {
+    await page.waitForTimeout(Math.max(0, Math.min(ends - Date.now(), 1500 + Math.random() * 3500)));
+    if (Date.now() >= ends) break;
+    // Mostly down the page, sometimes back up a little.
+    const dy = Math.round((Math.random() < 0.75 ? 1 : -1) * (120 + Math.random() * 380));
+    await page.evaluate((y) => window.scrollBy({ top: y, behavior: "smooth" }), dy);
+  }
+  return Math.round((Date.now() - started) / 1000);
 }
 
 async function scrollPage(page: Page, { stepWaitMs, maxSteps, settleMs }: typeof PAGE_SCROLL): Promise<ScrollResult> {

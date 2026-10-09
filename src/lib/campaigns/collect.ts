@@ -32,6 +32,17 @@ export interface CollectResult {
   problems: string[];
 }
 
+// The ranking check running now for each campaign, so Stop, pause or delete ends it too (its browser
+// closes, no more tries). On globalThis: survives a dev reload.
+const gc = globalThis as typeof globalThis & { __campaignChecks?: Map<number, AbortController> };
+const checks = (gc.__campaignChecks ??= new Map<number, AbortController>());
+
+/** Ends the campaign's ranking check if one is running (Stop, pause, delete). */
+export function stopCampaignCheck(campaignId: number): void {
+  checks.get(campaignId)?.abort();
+  checks.delete(campaignId);
+}
+
 export async function collectCampaign(c: Campaign, today: string): Promise<CollectResult> {
   const problems: string[] = [];
   const dataDay = daysAgo(today, GSC_DELAY_DAYS);
@@ -43,8 +54,12 @@ export async function collectCampaign(c: Campaign, today: string): Promise<Colle
     // On Vercel: no browser. The computer running the app checks it (no note, so it still will today).
     problems.push("Google position: only checked when the app runs on a computer.");
   } else {
+    // One check per campaign at a time: a new one ends the one before.
+    checks.get(c.id)?.abort();
+    const check = new AbortController();
+    checks.set(c.id, check);
     try {
-      const serp = await searchGoogle(c.keyword, c.country, 10);
+      const serp = await searchGoogle(c.keyword, c.country, 10, "local", check.signal);
       const host = stripWwwHost(c.siteUrl);
       const hit = serp.results.find((r) => (c.pageUrl ? sameUrl(r.url, c.pageUrl) : stripWwwHost(r.url) === host));
       position = hit?.position ?? null;
@@ -53,7 +68,10 @@ export async function collectCampaign(c: Campaign, today: string): Promise<Colle
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       problems.push(`Google position: ${msg}`);
-      await upsertDay(c.id, today, { notes: { serp: msg } });
+      // Stopped by hand: nothing to note (the campaign may be gone).
+      if (!check.signal.aborted) await upsertDay(c.id, today, { notes: { serp: msg } });
+    } finally {
+      if (checks.get(c.id) === check) checks.delete(c.id);
     }
   }
 

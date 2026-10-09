@@ -3,16 +3,18 @@
 // result. Before searching it checks the proxy's IP: in Vietnam, and not this computer's own IP.
 // Google sometimes answers a proxy IP with a CAPTCHA: the search waits (CAPTCHA_WAIT_MS) for it to be
 // solved in the browser window, by a person or an extension of the Chrome profile; the app itself
-// doesn't touch it. Still there after that: the search fails, and the daily check tries again later
-// that day (src/lib/campaigns/scheduler.ts).
+// doesn't touch it. Still there after that: the search fails (a campaign visit then opens the site
+// directly, in the same browser; a ranking check is tried again later that day).
+// One Google search at a time across all the app's browsers: src/lib/google-turn.ts.
 
 import { existsSync } from "node:fs";
-import type { Browser } from "puppeteer-core";
+import type { Browser, Page, Target } from "puppeteer-core";
 import { NO_WEBRTC_ARGS, NO_WEBRTC_SCRIPT } from "./no-webrtc";
-import { ProxyWaitError, getProxyOrReuse, type ProxyConfig } from "./proxy-api";
+import { ProxyWaitError, burnProxy, getProxy, getProxyOrReuse, type ProxyConfig } from "./proxy-api";
+import { takeGoogleTurn } from "./google-turn";
 import { leaseProxyApi, restProxyApi } from "./proxy-pool";
-import { checkChromeProfile, chromeExecutable, leaseChromeProfile, PROFILE_ARGS, KEEP_EXTENSIONS, profileLockedMessage, type ProfileLease } from "./browser-profile";
-import { lookupExit, ownPublicIp } from "./proxy-ip";
+import { checkChromeProfile, chromeExecutable, leaseChromeProfile, PROFILE_ARGS, KEEP_EXTENSIONS, profileExtensionDirs, profileLockedMessage, type ProfileLease } from "./browser-profile";
+import { fetchJsonInPage, lookupExit, ownPublicIp } from "./proxy-ip";
 
 /** The proxy's country: browser searches are only right for this one. */
 export const BROWSER_SEARCH_COUNTRY = "VN";
@@ -61,19 +63,22 @@ const LEASE_WAIT_MS = 5 * 60_000;
 /**
  * Opens a browser through a proxy from one of the proxy API links (src/lib/proxy-pool.ts: a link no
  * visit is using, so getting a proxy doesn't change a running visit's IP); close() when done.
+ * newIp: never the IP used before (trying again after a CAPTCHA).
  */
-export async function openBrowserSearch(): Promise<BrowserSearch> {
+export async function openBrowserSearch({ newIp = false, signal }: { newIp?: boolean; signal?: AbortSignal } = {}): Promise<BrowserSearch> {
   const executablePath = BROWSER_PATHS.find((p): p is string => !!p && existsSync(p));
   if (!executablePath) throw new Error("no browser found (install Google Chrome or Microsoft Edge)");
 
-  const waitFor = AbortSignal.timeout(LEASE_WAIT_MS);
+  // Gives up waiting for a proxy link after LEASE_WAIT_MS, or when stopped.
+  const timeout = AbortSignal.timeout(LEASE_WAIT_MS);
+  const waitFor = signal ? AbortSignal.any([timeout, signal]) : timeout;
   for (;;) {
     let profile: ProfileLease | null = null;
     const lease = await leaseProxyApi(waitFor).catch((err: unknown) => {
-      throw waitFor.aborted ? new Error(`every proxy link was busy with campaign visits for ${LEASE_WAIT_MS / 60_000} minutes`) : err;
+      throw timeout.aborted ? new Error(`every proxy link was busy with campaign visits for ${LEASE_WAIT_MS / 60_000} minutes`) : signal?.aborted ? new Error("stopped") : err;
     });
     try {
-      const proxy = await getProxyOrReuse(lease.apiUrl);
+      const proxy = newIp ? await getProxy(lease.apiUrl) : await getProxyOrReuse(lease.apiUrl);
       // Its own Chrome profile folder, when one is set (Settings): never one another browser has open.
       profile = await leaseChromeProfile("ranking");
       // A saved Chrome profile: Google Chrome only (never Edge).
@@ -82,7 +87,19 @@ export async function openBrowserSearch(): Promise<BrowserSearch> {
       const search = await openWithProxy(chrome, proxy, profile?.dir);
       const held = profile;
       return {
-        page: search.page,
+        // One Google search at a time across all the app's browsers (src/lib/google-turn.ts); an IP
+        // Google showed a CAPTCHA is never given to a visit.
+        page: async (p, n) => {
+          const release = await takeGoogleTurn(signal, () => console.log("[ranking] waiting for another browser to finish its Google search…"));
+          try {
+            return await search.page(p, n);
+          } catch (err) {
+            if (err instanceof GoogleBlockedError) burnProxy(lease.apiUrl, proxy.address);
+            throw err;
+          } finally {
+            release();
+          }
+        },
         close: () =>
           search.close().finally(() => {
             held?.release();
@@ -113,6 +130,9 @@ async function openWithProxy(executablePath: string, proxy: ProxyConfig, profile
       // A Chrome profile folder (Settings), else a fresh temporary profile. Extensions are never turned off.
       ...(profileDir ? { userDataDir: profileDir } : {}),
       ignoreDefaultArgs: KEEP_EXTENSIONS,
+      // The profile's extensions, loaded from their files and switched on (Chrome drops a copied
+      // profile's extensions: src/lib/browser-profile.ts).
+      ...(profileDir ? { enableExtensions: await profileExtensionDirs(profileDir) } : {}),
       args: [
         `--proxy-server=${proxy.server}`,
         // WebRTC could otherwise go around the proxy and show this computer's IP (src/lib/no-webrtc.ts).
@@ -126,23 +146,24 @@ async function openWithProxy(executablePath: string, proxy: ProxyConfig, profile
       const locked = profileDir ? profileLockedMessage(err, profileDir) : null;
       throw locked ? new Error(locked) : err;
     });
+  // Everything happens in the one tab Chrome starts with. Any other tab (e.g. Adobe Acrobat's welcome
+  // page, opened by the extension itself) is closed at once.
+  const tab: Page = (await browser.pages())[0] ?? (await browser.newPage());
+  browser.on("targetcreated", async (target: Target) => {
+    if (target.type() !== "page") return;
+    const other = await target.page().catch(() => null);
+    if (other && other !== tab) void other.close().catch(() => {});
+  });
 
   // Where the searches really come from, before any search: wrong or unknown, no search at all.
   try {
+    if (proxy.username) await tab.authenticate({ username: proxy.username, password: proxy.password ?? "" });
+    await tab.evaluateOnNewDocument(NO_WEBRTC_SCRIPT);
+    await tab.emulateTimezone("Asia/Ho_Chi_Minh");
+    await tab.setViewport({ width: 1366, height: 768 });
     // A saved Chrome profile: make sure it's Chrome on that profile.
-    if (profileDir) console.log(`[ranking] ${await checkChromeProfile(await browser.newPage(), profileDir)}`);
-    const [exit, ownIp] = await Promise.all([
-      lookupExit(async (url) => {
-        const tab = await browser.newPage();
-        try {
-          if (proxy.username) await tab.authenticate({ username: proxy.username, password: proxy.password ?? "" });
-          return await (await tab.goto(url, { timeout: NAV_TIMEOUT }))?.json();
-        } finally {
-          await tab.close().catch(() => {});
-        }
-      }),
-      ownPublicIp(),
-    ]);
+    if (profileDir) console.log(`[ranking] ${await checkChromeProfile(tab, profileDir)}`);
+    const [exit, ownIp] = await Promise.all([tab.goto("about:blank").then(() => lookupExit((url) => tab.evaluate(fetchJsonInPage, url))), ownPublicIp()]);
     if (!exit) throw new Error(`couldn't confirm the proxy's IP and country (proxy ${proxy.address})`);
     if (ownIp && exit.ip === ownIp) throw new Error(`the search would come from this computer's own IP (${ownIp}), not the proxy`);
     if (exit.countryCode !== BROWSER_SEARCH_COUNTRY) throw new Error(`the proxy's IP (${exit.ip}) is in ${exit.country ?? "an unknown country"}, not Vietnam`);
@@ -153,25 +174,19 @@ async function openWithProxy(executablePath: string, proxy: ProxyConfig, profile
 
   return {
     async page(p, n) {
-      const tab = await browser.newPage();
-      try {
-        if (proxy.username) await tab.authenticate({ username: proxy.username, password: proxy.password ?? "" });
-        await tab.evaluateOnNewDocument(NO_WEBRTC_SCRIPT);
-        await tab.emulateTimezone("Asia/Ho_Chi_Minh");
-        await tab.setViewport({ width: 1366, height: 768 });
-        await tab.goto(googleResultsUrl(p, n), { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
+      await tab.goto(googleResultsUrl(p, n), { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
 
-        let blocked = googleBlocked(tab.url(), !!(await tab.$("#captcha-form")));
-        if (blocked === "captcha") {
-          console.log(`[ranking] Google asked for a CAPTCHA (proxy ${proxy.address}): waiting up to ${CAPTCHA_WAIT_MS / 60_000} min for it to be solved in the browser window…`);
-          blocked = (await waitForCaptcha(async () => (tab.isClosed() ? "closed" : googleBlocked(tab.url(), !!(await tab.$("#captcha-form"))) === "captcha"))) ? null : "captcha";
-        }
-        if (blocked) throw new Error(blocked === "captcha" ? `Google asked for a CAPTCHA and it wasn't solved (proxy ${proxy.address})` : "Google showed its cookie consent page");
-        await tab.waitForSelector("#search", { timeout: 10_000 }).catch(() => {});
-        return await tab.evaluate(readOrganicResults);
-      } finally {
-        await tab.close().catch(() => {});
+      let blocked = googleBlocked(tab.url(), !!(await tab.$("#captcha-form")));
+      if (blocked === "captcha") {
+        console.log(`[ranking] Google asked for a CAPTCHA (proxy ${proxy.address}): waiting up to ${CAPTCHA_WAIT_MS / 1000}s for it to be solved in the browser window…`);
+        blocked = (await waitForCaptcha(async () => (tab.isClosed() ? "closed" : googleBlocked(tab.url(), !!(await tab.$("#captcha-form"))) === "captcha"))) ? null : "captcha";
       }
+      // The browser was closed (by hand, or the app stopping): the check ends, it isn't tried again.
+      if (tab.isClosed() || !browser.connected) throw new Error("the browser was closed");
+      if (blocked === "captcha") throw new GoogleBlockedError(`Google asked for a CAPTCHA and it wasn't solved in ${CAPTCHA_WAIT_MS / 1000}s (proxy ${proxy.address})`);
+      if (blocked) throw new GoogleBlockedError("Google showed its cookie consent page instead of results");
+      await tab.waitForSelector("#search", { timeout: 10_000 }).catch(() => {});
+      return await tab.evaluate(readOrganicResults);
     },
     close: () => browser.close().catch(() => {}),
   };
@@ -184,16 +199,26 @@ export function googleResultsUrl(p: BrowserSearchParams, n = 1): string {
   return url.toString();
 }
 
-/** How long a search waits for a CAPTCHA to be solved in the browser window (by a person or an extension). */
-export const CAPTCHA_WAIT_MS = 2 * 60_000;
+/**
+ * How long a search waits for a CAPTCHA to be solved in the browser window (by a person or an
+ * extension), before giving up on the search.
+ */
+export const CAPTCHA_WAIT_MS = 30_000;
+
+/**
+ * Google didn't show results (a CAPTCHA not solved in CAPTCHA_WAIT_MS, its consent page, the search
+ * failing): nothing is skipped, the browser is closed and the search tried again in a new one with a
+ * new proxy IP, until it gets through (ranking checks: src/lib/serp.ts; visits: src/lib/campaigns/visits.ts).
+ */
+export class GoogleBlockedError extends Error {}
 
 /**
  * Waits until the CAPTCHA is gone (Google then goes on to the results), checking every 2 seconds, for
- * up to CAPTCHA_WAIT_MS. True when it's gone; false when it's still there, or the tab was closed
- * ("closed": the visit or check was stopped, so no more waiting).
+ * up to waitMs (CAPTCHA_WAIT_MS; Infinity = until it's solved). True when it's gone; false when it's
+ * still there, or the tab was closed ("closed": the visit or check was stopped, so no more waiting).
  */
-export async function waitForCaptcha(stillThere: () => Promise<boolean | "closed">): Promise<boolean> {
-  const until = Date.now() + CAPTCHA_WAIT_MS;
+export async function waitForCaptcha(stillThere: () => Promise<boolean | "closed">, waitMs = CAPTCHA_WAIT_MS): Promise<boolean> {
+  const until = Date.now() + waitMs;
   while (Date.now() < until) {
     await new Promise((r) => setTimeout(r, 2000));
     try {

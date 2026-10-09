@@ -15,7 +15,7 @@ import {
   type CheckStatus,
   type ChecklistItem,
 } from "@/lib/visit-checklist";
-import { MAX_PAGES, OVERFLOW_PX, type Discovery, type VisitEvent, type VisitPage, type VisitReport } from "@/lib/visit-types";
+import { MAX_PAGES, OVERFLOW_PX, type Discovery, type VisitEvent, type VisitPage, type VisitReport, type VisitStage } from "@/lib/visit-types";
 import { Notice, Panel, StatusCode, UrlLink, buttonClass } from "@/components/ui/primitives";
 import { ACTIVITY_STYLE, DetailDialog } from "./visit-dialog";
 
@@ -35,7 +35,8 @@ interface Lane {
   timing: { start: number; last: number };
   report: VisitReport | null;
   error: string | null;
-  waitUntil: number | null;
+  /** What it's waiting for now, until when (null: not known, shown as time waited so far), since when. */
+  wait: { reason: string; until: number | null; since: number } | null;
   /** The run it's on now, e.g. 3 of 20. */
   run: { n: number; of: number } | null;
   /** Runs this lane has finished. */
@@ -45,20 +46,26 @@ interface Lane {
   ip: string | null;
   /** Stopped by hand (pause or stop). */
   stopped: boolean;
+  /** The step the run is on (VisitSteps), and the steps that only happen sometimes: did they. */
+  stage: VisitStage | null;
+  captcha: boolean;
+  clicked: boolean;
+  /** The last run that reached the site: its pages and results, shown until this run has pages of its own. */
+  last: { run: { n: number; of: number } | null; pages: LoggedPage[]; discovery: Discovery | null; report: VisitReport | null } | null;
 }
 
-const newLane = (): Lane => ({ steps: [], pages: [], discovery: null, discovered: false, timing: { start: 0, last: 0 }, report: null, error: null, waitUntil: null, run: null, finished: 0, link: null, ip: null, stopped: false });
+const newLane = (): Lane => ({ steps: [], pages: [], discovery: null, discovered: false, timing: { start: 0, last: 0 }, report: null, error: null, wait: null, run: null, finished: 0, link: null, ip: null, stopped: false, stage: null, captcha: false, clicked: false, last: null });
 
 /** A lane's next state for one console line. */
 function laneReducer(l: Lane, e: VisitEvent, at: number): Lane {
   const timing = l.timing.start ? l.timing : { ...l.timing, start: at };
   switch (e.type) {
     case "step":
-      // Stopped: no more waiting for a new IP, so the countdown goes.
-      return { ...l, timing, steps: [...l.steps, e.message], ...(e.message === "Stopped." ? { stopped: true, waitUntil: null } : {}) };
+      // Stopped: no more waiting, so the countdown goes.
+      return { ...l, timing, steps: [...l.steps, e.message], ...(e.message === "Stopped." ? { stopped: true, wait: null } : {}) };
     case "run":
       // The lane's next run starts: its steps, pages and results start over (the tab keeps its count).
-      return { ...newLane(), steps: [`Run ${e.n} of ${e.of}: new visit with a new proxy IP`], timing: { start: at, last: 0 }, run: { n: e.n, of: e.of }, finished: l.finished, link: e.link ?? null };
+      return { ...newLane(), last: l.pages.length ? { run: l.run, pages: l.pages, discovery: l.discovery, report: l.report } : l.last, steps: [`Run ${e.n} of ${e.of}: new visit${e.deviceName ? ` on a ${e.deviceName}` : e.device ? ` on a ${e.device}` : ""}`], timing: { start: at, last: 0 }, run: { n: e.n, of: e.of }, finished: l.finished, link: e.link ?? null };
     case "page": {
       // The start page is sent again once its phone check is done: replace it, don't add it twice.
       const logged: LoggedPage = { ...e.page, at };
@@ -69,11 +76,15 @@ function laneReducer(l: Lane, e: VisitEvent, at: number): Lane {
       // The first count goes in the step log; later ones (pages found while visiting) only update the progress bar.
       return { ...l, timing, discovery: e.discovery, discovered: true, steps: l.discovered ? l.steps : [...l.steps, discoveryMessage(e.discovery)] };
     case "done":
-      return { ...l, timing, report: e.report, waitUntil: null, finished: l.finished + 1 };
+      return { ...l, timing, report: e.report, wait: null, finished: l.finished + 1 };
     case "proxy":
-      return { ...l, timing, ip: e.exit?.ip ?? null };
+      return { ...l, timing, ip: e.exit?.ip ?? null, wait: null };
     case "wait":
-      return { ...l, timing, waitUntil: at + e.seconds * 1000 };
+      return { ...l, timing, wait: { reason: e.reason ?? "a new proxy IP from the provider", until: e.seconds === null ? null : at + e.seconds * 1000, since: at } };
+    case "waited":
+      return { ...l, timing, wait: null };
+    case "stage":
+      return { ...l, timing, stage: e.stage, captcha: l.captcha || e.stage === "captcha", clicked: l.clicked || e.stage === "click" };
     case "error":
       return { ...l, timing, error: e.message };
     default:
@@ -108,8 +119,8 @@ export function useVisitRun() {
       .catch(() => setEnv({ local: true }));
   }, []);
 
-  // Countdown while the proxy provider makes a lane wait for a new IP.
-  const waiting = running && Object.values(lanes).some((l) => !l.stopped && l.waitUntil && l.waitUntil > now);
+  // A clock while any lane waits (a countdown, or the time waited so far).
+  const waiting = running && Object.values(lanes).some((l) => !l.stopped && l.wait);
   useEffect(() => {
     if (!waiting) return;
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -131,7 +142,7 @@ export function useVisitRun() {
 
     const handle = (e: VisitEvent & { at?: number; lane?: number }) => {
       const at = e.at ?? Date.now();
-      if (e.type === "wait") setNow(Date.now());
+      if (e.type === "wait" || e.type === "waited") setNow(Date.now());
       if (e.type === "done") setReports((n) => n + 1);
       if (!e.lane) {
         if (e.type === "step") setCommon((s) => [...s, e.message]);
@@ -238,18 +249,22 @@ export function VisitRunView({ run }: { run: VisitRun }) {
           {lane && (
             <div role="tabpanel" id={`visit-lane-${selected}`} aria-labelledby={`visit-tab-${selected}`} className="p-4">
               <LaneFacts lane={lane} />
+              <VisitSteps lane={lane} running={running} />
               <LaneNotices lane={lane} running={running} now={now} />
               <LaneConsole lane={lane} running={running} onOpen={setOpenPage} />
+              <LastRun lane={lane} onOpen={setOpenPage} />
             </div>
           )}
         </section>
       ) : (
         lane && (
           <>
+            <VisitSteps lane={lane} running={running} />
             <LaneNotices lane={lane} running={running} now={now} />
             {(running || lane.steps.length > 0) && (
               <Panel title={running ? "Running" : "Steps"} bodyClassName="p-4">
                 <LaneConsole lane={lane} running={running} onOpen={setOpenPage} />
+                <LastRun lane={lane} onOpen={setOpenPage} />
               </Panel>
             )}
           </>
@@ -274,7 +289,12 @@ function laneState(l: Lane, running: boolean, now: number): LaneState {
   if (l.error) return "failed";
   if (l.stopped) return "stopped";
   if (!running) return "done";
-  return l.waitUntil && l.waitUntil > now ? "waiting" : "running";
+  return l.wait && (l.wait.until === null || l.wait.until > now) ? "waiting" : "running";
+}
+
+/** A lane's wait on the clock: the time left when known, else the time waited so far. */
+function waitClock(w: NonNullable<Lane["wait"]>, now: number): { left: boolean; seconds: number } {
+  return w.until === null ? { left: false, seconds: Math.max(0, Math.floor((now - w.since) / 1000)) } : { left: true, seconds: Math.max(0, Math.ceil((w.until - now) / 1000)) };
 }
 
 const LANE_STATE: Record<LaneState, { icon: typeof CircleCheck; color: string; label: string }> = {
@@ -289,8 +309,8 @@ const LANE_STATE: Record<LaneState, { icon: typeof CircleCheck; color: string; l
 function LaneTab({ n, lane: l, active, onSelect, running, now }: { n: number; lane: Lane; active: boolean; onSelect: () => void; running: boolean; now: number }) {
   const state = laneState(l, running, now);
   const { icon: Icon, color, label } = LANE_STATE[state];
-  const waitLeft = l.waitUntil ? Math.max(0, Math.ceil((l.waitUntil - now) / 1000)) : 0;
-  const detail = [label, l.run && `run ${l.run.n} of ${l.run.of}`, l.link && `proxy link #${l.link.number}`, `${l.finished} finished`].filter(Boolean).join(" · ");
+  const clock = l.wait ? waitClock(l.wait, now) : null;
+  const detail = [state === "waiting" && l.wait ? `Waiting for ${l.wait.reason}` : label, l.run && `run ${l.run.n} of ${l.run.of}`, l.link && `proxy link #${l.link.number}`, `${l.finished} finished`].filter(Boolean).join(" · ");
   return (
     <button
       type="button"
@@ -306,7 +326,7 @@ function LaneTab({ n, lane: l, active, onSelect, running, now }: { n: number; la
     >
       <Icon className={`size-3.5 shrink-0 ${color} ${state === "running" ? "animate-spin" : ""}`} aria-label={label} />
       <span className="font-medium">Visit {n}</span>
-      {state === "waiting" && <span className="font-mono text-[11px] text-status-warning">{formatWait(waitLeft)}</span>}
+      {state === "waiting" && clock && <span className="font-mono text-[11px] text-status-warning">{clock.left ? formatWait(clock.seconds) : `+${formatWait(clock.seconds)}`}</span>}
       {l.finished > 0 && (
         <span className={`rounded px-1 font-mono text-[10px] tabular-nums ${active ? "bg-accent/20 text-ink" : "bg-surface-2 text-subtle"}`}>{l.finished}</span>
       )}
@@ -335,6 +355,69 @@ function LaneFacts({ lane: l }: { lane: Lane }) {
 }
 
 /** Lines about the whole visit (no lane). */
+const STEPS: { stage: VisitStage; label: string }[] = [
+  { stage: "browser", label: "Open browser" },
+  { stage: "search", label: "Search keyword" },
+  { stage: "captcha", label: "CAPTCHA" },
+  { stage: "click", label: "Click the site" },
+  { stage: "visit", label: "Visit the site" },
+  { stage: "done", label: "Visit complete" },
+];
+
+/**
+ * The visit's steps in order, the one it's on now highlighted. Passed without a CAPTCHA (Google
+ * didn't ask) or without a click (the site wasn't on Google's first page): that step is crossed out.
+ */
+function VisitSteps({ lane: l, running }: { lane: Lane; running: boolean }) {
+  if (!l.stage) return null;
+  const at = STEPS.findIndex((s) => s.stage === l.stage);
+  // The run ended without completing (it failed, or was stopped): the step it was on failed.
+  const ended = !running || l.stopped || (!!l.report && l.stage !== "done");
+  return (
+    <ol aria-label="Visit steps" className="mb-3 flex flex-wrap items-center gap-x-1 gap-y-2 text-xs">
+      {STEPS.map((s, i) => {
+        const skipped = (s.stage === "captcha" && !l.captcha) || (s.stage === "click" && !l.clicked);
+        const state = i < at ? (skipped ? "skipped" : "done") : i === at ? (l.stage === "done" ? "done" : ended ? "failed" : "now") : "next";
+        const style = {
+          done: "bg-status-good/10 text-status-good ring-status-good/30",
+          now: "bg-accent/15 font-medium text-ink ring-accent/50",
+          failed: "bg-status-critical/10 text-status-critical ring-status-critical/30",
+          skipped: "text-subtle line-through ring-line",
+          next: "text-subtle ring-line",
+        }[state];
+        return (
+          <li key={s.stage} className="flex items-center gap-1" aria-current={state === "now" ? "step" : undefined}>
+            {i > 0 && (
+              <span aria-hidden className="text-subtle">
+                →
+              </span>
+            )}
+            <span className={`inline-flex items-center gap-1 rounded-md px-2 py-1 ring-1 ${style}`}>
+              {state === "done" && <Check aria-hidden className="size-3" />}
+              {state === "now" && <Loader2 aria-hidden className="size-3 animate-spin" />}
+              {state === "failed" && <CircleX aria-hidden className="size-3" />}
+              {s.label}
+              {state === "skipped" && <span className="sr-only"> (not needed)</span>}
+            </span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/** Until this run reaches the site's pages: the pages of the last run that did. */
+function LastRun({ lane, onOpen }: { lane: Lane; onOpen: (page: VisitPage) => void }) {
+  if (lane.pages.length || !lane.last) return null;
+  const { run, pages, discovery } = lane.last;
+  return (
+    <div className="mt-4">
+      <h3 className="mb-1 font-mono text-[11px] tracking-[0.18em] text-muted uppercase">Pages visited{run ? ` · run ${run.n} of ${run.of}` : " · last run"}</h3>
+      <LiveLog pages={pages} total={discovery ? discovery.total + 1 : null} onOpen={onOpen} />
+    </div>
+  );
+}
+
 function CommonSteps({ steps }: { steps: string[] }) {
   return (
     <ol className="space-y-1 font-mono text-xs text-muted">
@@ -348,14 +431,23 @@ function CommonSteps({ steps }: { steps: string[] }) {
   );
 }
 
-/** A lane's wait countdown (only while the visit runs) and error. */
+/** What a lane is waiting for, on a clock (only while the visit runs), and its error. */
 function LaneNotices({ lane, running, now }: { lane: Lane; running: boolean; now: number }) {
-  const waitLeft = running && !lane.stopped && lane.waitUntil ? Math.max(0, Math.ceil((lane.waitUntil - now) / 1000)) : 0;
+  const clock = running && !lane.stopped && lane.wait ? waitClock(lane.wait, now) : null;
   return (
     <>
-      {waitLeft > 0 && (
+      {clock && lane.wait && (clock.seconds > 0 || !clock.left) && (
         <Notice tone="info" className="mb-3">
-          The proxy provider gives a new IP in <strong className="font-mono">{formatWait(waitLeft)}</strong>. The visit can run again then.
+          Waiting for {lane.wait.reason}:{" "}
+          {clock.left ? (
+            <>
+              <strong className="font-mono">{formatWait(clock.seconds)}</strong> left.
+            </>
+          ) : (
+            <>
+              waiting <strong className="font-mono">{formatWait(clock.seconds)}</strong> so far.
+            </>
+          )}
         </Notice>
       )}
       {lane.error && (
@@ -565,8 +657,9 @@ function Progress({ done, total, running, elapsedMs }: { done: number; total: nu
   return (
     <div className="mt-4 space-y-1.5">
       <div className="flex items-baseline justify-between gap-3 font-mono text-xs">
-        <span className="text-ink">
-          Page {done.toLocaleString()} of {total.toLocaleString()}
+        {/* Not the site's page count: the pages this visit has found so far (it grows while links are followed). */}
+        <span className="text-ink" title="Pages this visit has found so far: the sitemap, the start page's links, and links on the pages visited. It grows while the visit runs, so two visits can show different numbers until both have seen the whole site.">
+          Page {done.toLocaleString()} · {total.toLocaleString()} found so far
         </span>
         <span className="text-muted">
           {pct}%{left !== null && left > 0 ? ` · about ${formatWait(left)} left` : ""}
@@ -683,6 +776,7 @@ function PageDetails({ page, heading }: { page: VisitPage; heading: string }) {
         <span className="inline-flex items-center gap-3 font-mono text-xs text-muted">
           {page.status !== null ? <StatusCode status={page.status} /> : <span className="text-status-serious">no response</span>}
           {page.loadMs != null && <span>{formatMs(page.loadMs)}</span>}
+          {page.readSec != null && <span title="Time spent on the page after it loaded">read {page.readSec}s</span>}
         </span>
       }
       bodyClassName="space-y-3 p-4 text-sm"

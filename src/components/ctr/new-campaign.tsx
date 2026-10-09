@@ -4,7 +4,8 @@
 // daily increase, compounded; concurrency: visits at the same time, up to the proxy API links saved in
 // Settings, and starting at that max) are sent. Tracking (data sources) and Goals (CTR, position, click growth,
 // time on page) are kept for later but hidden (SHOW_LATER); they aren't sent, so the server uses its defaults.
-// Behavior (CTR, mobile share, dwell time) is form fields only: not sent or saved.
+// Behavior: mobile traffic (% of each day's visits on a phone, the rest on a desktop, mixed at random)
+// and dwell time (min and max seconds each visit stays on the site) are sent; CTR is a form field only.
 // Laid out to fit one screen: the sections are rows of fields on the left, and a summary of what
 // will be tracked, with the Start button, stays on the right.
 
@@ -16,10 +17,15 @@ import {
   DEFAULT_DAILY_INCREASE_PCT,
   DEFAULT_DAY1_VISITS,
   DEFAULT_DURATION_DAYS,
+  DEFAULT_MAX_DWELL_SEC,
+  DEFAULT_MIN_DWELL_SEC,
+  DEFAULT_MOBILE_PCT,
   MAX_DAILY_INCREASE_PCT,
   MAX_DAY1_VISITS,
   MAX_DURATION_DAYS,
+  MAX_DWELL_SEC,
   expectedCtr,
+  mobileVisits,
   plannedVisits,
   plannedVisitsTotal,
   type CtrSetup,
@@ -47,9 +53,9 @@ export function NewCampaign() {
     ga4Property: "",
     targetCtr: "5",
     behaviorCtr: "5",
-    mobilePct: "70",
-    minDwellSec: "30",
-    maxDwellSec: "120",
+    mobilePct: String(DEFAULT_MOBILE_PCT),
+    minDwellSec: String(DEFAULT_MIN_DWELL_SEC),
+    maxDwellSec: String(DEFAULT_MAX_DWELL_SEC),
     targetPosition: "3",
     weeklyGrowthPct: "10",
     targetEngagementSec: "60",
@@ -93,6 +99,9 @@ export function NewCampaign() {
           day1Visits: form.day1Visits,
           dailyIncreasePct: form.dailyIncreasePct,
           concurrency: form.concurrency,
+          minDwellSec: form.minDwellSec,
+          maxDwellSec: form.maxDwellSec,
+          mobilePct: form.mobilePct,
         }),
       });
       // The visit through the proxy has started on the server; the campaign page shows its console.
@@ -153,11 +162,11 @@ export function NewCampaign() {
               <Field label={`Mobile Traffic · ${form.mobilePct}%`} hint={`Desktop ${100 - Number(form.mobilePct)}%`}>
                 <input className="h-9 w-full cursor-pointer accent-accent" type="range" min={0} max={100} step={5} value={form.mobilePct} onChange={set("mobilePct")} />
               </Field>
-              <Field label="Min Dwell Time (s)" hint="1 – 3600">
-                <input className={input} type="number" min={1} max={3600} value={form.minDwellSec} onChange={set("minDwellSec")} />
+              <Field label="Min Dwell Time (s)" hint={`1 – ${MAX_DWELL_SEC}s on the site per visit`}>
+                <input className={input} type="number" min={1} max={MAX_DWELL_SEC} step={1} value={form.minDwellSec} onChange={set("minDwellSec")} required />
               </Field>
-              <Field label="Max Dwell Time (s)" hint={Number(form.maxDwellSec) < Number(form.minDwellSec) ? "Must be at least the min" : "1 – 3600"}>
-                <input className={input} type="number" min={Number(form.minDwellSec) || 1} max={3600} value={form.maxDwellSec} onChange={set("maxDwellSec")} />
+              <Field label="Max Dwell Time (s)" hint={Number(form.maxDwellSec) < Number(form.minDwellSec) ? "Must be at least the min" : "Each visit: random, min to max"}>
+                <input className={input} type="number" min={Number(form.minDwellSec) || 1} max={MAX_DWELL_SEC} step={1} value={form.maxDwellSec} onChange={set("maxDwellSec")} required />
               </Field>
             </div>
           </Section>
@@ -250,10 +259,21 @@ function visitPlanRows(form: Record<string, string>): [string, ReactNode][] {
   return [
     ["Duration", `${plan.days} day${plan.days === 1 ? "" : "s"}`],
     ["Concurrency", `${plan.concurrency} at a time`],
+    ["Day 1 devices", `${mobileVisits(plan.day1, plan.mobilePct)} phone · ${plan.day1 - mobileVisits(plan.day1, plan.mobilePct)} desktop`],
+    ["Dwell time", dwellRange(form)],
     ["Day 1", `${plan.day1.toLocaleString()} visits`],
     [`Day ${plan.days}`, `${plan.lastDay.toLocaleString()} visits`],
     ["Estimated total visits", <span key="t" className="font-semibold">{plan.total.toLocaleString()}</span>],
   ];
+}
+
+/** "30 – 120s" (or "60s" when min = max); a note while the fields are invalid. */
+function dwellRange(form: Record<string, string>): ReactNode {
+  const min = Number(form.minDwellSec);
+  const max = Number(form.maxDwellSec);
+  const ok = (n: number) => Number.isInteger(n) && n >= 1 && n <= MAX_DWELL_SEC;
+  if (!ok(min) || !ok(max) || max < min) return <span className="text-subtle">check the dwell time</span>;
+  return min === max ? `${min}s per visit` : `${min} – ${max}s per visit`;
 }
 
 /** The visit plan from the form, or null while a field is invalid. */
@@ -264,7 +284,7 @@ function visitPlan(form: Record<string, string>) {
   const concurrency = Number(form.concurrency);
   const valid = Number.isInteger(days) && days >= 1 && days <= MAX_DURATION_DAYS && Number.isInteger(day1) && day1 >= 1 && day1 <= MAX_DAY1_VISITS;
   if (!valid || !(pct >= 0 && pct <= MAX_DAILY_INCREASE_PCT) || !(Number.isInteger(concurrency) && concurrency >= 1)) return null;
-  return { days, day1, concurrency, lastDay: plannedVisits(day1, pct, days), total: plannedVisitsTotal(day1, pct, days) };
+  return { days, day1, concurrency, mobilePct: Number(form.mobilePct), lastDay: plannedVisits(day1, pct, days), total: plannedVisitsTotal(day1, pct, days) };
 }
 
 /** Under the Visit plan fields: the estimated total, from day 1 to the last day. */

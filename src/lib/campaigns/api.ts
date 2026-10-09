@@ -7,10 +7,14 @@ import {
   DEFAULT_DAILY_INCREASE_PCT,
   DEFAULT_DAY1_VISITS,
   DEFAULT_DURATION_DAYS,
+  DEFAULT_MAX_DWELL_SEC,
+  DEFAULT_MIN_DWELL_SEC,
+  DEFAULT_MOBILE_PCT,
   DEFAULT_TARGET_CTR,
   MAX_DAILY_INCREASE_PCT,
   MAX_DAY1_VISITS,
   MAX_DURATION_DAYS,
+  MAX_DWELL_SEC,
   type NewCampaign,
 } from "./types";
 
@@ -55,6 +59,13 @@ export function parseNewCampaign(body: Record<string, unknown>, proxyApis: numbe
       ? "Concurrency can only be 1: add more proxy API links in Settings to run visits at the same time."
       : `Concurrency must be 1 to ${maxConcurrency} (the proxy API links saved in Settings).`;
   }
+  const minDwellSec = optional(body.minDwellSec) ?? DEFAULT_MIN_DWELL_SEC;
+  if (!Number.isInteger(minDwellSec) || minDwellSec < 1 || minDwellSec > MAX_DWELL_SEC) return `Min dwell time must be 1 to ${MAX_DWELL_SEC} seconds.`;
+  const maxDwellSec = optional(body.maxDwellSec) ?? Math.max(minDwellSec, DEFAULT_MAX_DWELL_SEC);
+  if (!Number.isInteger(maxDwellSec) || maxDwellSec < 1 || maxDwellSec > MAX_DWELL_SEC) return `Max dwell time must be 1 to ${MAX_DWELL_SEC} seconds.`;
+  if (maxDwellSec < minDwellSec) return "Max dwell time must be at least the min dwell time.";
+  const mobilePct = optional(body.mobilePct) ?? DEFAULT_MOBILE_PCT;
+  if (!Number.isInteger(mobilePct) || mobilePct < 0 || mobilePct > 100) return "Mobile traffic must be 0 to 100%.";
   const targetCtr = optional(body.targetCtr) ?? DEFAULT_TARGET_CTR;
   if (!(targetCtr > 0 && targetCtr <= 100)) return "Target CTR must be between 0 and 100%.";
   const targetPosition = optional(body.targetPosition);
@@ -76,6 +87,9 @@ export function parseNewCampaign(body: Record<string, unknown>, proxyApis: numbe
     day1Visits,
     dailyIncreasePct,
     concurrency,
+    minDwellSec,
+    maxDwellSec,
+    mobilePct,
     targetCtr,
     targetPosition,
     weeklyGrowthPct,

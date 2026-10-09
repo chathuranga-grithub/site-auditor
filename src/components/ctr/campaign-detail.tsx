@@ -2,12 +2,13 @@
 
 // Auto CTR: one campaign. Its visit to the site through the proxy runs on the server while the
 // campaign is active (src/lib/campaigns/visits.ts); this page shows its console and results, the same
-// live. Then goals vs real numbers, visits done vs the plan, daily data.
+// live. Then goals vs real numbers, visits done vs the plan, daily data. Each campaign runs on one
+// computer: opened on another one, the page says which, and can move it there ("Run on this computer").
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { ArrowLeft, Loader2, Pause, Play, RefreshCw, Square, Trash2 } from "lucide-react";
+import { ArrowLeft, Loader2, Monitor, Pause, Play, RefreshCw, Square, Trash2 } from "lucide-react";
 import { daysBetween, summarize } from "@/lib/campaigns/metrics";
 import { todayInVietnam } from "@/lib/campaigns/site";
 import { plannedVisits, visitPlanProgress, type Campaign, type CampaignDay } from "@/lib/campaigns/types";
@@ -20,6 +21,8 @@ const HEARTBEAT_MS = 5 * 60_000;
 interface Heartbeat {
   status: Campaign["status"];
   canRunVisits: boolean;
+  here?: boolean;
+  computerName?: string | null;
   visit: { running: boolean; startedAt: number; run: number; runs: number; lanes?: number; pages: number; lastEventAt: number | null } | null;
   at: number;
 }
@@ -29,6 +32,7 @@ function heartbeatText(h: Heartbeat): string {
   const ago = (ms: number) => (ms < 60_000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60_000)}m`);
   if (h.status !== "active") return `campaign is ${h.status}`;
   if (!h.canRunVisits) return "up · active · visits don't run here (not on a computer)";
+  if (h.here === false) return `up · active · runs on ${h.computerName ?? "no computer yet"}, not this one`;
   if (!h.visit) return "up · active · no visit since the app started";
   const v = h.visit;
   const last = v.lastEventAt ? `, last line ${ago(h.at - v.lastEventAt)} ago` : "";
@@ -49,7 +53,7 @@ function VisitPlanTiles({ campaign: c, day, done, doneToday }: { campaign: Campa
       <StatTile label="Visits today" value={`${doneToday} / ${plan.today.toLocaleString()}`} detail={`done / planned · day ${day} of ${c.durationDays}`} />
       <StatTile label="Visits so far" value={`${done.toLocaleString()} / ${plan.soFar.toLocaleString()}`} detail="done / planned up to today" />
       <StatTile label="Balance" value={Math.max(0, plan.total - done).toLocaleString()} detail={`left of ${plan.total.toLocaleString()} planned in total`} />
-      <StatTile label="Plan" value={`${plan.total.toLocaleString()} visits`} detail={`${c.day1Visits} on day 1, +${c.dailyIncreasePct}% a day · ${c.concurrency} at a time`} />
+      <StatTile label="Plan" value={`${plan.total.toLocaleString()} visits`} detail={`${c.day1Visits} on day 1, +${c.dailyIncreasePct}% a day · ${c.concurrency} at a time · ${c.mobilePct}% on a phone · ${c.minDwellSec === c.maxDwellSec ? c.minDwellSec : `${c.minDwellSec}–${c.maxDwellSec}`}s on the site`} />
     </div>
   );
 }
@@ -57,6 +61,9 @@ function VisitPlanTiles({ campaign: c, day, done, doneToday }: { campaign: Campa
 interface Detail {
   campaign: Campaign;
   days: CampaignDay[];
+  /** This computer runs it; it could (the app runs on a computer, not on Vercel). */
+  here?: boolean;
+  canRunHere?: boolean;
 }
 
 export function CampaignDetail({ id }: { id: number }) {
@@ -124,8 +131,9 @@ export function CampaignDetail({ id }: { id: number }) {
   if (error && !data) return <Shell><Notice tone="error">{error}</Notice></Shell>;
   if (!data) return <Shell><div className="py-16 text-center text-sm text-muted">Loading…</div></Shell>;
 
-  const { campaign: c, days } = data;
+  const { campaign: c, days, here = false, canRunHere = false } = data;
   const s = summarize(c, days, todayInVietnam());
+  const runsOn = here ? "this computer" : (c.computerName ?? "no computer yet");
 
   return (
     <Shell>
@@ -138,12 +146,13 @@ export function CampaignDetail({ id }: { id: number }) {
               {(c.pageUrl ?? c.siteUrl).replace(/^https?:\/\//, "")}
             </a>{" "}
             · {c.startDate} → {c.endDate}
+            {isOpen(c.status) && <> · runs on {runsOn}</>}
           </span>
         }
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge status={c.status} />
-            {isOpen(c.status) && (
+            {isOpen(c.status) && here && (
               <button
                 type="button"
                 className={buttonClass.secondary}
@@ -218,6 +227,38 @@ export function CampaignDetail({ id }: { id: number }) {
         />
       )}
       {error && <Notice tone="error">{error}</Notice>}
+      {isOpen(c.status) && !here && (
+        <Notice tone="info">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span>
+              {c.computerName ? (
+                <>
+                  This campaign runs on <b>{c.computerName}</b>: its visits and ranking checks happen there, so its live console is shown
+                  there. Pause, Resume and Stop work from here too (that computer picks them up within a minute).
+                </>
+              ) : (
+                <>No computer runs this campaign yet. The first computer with the app running takes it within a minute.</>
+              )}
+            </span>
+            {canRunHere && (
+              <button
+                type="button"
+                className={buttonClass.secondary}
+                disabled={!!busy}
+                title="Run its visits and ranking checks on this computer from now on (the other computer stops them within a minute)"
+                onClick={() =>
+                  run("move", async () => {
+                    await api(`/api/ctr/campaigns/${id}`, { method: "PATCH", body: JSON.stringify({ move: true }) });
+                    follow(id);
+                  })
+                }
+              >
+                {busy === "move" ? <Loader2 className="size-3.5 animate-spin" /> : <Monitor className="size-3.5" />} Run on this computer
+              </button>
+            )}
+          </div>
+        </Notice>
+      )}
       <VisitRunView run={visit} />
       {ranking && (
         <Notice tone="info">

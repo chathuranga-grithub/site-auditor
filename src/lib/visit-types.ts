@@ -10,6 +10,9 @@ export const EXPECTED_COUNTRY = "VN";
 
 import type { NetworkType } from "./network-type";
 
+/** What the visit is made on: a desktop browser, or a phone (phone screen, touch, phone browser). */
+export type VisitDevice = "desktop" | "phone";
+
 /** Proxy returned by the proxy provider's API. */
 export interface ProxyInfo {
   /** "host:port" */
@@ -62,6 +65,8 @@ export interface VisitPage {
   /** Scrolled to the bottom and checked images (null when the page didn't load). */
   scroll?: ScrollResult | null;
   consoleErrors: string[];
+  /** Seconds spent reading the page after it loaded (visits that read each page). */
+  readSec?: number;
   /**
    * The page showed, but these files (e.g. a chat widget, tracker or video) were still loading
    * 30s later, so the browser never reported it fully loaded. A warning: visitors can use the page.
@@ -125,6 +130,10 @@ export interface VisitReport {
   cancelled: boolean;
   /** Whether each page was also checked on a phone screen. */
   mobileChecked: boolean;
+  /** What the visit was made on (older reports: desktop). */
+  device?: VisitDevice;
+  /** The exact device, e.g. "iPhone 15 (iOS 18.6)" (campaign visits). */
+  deviceName?: string;
 }
 
 /** How many internal pages the test found, and where. */
@@ -145,16 +154,28 @@ export interface Discovery {
   noSitemap: boolean;
 }
 
+/**
+ * Where a campaign visit is, for the steps shown on its page: the browser opening, the Google search,
+ * its CAPTCHA (only when Google asks), the click on the site's result, the site visited, all done.
+ */
+export type VisitStage = "browser" | "search" | "captcha" | "click" | "visit" | "done";
+
 /** Streamed from GET /api/ctr/campaigns/:id/visit, one JSON object per line. */
 export type VisitEvent =
   | { type: "step"; message: string }
+  | { type: "stage"; stage: VisitStage }
   /** A campaign's visit is several runs in a row: run `n` of `of` starts, with a new proxy IP. */
-  | { type: "run"; n: number; of: number; link?: { number: number; of: number } }
+  | { type: "run"; n: number; of: number; link?: { number: number; of: number }; device?: VisitDevice; deviceName?: string }
   | { type: "proxy"; proxy: ProxyInfo; exit: ExitInfo | null }
   | { type: "page"; page: VisitPage }
   | { type: "scroll"; scroll: ScrollResult }
   | { type: "discovered"; discovery: Discovery }
   | { type: "done"; report: VisitReport }
   | { type: "error"; message: string }
-  /** The proxy provider only allows a new IP after this many seconds. */
-  | { type: "wait"; seconds: number };
+  /**
+   * The visit is waiting: for `reason` (e.g. "a new proxy IP from the provider"), for `seconds` when
+   * that's known, else until "waited". No reason: the proxy provider's wait for a new IP.
+   */
+  | { type: "wait"; seconds: number | null; reason?: string }
+  /** The wait is over. */
+  | { type: "waited" };

@@ -120,8 +120,9 @@ export function buildChecklist(r: VisitReport): ChecklistItem[] {
     );
   }
 
-  // Phones and menus
-  if (!r.mobileChecked) add("phone", "Works on phones", "skip", "Phone check was turned off");
+  // Phones and menus. A campaign visit is on a phone or a desktop, without the separate phone check.
+  const noPhoneCheck = r.device === "phone" ? "This visit was on a phone (pages opened on the phone itself)" : r.device ? "This visit was on a desktop" : "Phone check was turned off";
+  if (!r.mobileChecked) add("phone", "Works on phones", "skip", noPhoneCheck);
   else {
     const checked = all.filter((p) => p.mobile);
     const bad = checked.filter((p) => mobileProblems(p.mobile!).length);
@@ -133,7 +134,7 @@ export function buildChecklist(r: VisitReport): ChecklistItem[] {
     );
   }
   const menus = start?.menus;
-  if (!r.mobileChecked) add("menu-phone", "Phone menu (☰) opens", "skip", "Phone check was turned off");
+  if (!r.mobileChecked) add("menu-phone", "Phone menu (☰) opens", "skip", noPhoneCheck);
   else if (!menus?.mobile) add("menu-phone", "Phone menu (☰) opens", "skip", notRun);
   else add("menu-phone", "Phone menu (☰) opens", ...phoneMenuStatus(menus.mobile));
 

@@ -23,20 +23,92 @@ export class ProxyWaitError extends Error {
 // `visited`: a campaign visit has used that IP (it's never given to another visit).
 const lastProxy = new Map<string, { config: ProxyConfig; expiresAt: number; visited: boolean }>();
 
+// Proxy addresses Google kept blocking (CAPTCHAs not solved): never reused as the link's current IP.
+const googleBlocked = new Set<string>();
+
+/** Google showed that IP a CAPTCHA (e.g. in a ranking check): never hand it to a visit. */
+export function burnProxy(apiUrl: string, address: string): void {
+  googleBlocked.add(address);
+  const last = lastProxy.get(apiUrl);
+  if (last && last.config.address === address) last.visited = true;
+}
+
+/** How many campaign visits may use one proxy IP (a new IP when the provider gives one, else the current one again). */
+export const MAX_VISITS_PER_IP = 3;
+
+// Campaign visits given each proxy address so far. In memory only, like lastProxy.
+const visitsPerIp = new Map<string, number>();
+
+/** Counts a visit on that proxy address. */
+function countVisitOn<T extends ProxyConfig>(config: T): T {
+  visitsPerIp.set(config.address, (visitsPerIp.get(config.address) ?? 0) + 1);
+  return config;
+}
+
 /**
- * A proxy IP no visit has used yet, for a campaign visit: the link's latest one if it's still valid
- * and unused (e.g. a ranking check just got it, which made the provider's "new IP in N seconds"
- * start), else a new one from the API (ProxyWaitError while the provider makes us wait).
+ * A proxy IP for a campaign visit: the link's latest one if it's still valid and unused (e.g. a
+ * ranking check just got it, which made the provider's "new IP in N seconds" start), else a new one
+ * from the API. While the provider makes us wait for a new one, the link's current IP (ShopLike's
+ * getCurrentProxy, same token) is used again (current: true), up to MAX_VISITS_PER_IP visits on it
+ * and unless Google kept blocking it; otherwise ProxyWaitError (wait for the new one), as before.
  */
-export async function getUnvisitedProxy(apiUrl: string): Promise<ProxyConfig & { fromEarlier: boolean }> {
+export async function getUnvisitedProxy(apiUrl: string): Promise<ProxyConfig & { fromEarlier: boolean; current: boolean; visitNo: number }> {
   const last = lastProxy.get(apiUrl);
   if (last && !last.visited && Date.now() < last.expiresAt) {
     last.visited = true;
-    return { ...last.config, fromEarlier: true };
+    const config = countVisitOn(last.config);
+    return { ...config, fromEarlier: true, current: false, visitNo: visitsPerIp.get(config.address)! };
   }
-  const config = await getProxy(apiUrl);
-  lastProxy.get(apiUrl)!.visited = true;
-  return { ...config, fromEarlier: false };
+  try {
+    const config = countVisitOn(await getProxy(apiUrl));
+    lastProxy.get(apiUrl)!.visited = true;
+    return { ...config, fromEarlier: false, current: false, visitNo: visitsPerIp.get(config.address)! };
+  } catch (err) {
+    if (!(err instanceof ProxyWaitError)) throw err;
+    const current = await getCurrentProxy(apiUrl).catch(() => null);
+    if (!current || googleBlocked.has(current.address) || (visitsPerIp.get(current.address) ?? 0) >= MAX_VISITS_PER_IP) throw err;
+    const latest = lastProxy.get(apiUrl);
+    if (latest?.config.address === current.address) latest.visited = true;
+    countVisitOn(current);
+    return { ...current, fromEarlier: false, current: true, visitNo: visitsPerIp.get(current.address)! };
+  }
+}
+
+/**
+ * ShopLike's getCurrentProxy link for a proxy API link, with the same token: the link's getNewProxy
+ * swapped for getCurrentProxy, or built from its access_token on ShopLike. Null for other providers.
+ */
+function currentProxyUrl(apiUrl: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(apiUrl.trim());
+  } catch {
+    return null;
+  }
+  if (/getNewProxy/i.test(url.pathname)) {
+    url.pathname = url.pathname.replace(/getNewProxy/i, "getCurrentProxy");
+    return url.toString();
+  }
+  const token = url.searchParams.get("access_token");
+  if (!/(^|\.)shoplike\.vn$/i.test(url.hostname) || !token) return null;
+  return `https://${url.hostname}/Api/getCurrentProxy?access_token=${encodeURIComponent(token)}`;
+}
+
+/**
+ * The link's current proxy (the one it gave last), asked from the provider (currentProxyUrl); else
+ * the last one this app got, while it's still valid. Null when there's none.
+ */
+export async function getCurrentProxy(apiUrl: string): Promise<ProxyConfig | null> {
+  const currentUrl = currentProxyUrl(apiUrl);
+  if (currentUrl) {
+    try {
+      return await requestProxy(apiUrl, currentUrl);
+    } catch {
+      /* fall back to the last one below */
+    }
+  }
+  const last = lastProxy.get(apiUrl);
+  return last && Date.now() < last.expiresAt ? last.config : null;
 }
 
 /** A fresh proxy if the provider gives one; otherwise the last one if still valid. */
@@ -51,10 +123,15 @@ export async function getProxyOrReuse(apiUrl: string): Promise<ProxyConfig & { r
   }
 }
 
-export async function getProxy(apiUrl: string): Promise<ProxyConfig> {
+export function getProxy(apiUrl: string): Promise<ProxyConfig> {
+  return requestProxy(apiUrl, apiUrl);
+}
+
+/** Asks `requestUrl` (the link, or its getCurrentProxy) for a proxy; remembered as the link's last one. */
+async function requestProxy(apiUrl: string, requestUrl: string): Promise<ProxyConfig> {
   let url: URL;
   try {
-    url = new URL(apiUrl.trim());
+    url = new URL(requestUrl.trim());
   } catch {
     throw new Error("The proxy API link isn't a valid URL.");
   }

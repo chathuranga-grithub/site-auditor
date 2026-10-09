@@ -2,9 +2,10 @@
 
 // The Chrome profile: the picker on the Settings page. Lists this computer's Chrome profiles by name;
 // Save stores it for the app (behind the scenes, a copy in the app's own folder: Chrome won't let the
-// app use it in place), and Update saves it again after the profile was changed in Chrome. Open opens the
-// saved one in Chrome to add extensions and sign in (those don't carry over from Chrome's own profile).
-// None = fresh profiles. The words on screen are "save", "update" and "open" only.
+// app use it in place), and Save (on the saved one) saves it again after the profile was changed in Chrome. Open opens the
+// saved one in Chrome to sign in (sign-ins don't carry over from Chrome's own profile) or add extensions.
+// None = fresh profiles. Each computer saves its own (src/lib/local-settings.ts). The words on screen are
+// "save", "update" and "open" only.
 
 import { useEffect, useState } from "react";
 import { ExternalLink, Loader2, RefreshCw, Trash2, UserRound } from "lucide-react";
@@ -100,12 +101,12 @@ export function ChromeProfileField() {
         {!changed && status?.selected && (
           <>
             {status.dir && (
-              <button type="button" onClick={() => call("POST", { open: true })} disabled={busy || status.open} className={button} title="Open it in Chrome to add or turn on extensions and sign in">
+              <button type="button" onClick={() => call("POST", { open: true })} disabled={busy || status.open} className={button} title="Open it in Chrome to sign in to sites or add extensions (extensions saved from Chrome then need adding again there)">
                 <ExternalLink className="size-3" /> Open
               </button>
             )}
             <button type="button" onClick={() => call("POST", { name: status.selected, update: true })} disabled={busy || status.open} className={button} title="Save it again from Chrome (replaces extensions and sign-ins added with Open)">
-              <RefreshCw className="size-3" /> Update
+              <RefreshCw className="size-3" /> Save
             </button>
             <button type="button" onClick={() => call("DELETE")} disabled={busy} aria-label="Stop using a Chrome profile" title="Back to fresh profiles" className={`${button} hover:text-status-critical`}>
               <Trash2 className="size-3" />
@@ -116,20 +117,20 @@ export function ChromeProfileField() {
       <div className="text-xs text-subtle">
         {status?.selected && status.dir && status.open ? (
           <>
-            Open in Chrome: add or turn on extensions and sign in, then close that Chrome window. Visits and ranking checks pick it up after.
+            Open in Chrome: sign in or add extensions, then close that Chrome window. Visits and ranking checks pick it up after.
           </>
         ) : status?.selected && status.dir ? (
           <>
             <span title={status.dir}>
-              Using <b className="text-muted">{status.selected}</b>
+              This computer uses <b className="text-muted">{status.selected}</b>
               {status.copiedAt ? ` (saved ${new Date(status.copiedAt).toLocaleString()})` : ""}. Click{" "}
-              <b className="text-muted">Open</b> to add extensions or sign in.
+              <b className="text-muted">Open</b> to sign in to sites.
             </span>
           </>
         ) : status?.selected ? (
           <>
-            <b className="text-muted">{status.selected}</b> isn&apos;t saved on this computer, so no profile is used here (a fresh one each time). Click{" "}
-            <b className="text-muted">Update</b> to save it here.
+            <b className="text-muted">{status.selected}</b> was saved on this computer, but its copy is gone, so no profile is used here (a fresh one each time). Click{" "}
+            <b className="text-muted">Save</b> to save it here.
           </>
         ) : status?.source === "env" && status.dir ? (
           <>
