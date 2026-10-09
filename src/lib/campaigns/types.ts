@@ -16,7 +16,7 @@ export const MAX_DAILY_INCREASE_PCT = 100;
 export const DEFAULT_CONCURRENCY = 1;
 /** Dwell time: how long each visit stays on the site, a random number of seconds between the min and the max. */
 export const DEFAULT_MIN_DWELL_SEC = 30;
-export const DEFAULT_MAX_DWELL_SEC = 120;
+export const DEFAULT_MAX_DWELL_SEC = 180;
 export const MAX_DWELL_SEC = 3600;
 /** Mobile traffic: the % of each day's visits made on a phone; the rest are on a desktop. */
 export const DEFAULT_MOBILE_PCT = 70;

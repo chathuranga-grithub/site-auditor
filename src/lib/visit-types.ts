@@ -67,6 +67,8 @@ export interface VisitPage {
   consoleErrors: string[];
   /** Seconds spent reading the page after it loaded (visits that read each page). */
   readSec?: number;
+  /** Small scrolls up and down made while reading it. */
+  readScrolls?: number;
   /**
    * The page showed, but these files (e.g. a chat widget, tracker or video) were still loading
    * 30s later, so the browser never reported it fully loaded. A warning: visitors can use the page.
@@ -134,6 +136,10 @@ export interface VisitReport {
   device?: VisitDevice;
   /** The exact device, e.g. "iPhone 15 (iOS 18.6)" (campaign visits). */
   deviceName?: string;
+  /** How the site was reached: by clicking its result on Google, or opened directly by its URL. */
+  reachedBy?: "google" | "direct";
+  /** Seconds on the site: from opening it until leaving (campaign visits). */
+  onSiteSec?: number;
 }
 
 /** How many internal pages the test found, and where. */

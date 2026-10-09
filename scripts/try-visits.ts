@@ -1,7 +1,7 @@
 // Local test: N campaign visits at the same time, as a campaign runs them (one proxy link each, the
 // saved Chrome profile, a random device), printing every step per lane with the time and checking
 // each browser keeps one tab. Nothing is written to the database (visits aren't counted).
-// Run: npx tsx --env-file=.env.local scripts/try-visits.ts <campaignId> [lanes=2] [search=1|0] [dwellSec=60]
+// Run: npx tsx --env-file=.env.local scripts/try-visits.ts <campaignId | siteUrl> [lanes=2] [search=1|0] [dwellSec=60]
 
 import { chromium, type BrowserContext } from "playwright-core";
 import { getCampaign } from "../src/lib/campaigns/db";
@@ -36,7 +36,8 @@ const tabWatch = setInterval(() => {
 
 (async () => {
   const { runVisitTest } = await import("../src/lib/visit-runner");
-  const c = await getCampaign(Number(id));
+  // A campaign's number, or a site's URL (then searched by its URL, in Vietnam).
+  const c = /^https?:/.test(id) ? { id: 0, siteUrl: id, keyword: id, country: "VN" } : await getCampaign(Number(id));
   if (!c) throw new Error(`No campaign ${id}`);
   console.log(`${at()} campaign ${c.id}: ${c.siteUrl} · "${c.keyword}" · ${lanesArg} lanes · search ${searchArg === "1" ? "on" : "off"} · dwell ${dwellArg}s`);
   const controller = new AbortController();
@@ -58,7 +59,7 @@ const tabWatch = setInterval(() => {
         deviceProfile: model,
         mobile: false,
         freshProxy: true,
-        searchFirst: searchArg === "1" ? { keyword: c.keyword, country: c.country } : undefined,
+        searchFirst: searchArg === "1" ? { keyword: c.keyword, country: c.country, neverSkip: true } : undefined,
         claimIp: claimProxyIp,
         profileDir: profile?.dir,
         dwellSec: Number(dwellArg),
@@ -72,7 +73,8 @@ const tabWatch = setInterval(() => {
           } else if (e.type === "page") log(`[page] ${e.page.kind} ${e.page.ok ? "OK" : "FAIL"} ${e.page.status ?? ""} ${e.page.finalUrl.slice(0, 70)} ${e.page.readSec != null ? `read ${e.page.readSec}s` : ""} ${e.page.error ?? ""}`);
         },
       });
-      const result = `exitEnd=${report.exitEnd ? `${report.exitEnd.ip} in ${report.exitEnd.lookupMs}ms` : "null"} stopReason=${report.stopReason ?? "none"} start=${report.start?.ok ? "OK" : "FAIL"} pages=${report.pages.length} stages=${stages.join(">")}`;
+      const ok = [report.start, ...report.pages].filter((p) => p?.ok);
+      const result = `reached=${report.reachedBy} onSite=${report.onSiteSec}s pages=${ok.length} scrolls=${ok.map((p) => `${p!.scroll?.steps ?? 0}+${p!.readScrolls ?? 0}`).join(",")} exitEnd=${report.exitEnd ? `${report.exitEnd.ip} in ${report.exitEnd.lookupMs}ms` : "null"} stopReason=${report.stopReason ?? "none"} start=${report.start?.ok ? "OK" : "FAIL"} pages=${report.pages.length} stages=${stages.join(">")}`;
       log(`DONE ${result}`);
       return result;
     } catch (err) {

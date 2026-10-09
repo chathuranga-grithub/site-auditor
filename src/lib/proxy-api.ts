@@ -21,10 +21,16 @@ export class ProxyWaitError extends Error {
 // The last proxy handed out by each API link, reused while it's still valid (proxyTimeout) when the
 // provider says "wait N seconds" for a new one. In memory only; this runs on one local computer.
 // `visited`: a campaign visit has used that IP (it's never given to another visit).
-const lastProxy = new Map<string, { config: ProxyConfig; expiresAt: number; visited: boolean }>();
+// On globalThis: one copy for the whole server (`next dev` loads this file more than once, e.g. for
+// ranking checks and for visits, and again on a code reload), so what one marks the other sees.
+const shared = globalThis as typeof globalThis & {
+  __proxyApi?: { lastProxy: Map<string, { config: ProxyConfig; expiresAt: number; visited: boolean }>; googleBlocked: Set<string>; visitsPerIp: Map<string, number> };
+};
+const state = (shared.__proxyApi ??= { lastProxy: new Map(), googleBlocked: new Set(), visitsPerIp: new Map() });
+const lastProxy = state.lastProxy;
 
 // Proxy addresses Google kept blocking (CAPTCHAs not solved): never reused as the link's current IP.
-const googleBlocked = new Set<string>();
+const googleBlocked = state.googleBlocked;
 
 /** Google showed that IP a CAPTCHA (e.g. in a ranking check): never hand it to a visit. */
 export function burnProxy(apiUrl: string, address: string): void {
@@ -37,7 +43,7 @@ export function burnProxy(apiUrl: string, address: string): void {
 export const MAX_VISITS_PER_IP = 3;
 
 // Campaign visits given each proxy address so far. In memory only, like lastProxy.
-const visitsPerIp = new Map<string, number>();
+const visitsPerIp = state.visitsPerIp;
 
 /** Counts a visit on that proxy address. */
 function countVisitOn<T extends ProxyConfig>(config: T): T {

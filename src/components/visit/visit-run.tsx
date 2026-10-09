@@ -109,6 +109,10 @@ export function useVisitRun() {
   const [now, setNow] = useState(() => Date.now());
   const abortRef = useRef<AbortController | null>(null);
   const [openPage, setOpenPage] = useState<VisitPage | null>(null);
+  /** Every visit finished since the page started following (newest last), for the visits table. */
+  const [visits, setVisits] = useState<FinishedVisit[]>([]);
+  /** The run each lane is on, to number the finished visits. */
+  const runOf = useRef<Record<number, { n: number; of: number }>>({});
   // Each start / follow gets a number; lines from an older one (still arriving) are ignored.
   const genRef = useRef(0);
 
@@ -135,6 +139,8 @@ export function useVisitRun() {
     setError(null);
     setCommon([]);
     setLanes({});
+    setVisits([]);
+    runOf.current = {};
     setSelected(1);
     setRunning(true);
     const controller = new AbortController();
@@ -143,7 +149,13 @@ export function useVisitRun() {
     const handle = (e: VisitEvent & { at?: number; lane?: number }) => {
       const at = e.at ?? Date.now();
       if (e.type === "wait" || e.type === "waited") setNow(Date.now());
-      if (e.type === "done") setReports((n) => n + 1);
+      const laneNo = e.lane ?? 1;
+      if (e.type === "run") runOf.current[laneNo] = { n: e.n, of: e.of };
+      if (e.type === "done") {
+        setReports((n) => n + 1);
+        const run = runOf.current[laneNo] ?? null;
+        setVisits((v) => [...v, { lane: laneNo, run, report: e.report, at }]);
+      }
       if (!e.lane) {
         if (e.type === "step") setCommon((s) => [...s, e.message]);
         else if (e.type === "error") setError(e.message);
@@ -209,12 +221,13 @@ export function useVisitRun() {
     notLocal: !!env && !env.local,
     openPage,
     setOpenPage,
+    visits,
   };
 }
 
 /** The visit's notices, then its console: one tab per visit running side by side (when several do), and the chosen visit's results. */
 export function VisitRunView({ run }: { run: VisitRun }) {
-  const { running, common, lanes, laneNumbers, selected, setSelected, error, now, notLocal, openPage, setOpenPage } = run;
+  const { running, common, lanes, laneNumbers, selected, setSelected, error, now, notLocal, openPage, setOpenPage, visits } = run;
   const lane = lanes[selected] ?? null;
   const tabbed = laneNumbers.length > 1;
   return (
@@ -270,6 +283,8 @@ export function VisitRunView({ run }: { run: VisitRun }) {
           </>
         )
       )}
+
+      {visits.length > 0 && <VisitsTable visits={visits} tabbed={tabbed} onOpen={setOpenPage} />}
 
       {lane && (lane.report || lane.pages.length > 0) && <Results report={lane.report} pages={lane.pages} />}
 
@@ -368,6 +383,15 @@ const STEPS: { stage: VisitStage; label: string }[] = [
  * The visit's steps in order, the one it's on now highlighted. Passed without a CAPTCHA (Google
  * didn't ask) or without a click (the site wasn't on Google's first page): that step is crossed out.
  */
+/** Why a step was passed by: shown next to it. */
+function skipWhy(stage: VisitStage, l: Lane): string {
+  if (stage === "captcha") return "Google didn't ask";
+  // Clicked only from Google's results: not reached when the CAPTCHA wasn't solved, or the site wasn't there.
+  if (l.captcha && l.steps.some((m) => m.includes("CAPTCHA wasn't solved") || m.includes("it wasn't solved"))) return "CAPTCHA not solved: opened directly";
+  if (l.steps.some((m) => m.includes("Only Vietnam can be searched"))) return "no Google search: opened directly";
+  return "not on Google's first page: opened directly";
+}
+
 function VisitSteps({ lane: l, running }: { lane: Lane; running: boolean }) {
   if (!l.stage) return null;
   const at = STEPS.findIndex((s) => s.stage === l.stage);
@@ -382,7 +406,7 @@ function VisitSteps({ lane: l, running }: { lane: Lane; running: boolean }) {
           done: "bg-status-good/10 text-status-good ring-status-good/30",
           now: "bg-accent/15 font-medium text-ink ring-accent/50",
           failed: "bg-status-critical/10 text-status-critical ring-status-critical/30",
-          skipped: "text-subtle line-through ring-line",
+          skipped: "text-subtle ring-line",
           next: "text-subtle ring-line",
         }[state];
         return (
@@ -396,8 +420,8 @@ function VisitSteps({ lane: l, running }: { lane: Lane; running: boolean }) {
               {state === "done" && <Check aria-hidden className="size-3" />}
               {state === "now" && <Loader2 aria-hidden className="size-3 animate-spin" />}
               {state === "failed" && <CircleX aria-hidden className="size-3" />}
-              {s.label}
-              {state === "skipped" && <span className="sr-only"> (not needed)</span>}
+              {state === "skipped" ? <s>{s.label}</s> : s.label}
+              {state === "skipped" && <span className="text-[10px]">({skipWhy(s.stage, l)})</span>}
             </span>
           </li>
         );
@@ -416,6 +440,109 @@ function LastRun({ lane, onOpen }: { lane: Lane; onOpen: (page: VisitPage) => vo
       <LiveLog pages={pages} total={discovery ? discovery.total + 1 : null} onOpen={onOpen} />
     </div>
   );
+}
+
+/** A visit that finished (reached the site or not), for the visits table. */
+interface FinishedVisit {
+  lane: number;
+  run: { n: number; of: number } | null;
+  report: VisitReport;
+  at: number;
+}
+
+/** Scrolls on one page: going down it to the bottom, and the small ones while reading it. */
+const pageScrolls = (p: VisitPage) => (p.scroll?.steps ?? 0) + (p.readScrolls ?? 0);
+
+/**
+ * Every visit finished so far, newest first: how it reached the site, the pages it visited, its time
+ * on the site and its scrolling. A row opens to show each page (time on it, scrolls, read to the bottom).
+ */
+function VisitsTable({ visits, tabbed, onOpen }: { visits: FinishedVisit[]; tabbed: boolean; onOpen: (page: VisitPage) => void }) {
+  const done = visits.filter((v) => !v.report.stopReason && !v.report.cancelled && v.report.start?.ok);
+  const avg = (f: (v: FinishedVisit) => number) => (done.length ? Math.round(done.reduce((n, v) => n + f(v), 0) / done.length) : 0);
+  const pagesOf = (v: FinishedVisit) => [v.report.start, ...v.report.pages].filter((p): p is VisitPage => !!p && p.ok);
+  return (
+    <Panel title={`Visits (${visits.length})`} bodyClassName="p-0">
+      {done.length > 0 && (
+        <p className="border-b border-line px-4 py-2 text-xs text-muted">
+          {done.length} completed · on average {avg((v) => pagesOf(v).length)} pages, {formatSec(avg((v) => v.report.onSiteSec ?? 0))} on the site,{" "}
+          {avg((v) => pagesOf(v).reduce((n, p) => n + pageScrolls(p), 0))} scrolls
+        </p>
+      )}
+      {/* One line per visit (details on click); a long list scrolls inside, the page stays short. */}
+      <ol className="max-h-80 divide-y divide-line overflow-y-auto">
+        {[...visits].reverse().map((v) => {
+          const r = v.report;
+          const pages = pagesOf(v);
+          const scrolls = pages.reduce((n, p) => n + pageScrolls(p), 0);
+          const bottom = pages.filter((p) => p.scroll?.reachedBottom).length;
+          const ok = !r.stopReason && !r.cancelled && !!r.start?.ok;
+          const facts = [
+            r.deviceName ?? r.device ?? "desktop",
+            r.exit?.ip,
+            r.reachedBy === "google" ? "clicked on Google" : r.reachedBy === "direct" ? "opened directly" : null,
+          ].filter(Boolean);
+          return (
+            <li key={`${v.at}-${v.lane}`}>
+              <details className="group">
+                <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2.5 text-xs hover:bg-canvas/40">
+                  <span className="flex items-center gap-1.5 font-medium text-ink">
+                    {ok ? <CircleCheck aria-hidden className="size-3.5 text-status-good" /> : <CircleX aria-hidden className="size-3.5 text-status-critical" />}
+                    {v.run ? `Visit ${v.run.n} of ${v.run.of}` : "Visit"}
+                    {tabbed && <span className="font-normal text-subtle">· lane {v.lane}</span>}
+                  </span>
+                  <span className="text-muted">{facts.join(" · ")}</span>
+                  {ok ? (
+                    <span className="ml-auto flex flex-wrap gap-x-4 font-mono text-ink">
+                      <span>{pages.length} pages</span>
+                      <span>{formatSec(r.onSiteSec ?? 0)} on site</span>
+                      <span>{scrolls} scrolls</span>
+                      <span className="text-muted">{bottom}/{pages.length} read to the bottom</span>
+                    </span>
+                  ) : (
+                    <span className="ml-auto text-status-critical">{r.cancelled ? "Stopped" : (r.stopReason ?? r.start?.error ?? "Didn't reach the site")}</span>
+                  )}
+                </summary>
+                {pages.length > 0 && (
+                  <table className="mb-2 w-full text-xs">
+                    <thead>
+                      <tr className="text-left text-subtle">
+                        <th className="px-4 py-1 font-normal">Page</th>
+                        <th className="px-2 py-1 font-normal">Loaded in</th>
+                        <th className="px-2 py-1 font-normal">Read for</th>
+                        <th className="px-2 py-1 font-normal">Scrolls</th>
+                        <th className="px-4 py-1 font-normal">To the bottom</th>
+                      </tr>
+                    </thead>
+                    <tbody className="font-mono">
+                      {pages.map((p, i) => (
+                        <tr key={i} className="border-t border-line/60">
+                          <td className="max-w-0 truncate px-4 py-1">
+                            <button type="button" className="truncate text-link hover:underline" onClick={() => onOpen(p)} title={p.finalUrl}>
+                              {p.kind === "start" ? "Start · " : ""}
+                              {pathOf(p.finalUrl)}
+                            </button>
+                          </td>
+                          <td className="px-2 py-1">{p.loadMs != null ? formatMs(p.loadMs) : "–"}</td>
+                          <td className="px-2 py-1">{p.readSec != null ? formatSec(p.readSec) : "–"}</td>
+                          <td className="px-2 py-1">{pageScrolls(p)}</td>
+                          <td className="px-4 py-1">{p.scroll?.reachedBottom ? "yes" : "no"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </details>
+            </li>
+          );
+        })}
+      </ol>
+    </Panel>
+  );
+}
+
+function formatSec(s: number) {
+  return s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
 }
 
 function CommonSteps({ steps }: { steps: string[] }) {

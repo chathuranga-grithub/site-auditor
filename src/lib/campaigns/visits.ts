@@ -240,9 +240,10 @@ async function run(c: VisitCampaign, v: LiveVisit) {
             deviceProfile: model,
             mobile: false,
             freshProxy: true,
-            // Searches Google and clicks the site's result (a CAPTCHA is waited for until it's solved);
-            // not on the first page, or the search failing: the site is opened directly.
-            searchFirst: { keyword: c.keyword, country: c.country },
+            // Searches Google and clicks the site's result: the only way a campaign visit reaches the site.
+            // Google not showing results (CAPTCHA not solved, consent page, the search failing) starts the
+            // run again in a new browser; the site not in the results means no visit (tried again).
+            searchFirst: { keyword: c.keyword, country: c.country, neverSkip: true },
             claimIp: claimProxyIp,
             profileDir: profile?.dir,
             dwellSec: dwellTime(c),

@@ -3,6 +3,8 @@
 // external links or ads), then opens each page once, scrolls it and checks it loads cleanly.
 // This is a QA check that the site works for a visitor in that location, not a traffic tool.
 
+import os from "node:os";
+import path from "node:path";
 import { chromium, devices, type Browser, type BrowserContext, type BrowserContextOptions, type Page } from "playwright-core";
 import { actAsDevice, deviceLabel, deviceUserAgent, type DeviceProfile } from "./device-profiles";
 import { MAX_VISITS_PER_IP, burnProxy, getProxyOrReuse, getUnvisitedProxy } from "./proxy-api";
@@ -169,6 +171,8 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
     let main: Page;
     let fromGoogle: { link: string } | null = null;
     let claimedIp: string | null = null;
+    // TEMPORARY (testing): set when the site is opened directly after an unsolved CAPTCHA (see below).
+    let openedDirectly = false;
     // A Google CAPTCHA not solved in CAPTCHA_WAIT_MS: the browser is closed and opened again
     // through the same proxy (same IP), up to CAPTCHA_TRIES times; then the run gets a new IP.
     for (let attempt = 1; ; attempt++) {
@@ -220,8 +224,19 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
         break;
       } catch (err) {
         if (!(err instanceof CaptchaTimeoutError) || stopped()) throw err;
+        // TEMPORARY, for testing only, until a proper solution for Google's CAPTCHA is found: a CAPTCHA
+        // not solved the first time opens the site directly (by its URL, no click on Google's result),
+        // instead of reopening the browser on the same IP and then trying a new IP. Turn it off with
+        // TEMP_OPEN_DIRECTLY_ON_CAPTCHA = false to go back to "only ever through Google".
+        if (TEMP_OPEN_DIRECTLY_ON_CAPTCHA) {
+          burnProxy(proxyApiUrl, proxy.address); // Google blocked this IP: not handed out again
+          send({ type: "step", message: `The CAPTCHA wasn't solved in ${CAPTCHA_WAIT_MS / 1000}s: opening the site directly instead (temporary, for testing).` });
+          openedDirectly = true;
+          break;
+        }
         if (attempt >= CAPTCHA_TRIES) {
-          // Google keeps blocking this IP: never used again as the link's current IP.
+          // Google keeps blocking this IP: never used again as the link's current IP; the run starts again
+          // with a new IP (the site is only ever reached through Google).
           burnProxy(proxyApiUrl, proxy.address);
           throw new GoogleBlockedError(`The CAPTCHA wasn't solved in ${CAPTCHA_WAIT_MS / 1000}s, ${CAPTCHA_TRIES} times on this IP`);
         }
@@ -231,6 +246,12 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
       }
     }
     if (stopped()) return finish(report);
+    // Reached only through Google (neverSkip): the site not in its results means no visit this time
+    // (not counted; the run tries again), never the site opened directly.
+    if (searchFirst?.neverSkip && !fromGoogle && !openedDirectly) {
+      report.stopReason = `The site wasn't found in Google's results for “${searchFirst.keyword}”, so it wasn't opened (it's only visited through Google).`;
+      return finish(report);
+    }
 
     // The sitemap is read through the proxy too, so every request to the site comes from there.
     const sitemap = readSitemap(new URL(url).origin, proxiedFetcher(context)).catch(() => null);
@@ -245,6 +266,8 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
       dwellTimer = setTimeout(() => openTabs.forEach((t) => void (t === main ? t.goto("about:blank") : t.close()).catch(() => {})), dwellSec * 1000);
     }
     const page = main;
+    report.reachedBy = fromGoogle ? "google" : "direct";
+    const onSiteFrom = Date.now();
     // Reading one page takes at most a quarter of the time on the site (10s at least), so a visit sees several pages.
     const readCap = dwellSec ? Math.min(READ_MAX_SEC, Math.max(10, Math.round(dwellSec / 4))) : READ_MAX_SEC;
     const start = fromGoogle
@@ -378,6 +401,8 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
         send({ type: "waited" });
       }
     }
+
+    report.onSiteSec = Math.round((Date.now() - onSiteFrom) / 1000);
 
     // 6. Same IP and country at the end?
     if (!stopped() && targets.length) {
@@ -613,6 +638,8 @@ async function searchGoogleFirst(
       } else if (!signal.aborted) {
         // Its tab (or the browser) was closed while waiting: the visit can't go on in it; tried again.
         if (tab.isClosed()) throw new GoogleBlockedError("The browser window was closed while waiting for the CAPTCHA");
+        // What was showing then (still Google's CAPTCHA, another one after it…): its address and a picture.
+        send({ type: "step", message: `Still on ${tab.url().slice(0, 100)} after ${CAPTCHA_WAIT_MS / 1000}s${await saveShot(tab)}.` });
         throw new CaptchaTimeoutError(`The CAPTCHA wasn't solved in ${CAPTCHA_WAIT_MS / 1000}s`);
       }
     }
@@ -636,7 +663,9 @@ async function searchGoogleFirst(
         : results.length
           ? "The site isn't on Google's first page"
           : "Couldn't find the site on Google's results page";
-    send({ type: "step", message: `${where} for “${keyword}”.${link ? "" : " Opening it directly…"}` });
+    // Not found: where Google left the tab, and a picture of it, to see why (e.g. not a results page).
+    const seen = link ? "" : ` (page: ${tab.url().slice(0, 120)}${await saveShot(tab)})`;
+    send({ type: "step", message: `${where} for “${keyword}”${seen}.${link || neverSkip ? "" : " Opening it directly…"}` });
     return link ? { link } : null;
   } catch (err) {
     if (err instanceof GoogleBlockedError) throw err;
@@ -648,6 +677,12 @@ async function searchGoogleFirst(
     release();
   }
 }
+
+/**
+ * TEMPORARY (testing): true = a CAPTCHA not solved the first time opens the site directly by its URL.
+ * Remove once there's a proper solution for Google's CAPTCHA (campaign visits must click the result).
+ */
+const TEMP_OPEN_DIRECTLY_ON_CAPTCHA = true;
 
 /** How many browsers a visit opens on one proxy IP for an unsolved CAPTCHA, before getting a new IP. */
 const CAPTCHA_TRIES = 3;
@@ -704,6 +739,12 @@ async function clickResult(tab: Page, link: string): Promise<{ status(): number 
   const moved = await Promise.race([nav.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), CLICK_WAIT_MS))]);
   if (moved || offGoogle(new URL(tab.url()))) return nav;
   return tab.goto(link, { waitUntil: "domcontentloaded", referer: googleUrl });
+}
+
+/** A screenshot of the tab in the temp folder, for a step message: " · screenshot <path>", or "". */
+async function saveShot(tab: Page): Promise<string> {
+  const file = path.join(os.tmpdir(), `site-auditor-google-${Date.now()}.png`);
+  return tab.screenshot({ path: file, timeout: 5_000 }).then(() => ` · screenshot ${file}`, () => "");
 }
 
 /** The IP check at the end of a visit: at most this long. */
@@ -784,7 +825,10 @@ async function checkPage(
 
     result.scroll = await scrollPage(page, scrollOpts).catch(() => null);
     // Not part of the load time: measured above. Cut short (dwell time up, stopped): no time recorded.
-    if (read && result.ok) result.readSec = await readPage(page, read.until, read.maxSec).catch(() => undefined);
+    if (read && result.ok) {
+      const r = await readPage(page, read.until, read.maxSec).catch(() => null);
+      if (r) [result.readSec, result.readScrolls] = [r.sec, r.scrolls];
+    }
   } catch (err) {
     result.error = friendly(err);
   } finally {
@@ -800,10 +844,11 @@ async function checkPage(
 }
 
 /** Stays on the page as if reading it: a pause from its amount of text, with a small scroll every few seconds. Returns the seconds spent. */
-async function readPage(page: Page, until: number | null, maxSec = READ_MAX_SEC): Promise<number> {
+async function readPage(page: Page, until: number | null, maxSec = READ_MAX_SEC): Promise<{ sec: number; scrolls: number }> {
   const words = await page.evaluate(() => (document.body?.innerText.match(/\S+/g) ?? []).length).catch(() => 0);
   const base = Math.min(maxSec / 1.4, READ_BASE_SEC + words / READ_WORDS_PER_SEC); // up to 1.4x below: never over maxSec
   const started = Date.now();
+  let scrolls = 0;
   const ends = Math.min(started + Math.round(base * (0.6 + Math.random() * 0.8) * 1000), until ?? Infinity);
   for (;;) {
     await page.waitForTimeout(Math.max(0, Math.min(ends - Date.now(), 1500 + Math.random() * 3500)));
@@ -811,8 +856,9 @@ async function readPage(page: Page, until: number | null, maxSec = READ_MAX_SEC)
     // Mostly down the page, sometimes back up a little.
     const dy = Math.round((Math.random() < 0.75 ? 1 : -1) * (120 + Math.random() * 380));
     await page.evaluate((y) => window.scrollBy({ top: y, behavior: "smooth" }), dy);
+    scrolls++;
   }
-  return Math.round((Date.now() - started) / 1000);
+  return { sec: Math.round((Date.now() - started) / 1000), scrolls };
 }
 
 async function scrollPage(page: Page, { stepWaitMs, maxSteps, settleMs }: typeof PAGE_SCROLL): Promise<ScrollResult> {

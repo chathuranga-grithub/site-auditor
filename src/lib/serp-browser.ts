@@ -203,7 +203,7 @@ export function googleResultsUrl(p: BrowserSearchParams, n = 1): string {
  * How long a search waits for a CAPTCHA to be solved in the browser window (by a person or an
  * extension), before giving up on the search.
  */
-export const CAPTCHA_WAIT_MS = 30_000;
+export const CAPTCHA_WAIT_MS = (Number(process.env.CAPTCHA_WAIT_SEC) || 30) * 1000; // CAPTCHA_WAIT_SEC in .env.local: another wait
 
 /**
  * Google didn't show results (a CAPTCHA not solved in CAPTCHA_WAIT_MS, its consent page, the search
