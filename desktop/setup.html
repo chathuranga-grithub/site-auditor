@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
+    <title>Site Auditor setup</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f7f8fa;
+        --card: #ffffff;
+        --text: #1b1f24;
+        --muted: #5b6470;
+        --line: #d5dae1;
+        --accent: #4f6ef7;
+        --error: #c62828;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #15181d;
+          --card: #1d2127;
+          --text: #e7eaee;
+          --muted: #9aa3ae;
+          --line: #343a43;
+          --accent: #7b93ff;
+          --error: #ff6b6b;
+        }
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; font: 14px/1.5 "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--text); }
+      main { padding: 24px 28px; }
+      h1 { font-size: 20px; margin: 0 0 4px; }
+      p.lead { margin: 0 0 20px; color: var(--muted); }
+      label { display: block; font-weight: 600; margin: 16px 0 4px; }
+      .hint { color: var(--muted); font-size: 12.5px; margin: 2px 0 6px; }
+      input[type="text"], input[type="password"], textarea {
+        width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px;
+        background: var(--card); color: var(--text); font: 13px/1.4 Consolas, monospace;
+      }
+      textarea { height: 90px; resize: vertical; }
+      .row { display: flex; gap: 8px; align-items: center; margin-top: 16px; }
+      .row input { margin: 0; }
+      .error { color: var(--error); min-height: 20px; margin-top: 14px; }
+      button {
+        margin-top: 6px; padding: 9px 20px; border: 0; border-radius: 6px; background: var(--accent);
+        color: #fff; font: 600 14px "Segoe UI", sans-serif; cursor: pointer;
+      }
+      button:disabled { opacity: 0.6; cursor: wait; }
+      .version { color: var(--muted); font-size: 12px; float: right; margin-top: 16px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Set up Site Auditor</h1>
+      <p class="lead">Use the same database link and secret key as the other computers, so they share campaigns and settings. Ask whoever set up the first computer.</p>
+
+      <label for="databaseUrl">Database link</label>
+      <div class="hint">Starts with postgresql:// (the DATABASE_URL).</div>
+      <input id="databaseUrl" type="password" autocomplete="off" spellcheck="false" />
+
+      <label for="authSecret">Secret key</label>
+      <div class="hint">The AUTH_SECRET: logins and saved settings (like the proxy link) are locked with it.</div>
+      <input id="authSecret" type="password" autocomplete="off" spellcheck="false" />
+
+      <label for="googleServiceAccountJson">Google service account key <span style="font-weight: 400">(optional)</span></label>
+      <div class="hint">For campaigns' Search Console and GA4 numbers (the GOOGLE_SERVICE_ACCOUNT_JSON): the whole JSON key, as is or base64.</div>
+      <textarea id="googleServiceAccountJson" spellcheck="false"></textarea>
+
+      <div class="row">
+        <input id="startAtLogin" type="checkbox" checked />
+        <label for="startAtLogin" style="margin: 0; font-weight: 400">Start when Windows starts (campaigns run only while the app is running)</label>
+      </div>
+
+      <div class="row"><input id="show" type="checkbox" /><label for="show" style="margin: 0; font-weight: 400">Show what I typed</label></div>
+
+      <div class="error" id="error"></div>
+      <button id="save">Save and start</button>
+      <span class="version" id="version"></span>
+    </main>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      window.setup.load().then((v) => {
+        $("databaseUrl").value = v.databaseUrl;
+        $("authSecret").value = v.authSecret;
+        $("googleServiceAccountJson").value = v.googleServiceAccountJson;
+        $("startAtLogin").checked = v.startAtLogin !== false;
+        $("version").textContent = `Version ${v.version}`;
+      });
+      $("show").addEventListener("change", (e) => {
+        for (const id of ["databaseUrl", "authSecret"]) $(id).type = e.target.checked ? "text" : "password";
+      });
+      $("save").addEventListener("click", async () => {
+        $("error").textContent = "";
+        $("save").disabled = true;
+        $("save").textContent = "Starting…";
+        const r = await window.setup.save({
+          databaseUrl: $("databaseUrl").value,
+          authSecret: $("authSecret").value,
+          googleServiceAccountJson: $("googleServiceAccountJson").value,
+          startAtLogin: $("startAtLogin").checked,
+        });
+        if (r && r.error) {
+          $("error").textContent = r.error;
+          $("save").disabled = false;
+          $("save").textContent = "Save and start";
+        }
+      });
+    </script>
+  </body>
+</html>

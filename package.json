@@ -7,7 +7,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "user:create": "node scripts/create-user.mjs"
+    "user:create": "node scripts/create-user.mjs",
+    "desktop:build": "node scripts/desktop-build.mjs",
+    "desktop:release": "node scripts/desktop-build.mjs --release",
+    "desktop:start": "electron desktop"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.2.0",
@@ -34,6 +37,8 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "electron": "44.7.0",
+    "electron-builder": "26.15.3",
     "eslint": "^9",
     "eslint-config-next": "16.3.7",
     "tailwindcss": "^4",

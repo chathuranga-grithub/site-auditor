@@ -124,6 +124,24 @@ Open http://localhost:3000. It redirects to the Site Audit tool.
 
 Other scripts: `npm run build` (production build and type-check), `npm run lint`.
 
+## Desktop app (Windows)
+
+Campaign visits need the real Google Chrome on a computer, so they can't run on Vercel. The desktop app installs the whole tool on a Windows PC: `desktop/` is the Electron app, which runs the app's own server (Next.js standalone output) and shows it in a window.
+
+- **Install:** run `Site-Auditor-Setup-<version>.exe`. No admin rights are needed, and Google Chrome must already be installed.
+- **First start:** a setup screen asks for the database link (`DATABASE_URL`) and the secret key (`AUTH_SECRET`), the same on every computer. The Google service account key is optional. They're kept in `%APPDATA%\Site Auditor\config.json`, encrypted by Windows, never in the installer.
+- **Running:** closing the window keeps the app in the tray, so campaigns keep running. It starts with Windows (a tray option). The tray menu has Settings, the log folder (`%APPDATA%\Site Auditor\logs\server.log`, with the `[visit …]` lines), Restart the server, Check for updates and Quit.
+- **Updates:** installed apps check this repository's GitHub releases every 6 hours and when they start.
+
+To build:
+
+```bash
+npm run desktop:build      # dist-desktop\Site-Auditor-Setup-<version>.exe
+npm run desktop:start      # try the app without installing (after a build)
+```
+
+To release an update: raise `version` in `desktop/package.json`, then run `npm run desktop:release` with a GitHub token in `GH_TOKEN`. It publishes the installer and `latest.yml` as a GitHub release, which installed apps pick up.
+
 ## Deploy
 
 The app deploys to Vercel with no configuration and needs no environment variables. Both API routes set `runtime = "nodejs"` and `maxDuration = 30`. Each call handles one URL, so a normal request finishes in a few seconds.

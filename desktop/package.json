@@ -1,0 +1,12 @@
+{
+  "name": "site-auditor-desktop",
+  "productName": "Site Auditor",
+  "version": "1.0.0",
+  "description": "Site Auditor for Windows: campaigns, visits and checks run on this computer.",
+  "author": "Grithub",
+  "private": true,
+  "main": "main.js",
+  "dependencies": {
+    "electron-updater": "6.8.9"
+  }
+}

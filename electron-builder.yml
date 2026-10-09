@@ -1,0 +1,35 @@
+# The Windows installer for the desktop app (desktop/). Built by scripts/desktop-build.mjs.
+appId: ae.grithub.siteauditor
+productName: Site Auditor
+copyright: Grithub
+directories:
+  # The app window's own small package (main.js, the setup screen, the auto-updater).
+  app: desktop
+  output: dist-desktop
+# The app's server (Next.js standalone output, with its node_modules): resources\server\standalone.
+# Copied from .next, not from .next/standalone: electron-builder leaves out a node_modules folder at
+# the top of what it copies, and the server needs its own.
+extraResources:
+  - from: .next
+    to: server
+    filter:
+      - "standalone/**/*"
+win:
+  target: nsis
+  icon: desktop/icon.png
+nsis:
+  oneClick: false
+  # Per user (no admin needed): the app runs in that user's session, with their Chrome.
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Site Auditor
+  artifactName: Site-Auditor-Setup-${version}.${ext}
+  # Settings and logs stay on an uninstall (a reinstall picks them up again).
+  deleteAppDataOnUninstall: false
+# Updates: installed apps check this repository's releases (latest.yml).
+publish:
+  provider: github
+  owner: chathuranga-grithub
+  repo: site-auditor
