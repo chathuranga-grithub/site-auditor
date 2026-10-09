@@ -750,6 +750,7 @@ async function solveCaptcha(tab: Page, send: VisitOptions["send"], signal: Abort
     stuck: `The CAPTCHA's solving stopped (nothing changed in it for ${CAPTCHA_STALL_MS / 1000}s)`,
     "too-long": `The CAPTCHA was still being solved after ${CAPTCHA_MAX_MS / 60_000} min`,
     refused: "Google won't give this IP a CAPTCHA to solve (“try again later”)",
+    text: "Google showed its “type the characters” CAPTCHA, which the extension can't solve",
     closed: "The CAPTCHA wait was stopped",
   }[end];
   // Refused: this IP can't get through at all, so it isn't tried again (runVisitTest).
@@ -798,6 +799,9 @@ function watchCaptcha(tab: Page): { read: () => Promise<string>; stop: () => voi
   return {
     async read() {
       const frames = tab.frames().filter((f) => /\/recaptcha\/(api2|enterprise)\/(anchor|bframe)/.test(f.url()));
+      // Google's other CAPTCHA, "type the characters" (a picture and a box, no reCAPTCHA): no
+      // extension solves it, so it isn't waited for.
+      if (!frames.length && (await tab.$('img[src*="/sorry/image"], input[name="captcha"]').catch(() => null))) return "text";
       const states = await Promise.all(frames.map((f) => f.evaluate(readCaptchaFrame).catch(() => "")));
       return states.includes("refused") ? "refused" : `${requests}#${states.join("#")}`;
     },

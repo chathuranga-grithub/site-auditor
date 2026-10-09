@@ -236,14 +236,16 @@ export const CAPTCHA_MAX_MS = 5 * 60_000;
 /**
  * How a CAPTCHA wait ended: solved; the tab closed (the visit or check was stopped); nothing happening
  * in it for waitMs ("idle"); its solving stopped for CAPTCHA_STALL_MS ("stuck"); still being solved
- * after CAPTCHA_MAX_MS ("too-long"); or Google refusing to give a CAPTCHA at all ("refused").
+ * after CAPTCHA_MAX_MS ("too-long"); Google refusing to give a CAPTCHA at all ("refused"); or its
+ * "type the characters" CAPTCHA, which the extension can't solve ("text": tried again at once).
  */
-export type CaptchaEnd = "solved" | "closed" | "idle" | "stuck" | "too-long" | "refused";
+export type CaptchaEnd = "solved" | "closed" | "idle" | "stuck" | "too-long" | "refused" | "text";
 
 /**
  * Waits until the CAPTCHA is gone (Google then goes on to the results), checking every 2 seconds, for
  * up to waitMs (CAPTCHA_WAIT_MS; Infinity = until it's solved). With `activity` (what the CAPTCHA
- * shows now, as text; "refused" when Google won't give one), the wait goes on past waitMs while that
+ * shows now, as text; "refused" when Google won't give one, "text" for its type-the-characters
+ * CAPTCHA: both end the wait at once), the wait goes on past waitMs while that
  * keeps changing (the CAPTCHA being solved), calling onBusy once when it does.
  */
 export async function waitForCaptcha(
@@ -261,7 +263,7 @@ export async function waitForCaptcha(
       if (there === "closed") return "closed";
       if (!there) return "solved";
       const now = await activity?.();
-      if (now === "refused") return "refused";
+      if (now === "refused" || now === "text") return now;
       if (now !== undefined && now !== last) {
         if (last !== undefined) changedAt = Date.now();
         last = now;
