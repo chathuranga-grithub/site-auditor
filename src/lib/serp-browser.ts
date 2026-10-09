@@ -9,6 +9,8 @@
 
 import { existsSync } from "node:fs";
 import type { Browser, Page, Target } from "puppeteer-core";
+import type { PuppeteerExtra } from "puppeteer-extra";
+import { stealthPlugin } from "./stealth";
 import { NO_WEBRTC_ARGS, NO_WEBRTC_SCRIPT } from "./no-webrtc";
 import { ProxyWaitError, burnProxy, getProxy, getProxyOrReuse, type ProxyConfig } from "./proxy-api";
 import { takeGoogleTurn } from "./google-turn";
@@ -119,10 +121,17 @@ export async function openBrowserSearch({ newIp = false, signal }: { newIp?: boo
   }
 }
 
+/** Puppeteer with the stealth plugin (src/lib/stealth.ts): set up once. */
+let puppeteerExtra: Promise<PuppeteerExtra> | null = null;
+function stealthPuppeteer(): Promise<PuppeteerExtra> {
+  return (puppeteerExtra ??= Promise.all([import("puppeteer-core"), import("puppeteer-extra")]).then(([puppeteer, { addExtra }]) =>
+    addExtra(puppeteer.default).use(stealthPlugin()),
+  ));
+}
+
 async function openWithProxy(executablePath: string, proxy: ProxyConfig, profileDir?: string): Promise<BrowserSearch> {
   // Loaded only here: the browser library isn't available on Vercel.
-  const puppeteer = await import("puppeteer-core");
-  const browser: Browser = await puppeteer
+  const browser: Browser = await (await stealthPuppeteer())
     .launch({
       executablePath,
       // Headed: a visible browser window, like a person searching.
@@ -146,9 +155,12 @@ async function openWithProxy(executablePath: string, proxy: ProxyConfig, profile
       const locked = profileDir ? profileLockedMessage(err, profileDir) : null;
       throw locked ? new Error(locked) : err;
     });
-  // Everything happens in the one tab Chrome starts with. Any other tab (e.g. Adobe Acrobat's welcome
+  // Everything happens in one tab, opened by the app: the stealth plugin only sets up tabs opened
+  // after launch, so Chrome's starting tab is closed. Any other tab (e.g. Adobe Acrobat's welcome
   // page, opened by the extension itself) is closed at once.
-  const tab: Page = (await browser.pages())[0] ?? (await browser.newPage());
+  const starting = await browser.pages();
+  const tab: Page = await browser.newPage();
+  for (const t of starting) void t.close().catch(() => {});
   browser.on("targetcreated", async (target: Target) => {
     if (target.type() !== "page") return;
     const other = await target.page().catch(() => null);

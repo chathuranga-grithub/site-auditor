@@ -5,7 +5,9 @@
 
 import os from "node:os";
 import path from "node:path";
-import { chromium, devices, type Browser, type BrowserContext, type BrowserContextOptions, type Page } from "playwright-core";
+import { chromium as playwrightChromium, devices, type Browser, type BrowserContext, type BrowserContextOptions, type Page } from "playwright-core";
+import { addExtra } from "playwright-extra";
+import { stealthOn, stealthPlugin } from "./stealth";
 import { actAsDevice, deviceLabel, deviceUserAgent, type DeviceProfile } from "./device-profiles";
 import { MAX_VISITS_PER_IP, burnProxy, getProxyOrReuse, getUnvisitedProxy } from "./proxy-api";
 import { NO_WEBRTC_ARGS, NO_WEBRTC_SCRIPT } from "./no-webrtc";
@@ -31,6 +33,15 @@ import {
   type VisitPage,
   type VisitReport,
 } from "./visit-types";
+
+// Every visit browser runs with the stealth plugin (src/lib/stealth.ts).
+const chromium = addExtra(playwrightChromium).use(stealthPlugin());
+// A tab closed as soon as it opens (an extension's own tab, Chrome's empty first tab): the plugin
+// couldn't set it up, and doesn't need to. Any other plugin error is still shown.
+chromium.plugins.onPluginError = (plugin, method, err) => {
+  if (/has been closed/.test(err instanceof Error ? err.message : String(err))) return;
+  console.warn(`Stealth plugin "${plugin.name}" failed in ${method}:`, err);
+};
 
 /** How long a page may take to show its content (through the proxy) before it counts as not loading. */
 const NAV_TIMEOUT = 45_000;
@@ -216,6 +227,7 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
         type: "step",
         message: `Proxy IP ${exit.ip}: ${exit.country}${exit.city ? `, ${exit.city}` : ""} · ${exit.network}${exit.org ? ` (${exit.org})` : ""}${exit.lookupMs != null ? ` · answered in ${(exit.lookupMs / 1000).toFixed(1)}s` : ""}.`,
       });
+      send({ type: "step", message: (await stealthOn(main)) ? "Stealth plugin: on (the browser doesn't show it's automated)." : "Stealth plugin: NOT working in this browser." });
       // Optional: the keyword searched on Google first, in this same browser, and the site's result
       // clicked (that tab becomes the start page). A failed search doesn't stop the visit.
       if (!searchFirst) break;
