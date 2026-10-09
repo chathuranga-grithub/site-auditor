@@ -5,7 +5,9 @@
 
 import os from "node:os";
 import path from "node:path";
-import { chromium, devices, type Browser, type BrowserContext, type BrowserContextOptions, type Page } from "playwright-core";
+import { chromium as playwrightChromium, devices, type Browser, type BrowserContext, type BrowserContextOptions, type Page } from "playwright-core";
+import { addExtra } from "playwright-extra";
+import { stealthOn, stealthPlugin } from "./stealth";
 import { actAsDevice, deviceLabel, deviceUserAgent, type DeviceProfile } from "./device-profiles";
 import { MAX_VISITS_PER_IP, burnProxy, getProxyOrReuse, getUnvisitedProxy } from "./proxy-api";
 import { NO_WEBRTC_ARGS, NO_WEBRTC_SCRIPT } from "./no-webrtc";
@@ -13,8 +15,9 @@ import { fetchJsonInPage, lookupExit, ownPublicIp } from "./proxy-ip";
 import { ProxyIpInUseError } from "./proxy-pool";
 import { checkChromeProfile, EXTENSION_ARGS, KEEP_EXTENSIONS, PROFILE_ARGS, profileExtensionDirs, profileLockedMessage } from "./browser-profile";
 import { takeGoogleTurn } from "./google-turn";
-import { clean, searchParams } from "./serp";
-import { BROWSER_SEARCH_COUNTRY, CAPTCHA_WAIT_MS, GoogleBlockedError, googleBlocked, googleResultsUrl, readOrganicResults, waitForCaptcha } from "./serp-browser";
+import { searchParams } from "./serp";
+import { restoreGoogleCookies, saveGoogleCookies } from "./google-cookies";
+import { BROWSER_SEARCH_COUNTRY, CAPTCHA_MAX_MS, CAPTCHA_STALL_MS, CAPTCHA_WAIT_MS, GoogleBlockedError, googleBlocked, googleResultsUrl, waitForCaptcha } from "./serp-browser";
 import { readSitemap, type SitemapFetcher } from "./sitemap";
 import { isBlockedHost, isInternal, normalizeUrl, shouldSkipCrawl } from "./url";
 import {
@@ -31,6 +34,15 @@ import {
   type VisitPage,
   type VisitReport,
 } from "./visit-types";
+
+// Every visit browser runs with the stealth plugin (src/lib/stealth.ts).
+const chromium = addExtra(playwrightChromium).use(stealthPlugin());
+// A tab closed as soon as it opens (an extension's own tab, Chrome's empty first tab): the plugin
+// couldn't set it up, and doesn't need to. Any other plugin error is still shown.
+chromium.plugins.onPluginError = (plugin, method, err) => {
+  if (/has been closed/.test(err instanceof Error ? err.message : String(err))) return;
+  console.warn(`Stealth plugin "${plugin.name}" failed in ${method}:`, err);
+};
 
 /** How long a page may take to show its content (through the proxy) before it counts as not loading. */
 const NAV_TIMEOUT = 45_000;
@@ -169,7 +181,7 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
     let phone: BrowserContext | null;
     // The visit's one tab: profile check, IP check, Google, then the site, all in it.
     let main: Page;
-    let fromGoogle: { link: string } | null = null;
+    let fromGoogle: { link: string | null; page: number } | null = null;
     let claimedIp: string | null = null;
     // TEMPORARY (testing): set when the site is opened directly after an unsolved CAPTCHA (see below).
     let openedDirectly = false;
@@ -216,13 +228,25 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
         type: "step",
         message: `Proxy IP ${exit.ip}: ${exit.country}${exit.city ? `, ${exit.city}` : ""} · ${exit.network}${exit.org ? ` (${exit.org})` : ""}${exit.lookupMs != null ? ` · answered in ${(exit.lookupMs / 1000).toFixed(1)}s` : ""}.`,
       });
+      send({ type: "step", message: (await stealthOn(main)) ? "Stealth plugin: on (the browser doesn't show it's automated)." : "Stealth plugin: NOT working in this browser." });
       // Optional: the keyword searched on Google first, in this same browser, and the site's result
       // clicked (that tab becomes the start page). A failed search doesn't stop the visit.
       if (!searchFirst) break;
+      // Google's cookies from an earlier visit on this IP (e.g. its pass after a solved CAPTCHA), so
+      // this browser isn't a stranger to Google (src/lib/google-cookies.ts).
+      const restored = await restoreGoogleCookies(context, exit.ip);
+      if (restored) send({ type: "step", message: `Google's cookies from an earlier visit on this IP put back (${restored}).` });
       try {
         fromGoogle = await searchGoogleFirst(main, searchFirst, url, send, signal);
+        // Got through to the results: Google's cookies kept for the next visit on this IP.
+        await saveGoogleCookies(context, exit.ip);
         break;
       } catch (err) {
+        if (err instanceof CaptchaRefusedError && !stopped()) {
+          // Google won't even give this IP a CAPTCHA: no point reopening on it; the run gets a new IP.
+          burnProxy(proxyApiUrl, proxy.address);
+          throw err;
+        }
         if (!(err instanceof CaptchaTimeoutError) || stopped()) throw err;
         // TEMPORARY, for testing only, until a proper solution for Google's CAPTCHA is found: a CAPTCHA
         // not solved the first time opens the site directly (by its URL, no click on Google's result),
@@ -230,7 +254,7 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
         // TEMP_OPEN_DIRECTLY_ON_CAPTCHA = false to go back to "only ever through Google".
         if (TEMP_OPEN_DIRECTLY_ON_CAPTCHA) {
           burnProxy(proxyApiUrl, proxy.address); // Google blocked this IP: not handed out again
-          send({ type: "step", message: `The CAPTCHA wasn't solved in ${CAPTCHA_WAIT_MS / 1000}s: opening the site directly instead (temporary, for testing).` });
+          send({ type: "step", message: `${err.message}: opening the site directly instead (temporary, for testing).` });
           openedDirectly = true;
           break;
         }
@@ -238,9 +262,9 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
           // Google keeps blocking this IP: never used again as the link's current IP; the run starts again
           // with a new IP (the site is only ever reached through Google).
           burnProxy(proxyApiUrl, proxy.address);
-          throw new GoogleBlockedError(`The CAPTCHA wasn't solved in ${CAPTCHA_WAIT_MS / 1000}s, ${CAPTCHA_TRIES} times on this IP`);
+          throw new GoogleBlockedError(`The CAPTCHA wasn't solved, ${CAPTCHA_TRIES} times on this IP (last: ${err.message})`);
         }
-        send({ type: "step", message: `The CAPTCHA wasn't solved in ${CAPTCHA_WAIT_MS / 1000}s: closing the browser and opening it again with the same proxy IP (try ${attempt + 1} of ${CAPTCHA_TRIES})…` });
+        send({ type: "step", message: `${err.message}: closing the browser and opening it again with the same proxy IP (try ${attempt + 1} of ${CAPTCHA_TRIES})…` });
         await close();
         close = null;
       }
@@ -258,7 +282,7 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
 
     // 3. Start page: open and scroll. The dwell time starts now.
     send({ type: "stage", stage: fromGoogle ? "click" : "visit" });
-    const opening = fromGoogle ? `Clicking the site's result on Google (${fromGoogle.link})` : `Opening ${url}`;
+    const opening = fromGoogle ? `Clicking the site's result on Google's ${fromGoogle.page === 1 ? "first page" : `page ${fromGoogle.page}`} (${fromGoogle.link ?? url})` : `Opening ${url}`;
     send({ type: "step", message: dwellSec ? `${opening} (staying on the site for ${dwellSec}s)…` : `${opening}…` });
     if (dwellSec) {
       dwellEnds = Date.now() + dwellSec * 1000;
@@ -271,8 +295,9 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
     // Reading one page takes at most a quarter of the time on the site (10s at least), so a visit sees several pages.
     const readCap = dwellSec ? Math.min(READ_MAX_SEC, Math.max(10, Math.round(dwellSec / 4))) : READ_MAX_SEC;
     const start = fromGoogle
-      ? // A link through Google's /url redirect: recorded as the site (where it lands is finalUrl).
-        await checkPage(page, /(^|\.)google\./.test(new URL(fromGoogle.link).hostname) ? url : fromGoogle.link, "start", () => clickResult(page, fromGoogle.link), START_SCROLL, readPages && { until: dwellEnds, maxSec: readCap })
+      ? // A result without a link (Google's script opens it) or through Google's /url redirect: recorded
+        // as the site (where it lands is finalUrl).
+        await checkPage(page, !fromGoogle.link || /(^|\.)google\./.test(new URL(fromGoogle.link).hostname) ? url : fromGoogle.link, "start", () => clickResult(page, url, (message) => send({ type: "step", message })), START_SCROLL, readPages && { until: dwellEnds, maxSec: readCap })
       : await checkPage(page, url, "start", () => page.goto(url, { waitUntil: "domcontentloaded" }), START_SCROLL, readPages && { until: dwellEnds, maxSec: readCap });
     report.start = start;
     report.scroll = start.scroll ?? null;
@@ -591,10 +616,10 @@ function exitProblem(exit: ExitInfo | null, ownIp: string | null): string | null
 /**
  * Searches Google for the keyword in the visit's own browser, the way Keyword Rankings does
  * (src/lib/serp.ts: same country and language, same results page, same reading of the results),
- * and says where the site ranks. A CAPTCHA is waited for until it's solved in the browser window
- * (up to CAPTCHA_WAIT_MS). In the visit's own tab, which stays on the results: the site on the first
- * page returns the result's link, for the visit to click it (clickResult); otherwise null, and the
- * site is opened directly.
+ * and says where the site ranks, looking through the first SEARCH_PAGES pages ("Next", like a person).
+ * A CAPTCHA (on any page) is waited for until it's solved in the browser window (solveCaptcha). In
+ * the visit's own tab, which stays on the results: the site found returns its result's href (null
+ * when Google's result has none) and page, for the visit to click it (clickResult); not found, null.
  * The proxy IP was already confirmed in Vietnam before this runs.
  */
 async function searchGoogleFirst(
@@ -603,7 +628,7 @@ async function searchGoogleFirst(
   siteUrl: string,
   send: VisitOptions["send"],
   signal: AbortSignal,
-): Promise<{ link: string } | null> {
+): Promise<{ link: string | null; page: number } | null> {
   if (country.toUpperCase() !== BROWSER_SEARCH_COUNTRY) {
     send({ type: "step", message: "Only Vietnam can be searched (the proxy is in Vietnam), so the Google search was skipped; opening the site directly." });
     return null;
@@ -619,54 +644,62 @@ async function searchGoogleFirst(
   if (waited) send({ type: "waited" });
   send({ type: "stage", stage: "search" });
   send({ type: "step", message: `Searching Google for “${keyword}” (as in Vietnam: gl=${params.gl}, hl=${params.hl})…` });
+  const host = new URL(siteUrl).hostname.replace(/^www\./, "").toLowerCase();
   try {
-    await tab.goto(googleResultsUrl(params), { waitUntil: "domcontentloaded" });
-    let blocked = googleBlocked(tab.url(), !!(await tab.$("#captcha-form")));
-    if (blocked === "captcha") {
-      // Solved in the browser window (by you or the profile's extension): the search goes on. Not
-      // solved in CAPTCHA_WAIT_MS: the visit reopens the browser on the same IP (runVisitTest).
-      // The search has reached Google: the next browser's search needn't wait for this CAPTCHA.
-      release();
-      send({ type: "stage", stage: "captcha" });
-      send({ type: "step", message: `Google asked for a CAPTCHA. Solve it in the browser window (or let an extension do it): waiting up to ${CAPTCHA_WAIT_MS / 1000}s…` });
-      send({ type: "wait", seconds: CAPTCHA_WAIT_MS / 1000, reason: "the CAPTCHA to be solved in the browser window" });
-      const solved = await waitForCaptcha(async () => (tab.isClosed() ? "closed" : googleBlocked(tab.url(), !!(await tab.$("#captcha-form"))) === "captcha"));
-      send({ type: "waited" });
-      if (solved) {
-        blocked = null;
-        send({ type: "step", message: "The CAPTCHA was solved; reading Google's results…" });
-      } else if (!signal.aborted) {
-        // Its tab (or the browser) was closed while waiting: the visit can't go on in it; tried again.
-        if (tab.isClosed()) throw new GoogleBlockedError("The browser window was closed while waiting for the CAPTCHA");
-        // What was showing then (still Google's CAPTCHA, another one after it…): its address and a picture.
-        send({ type: "step", message: `Still on ${tab.url().slice(0, 100)} after ${CAPTCHA_WAIT_MS / 1000}s${await saveShot(tab)}.` });
-        throw new CaptchaTimeoutError(`The CAPTCHA wasn't solved in ${CAPTCHA_WAIT_MS / 1000}s`);
+    // The site looked for on Google's first SEARCH_PAGES pages, going on with "Next" like a person.
+    for (let n = 1; n <= SEARCH_PAGES; n++) {
+      if (n === 1) await typeSearch(tab, params);
+      else await nextResultsPage(tab, params, n);
+      let found: Awaited<ReturnType<typeof readSiteResults>> = { organic: 0, titles: 0, links: [] };
+      // A CAPTCHA, and sometimes another one right after it's solved (up to CAPTCHAS_PER_PAGE).
+      for (let captchas = 0, typedAgain = false; ; ) {
+        const blocked = googleBlocked(tab.url(), !!(await tab.$("#captcha-form").catch(() => null)));
+        if (blocked === "captcha" && captchas < CAPTCHAS_PER_PAGE) {
+          captchas++;
+          if (captchas > 1) send({ type: "step", message: `Google asked for another CAPTCHA (${captchas} on this page)…` });
+          // The search has reached Google: the next browser's search needn't wait for this CAPTCHA.
+          release();
+          if (!(await solveCaptcha(tab, send, signal))) return null; // the visit was stopped
+          continue;
+        }
+        if (blocked === "captcha") throw new CaptchaTimeoutError(`Google kept asking for a CAPTCHA (${captchas} on one page)`);
+        if (blocked === "consent" && neverSkip) throw new GoogleBlockedError("Google showed its cookie consent page instead of results");
+        if (blocked) {
+          send({ type: "step", message: "Google showed its cookie consent page, so the search was skipped; opening the site directly." });
+          return null;
+        }
+        // A CAPTCHA on Google's home page goes back there once solved, not to the results: typed again.
+        if (n === 1 && !typedAgain && !isResultsPage(tab.url())) {
+          typedAgain = true;
+          await typeSearch(tab, params);
+          continue;
+        }
+        // Read again every second for up to RESULTS_WAIT_MS until results are there: right after a
+        // CAPTCHA, Google is still loading them (or shows another CAPTCHA: back to the top).
+        for (const end = Date.now() + RESULTS_WAIT_MS; ; ) {
+          await tab.waitForLoadState("domcontentloaded").catch(() => {});
+          if (googleBlocked(tab.url(), false)) break;
+          found = await readSiteResults(tab, host);
+          if (found.links.length || found.organic || Date.now() >= end) break;
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+        if (!googleBlocked(tab.url(), false)) break;
       }
+      // Looked through like a person (and Google's "Next" is at the bottom).
+      await scrollPage(tab, MOBILE_SCROLL).catch(() => null);
+      const on = n === 1 ? "Google's first page" : `Google's page ${n}`;
+      const first = found.links[0];
+      if (first) {
+        const others = found.links.length > 1 ? ` (${found.links.length} links to it there)` : "";
+        send({ type: "step", message: `The site is ${first.position ? `#${first.position} ` : ""}on ${on} for “${keyword}”${others}.` });
+        return { link: first.href, page: n };
+      }
+      // Nothing read at all: not a results page (or a layout this can't read); a picture to see why.
+      const why = found.organic ? `The site isn't on ${on}` : `Couldn't read any results on ${on} (page: ${tab.url().slice(0, 120)} · ${found.titles} titles${found.error ? ` · ${found.error}` : ""}${await saveShot(tab)})`;
+      send({ type: "step", message: `${why} for “${keyword}”${n < SEARCH_PAGES ? `; going on to page ${n + 1}…` : "."}` });
     }
-    if (blocked === "consent" && neverSkip) throw new GoogleBlockedError("Google showed its cookie consent page instead of results");
-    if (blocked) {
-      send({ type: "step", message: `Google ${blocked === "captcha" ? "asked for a CAPTCHA and it wasn't solved" : "showed its cookie consent page"}, so the search was skipped; opening the site directly.` });
-      return null;
-    }
-    // The results (desktop: #search; a phone's page may differ), up to 15s after a CAPTCHA.
-    await tab.waitForSelector("#search, #rso, #main", { timeout: 15_000 }).catch(() => {});
-    const results = clean(await tab.evaluate(readOrganicResults));
-    await scrollPage(tab, MOBILE_SCROLL).catch(() => null);
-    const host = new URL(siteUrl).hostname.replace(/^www\./, "").toLowerCase();
-    const hit = results.find((r) => r.domain.toLowerCase() === host);
-    // Not among the results read (e.g. a phone's layout): any link to the site on the page, not an ad.
-    const link = hit?.url ?? (await tab.evaluate(findSiteLink, host).catch(() => null));
-    const where = hit
-      ? `The site is #${hit.position} on Google's first page`
-      : link
-        ? "The site is on Google's first page"
-        : results.length
-          ? "The site isn't on Google's first page"
-          : "Couldn't find the site on Google's results page";
-    // Not found: where Google left the tab, and a picture of it, to see why (e.g. not a results page).
-    const seen = link ? "" : ` (page: ${tab.url().slice(0, 120)}${await saveShot(tab)})`;
-    send({ type: "step", message: `${where} for “${keyword}”${seen}.${link || neverSkip ? "" : " Opening it directly…"}` });
-    return link ? { link } : null;
+    if (!neverSkip) send({ type: "step", message: `The site isn't on Google's first ${SEARCH_PAGES} pages; opening it directly…` });
+    return null;
   } catch (err) {
     if (err instanceof GoogleBlockedError) throw err;
     // Never skipped: the visit starts again in a new browser with a new IP.
@@ -678,67 +711,325 @@ async function searchGoogleFirst(
   }
 }
 
+/** Whether the tab is on Google's results (not its home page, a CAPTCHA…). */
+function isResultsPage(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return /(^|\.)google\./.test(u.hostname) && u.pathname === "/search";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The search made as a person makes it: Google's home page opened, the keyword typed into its box a
+ * key at a time, and Enter pressed (not the results' address opened directly, which people rarely do).
+ * Stops where Google goes: the results, or a CAPTCHA (the caller deals with it). No box to type in
+ * (Google showed something else): the results page is opened from there instead.
+ */
+async function typeSearch(tab: Page, params: ReturnType<typeof searchParams>): Promise<void> {
+  const home = `https://www.google.com/?hl=${params.hl}&gl=${params.gl}`;
+  await tab.goto(home, { waitUntil: "domcontentloaded" });
+  if (googleBlocked(tab.url(), false)) return;
+  const pause = (min: number, max: number) => new Promise((r) => setTimeout(r, min + Math.random() * (max - min)));
+  try {
+    const box = tab.locator('textarea[name="q"], input[name="q"]').first();
+    await box.waitFor({ state: "visible", timeout: 10_000 });
+    await pause(600, 1500);
+    await box.click();
+    await box.fill("");
+    for (const key of params.q) {
+      await tab.keyboard.type(key);
+      await pause(60, 220);
+    }
+    await pause(400, 1100);
+    const went = tab.waitForURL((u) => isResultsPage(u.toString()) || googleBlocked(u.toString(), false) !== null, { timeout: 30_000, waitUntil: "domcontentloaded" });
+    await tab.keyboard.press("Enter");
+    await went;
+  } catch {
+    if (isResultsPage(tab.url()) || googleBlocked(tab.url(), false)) return;
+    await tab.goto(googleResultsUrl(params), { waitUntil: "domcontentloaded", referer: home });
+  }
+}
+
+/**
+ * Google's next results page (n), as a person goes there: its "Next" link at the bottom clicked;
+ * without one (or when the click goes nowhere), the page opened from the current one.
+ */
+async function nextResultsPage(tab: Page, params: ReturnType<typeof searchParams>, n: number): Promise<void> {
+  const before = tab.url();
+  const next = tab.locator("#pnnext").or(tab.getByRole("link", { name: /^(Next|Tiếp|Trang tiếp theo|Trang sau)$/i })).first();
+  try {
+    await next.scrollIntoViewIfNeeded({ timeout: 3_000 });
+    await Promise.all([tab.waitForURL((u) => u.toString() !== before, { timeout: 15_000, waitUntil: "domcontentloaded" }), next.click({ timeout: 5_000 })]);
+    return;
+  } catch {
+    /* no "Next" to click: opened directly below */
+  }
+  await tab.goto(googleResultsUrl(params, n), { waitUntil: "domcontentloaded", referer: before });
+}
+
+/**
+ * Google asked for a CAPTCHA: waited for until it's solved in the browser window (by you or the
+ * profile's extension), past CAPTCHA_WAIT_MS while it's being solved. True once solved; false when the
+ * visit was stopped. Not solved: CaptchaTimeoutError (the visit reopens the browser on the same IP,
+ * runVisitTest), or CaptchaRefusedError (Google won't give this IP one: a new IP).
+ */
+async function solveCaptcha(tab: Page, send: VisitOptions["send"], signal: AbortSignal): Promise<boolean> {
+  send({ type: "stage", stage: "captcha" });
+  send({ type: "step", message: `Google asked for a CAPTCHA. Solve it in the browser window (or let an extension do it): waiting up to ${CAPTCHA_WAIT_MS / 1000}s, longer while it's being solved…` });
+  send({ type: "wait", seconds: CAPTCHA_WAIT_MS / 1000, reason: "the CAPTCHA to be solved in the browser window" });
+  // While it's being solved (something in it keeps changing), the wait goes on past CAPTCHA_WAIT_MS.
+  const watch = watchCaptcha(tab);
+  const end = await waitForCaptcha(async () => (tab.isClosed() ? "closed" : googleBlocked(tab.url(), !!(await tab.$("#captcha-form"))) === "captcha"), {
+    activity: watch.read,
+    onBusy: () => {
+      send({ type: "step", message: `The CAPTCHA is still being solved: waiting on while something changes in it (until it stops for ${CAPTCHA_STALL_MS / 1000}s, ${CAPTCHA_MAX_MS / 60_000} min at most)…` });
+      send({ type: "waited" });
+      send({ type: "wait", seconds: null, reason: "the CAPTCHA being solved (still in progress)" });
+    },
+  }).finally(watch.stop);
+  send({ type: "waited" });
+  if (end === "solved") {
+    send({ type: "step", message: "The CAPTCHA was solved; reading Google's results…" });
+    return true;
+  }
+  if (signal.aborted) return false;
+  // Its tab (or the browser) was closed while waiting: the visit can't go on in it; tried again.
+  if (tab.isClosed()) throw new GoogleBlockedError("The browser window was closed while waiting for the CAPTCHA");
+  // What was showing then (still Google's CAPTCHA, another one after it…): its address and a picture.
+  send({ type: "step", message: `Still on ${tab.url().slice(0, 100)}${await saveShot(tab)}.` });
+  const why = {
+    idle: `The CAPTCHA wasn't solved, and nothing happened in it for ${CAPTCHA_WAIT_MS / 1000}s`,
+    stuck: `The CAPTCHA's solving stopped (nothing changed in it for ${CAPTCHA_STALL_MS / 1000}s)`,
+    "too-long": `The CAPTCHA was still being solved after ${CAPTCHA_MAX_MS / 60_000} min`,
+    refused: "Google won't give this IP a CAPTCHA to solve (“try again later”)",
+    text: "Google showed its “type the characters” CAPTCHA, which the extension can't solve",
+    closed: "The CAPTCHA wait was stopped",
+  }[end];
+  // Refused: this IP can't get through at all, so it isn't tried again (runVisitTest).
+  throw end === "refused" ? new CaptchaRefusedError(why) : new CaptchaTimeoutError(why);
+}
+
 /**
  * TEMPORARY (testing): true = a CAPTCHA not solved the first time opens the site directly by its URL.
  * Remove once there's a proper solution for Google's CAPTCHA (campaign visits must click the result).
  */
-const TEMP_OPEN_DIRECTLY_ON_CAPTCHA = true;
+const TEMP_OPEN_DIRECTLY_ON_CAPTCHA = false;
+
+/** How many of Google's results pages the site is looked for on before it's "not on Google". */
+const SEARCH_PAGES = 3;
+
+/**
+ * CAPTCHAs in a row (another right after one is solved) on one results page: each is solved, up to
+ * this many; only a safety stop so a Google that never stops asking can't hold the visit forever.
+ */
+const CAPTCHAS_PER_PAGE = 10;
+
+/** How long Google's results page has to show its results (e.g. still loading after a CAPTCHA). */
+const RESULTS_WAIT_MS = 15_000;
 
 /** How many browsers a visit opens on one proxy IP for an unsolved CAPTCHA, before getting a new IP. */
 const CAPTCHA_TRIES = 3;
 
-/** The CAPTCHA wasn't solved in CAPTCHA_WAIT_MS: the browser is reopened on the same IP. */
+/** The CAPTCHA wasn't solved (nothing happening in it, or its solving stopped): the browser is reopened on the same IP. */
 class CaptchaTimeoutError extends GoogleBlockedError {}
 
+/** Google won't give this IP a CAPTCHA to solve ("try again later"): it gets a new IP at once. */
+class CaptchaRefusedError extends GoogleBlockedError {}
+
 /**
- * Runs inside Google's results page: the first link to the site (host, without www) that isn't an
- * ad, whatever the layout (desktop or phone), also through Google's /url?q= redirect. Its href, or
- * null. Self-contained: it's sent to the page as text.
+ * Watches the CAPTCHA in Google's page, to tell whether it's being solved (by a person or an
+ * extension): read() gives what it shows now as text (requests to reCAPTCHA so far, the checkbox,
+ * the challenge, its pictures, tiles picked, the answer typed, an error), which changes while it's
+ * solved; "refused" when reCAPTCHA says to try again later (it won't give this IP a challenge).
  */
-function findSiteLink(host: string): string | null {
-  const target = (href: string): string | null => {
+function watchCaptcha(tab: Page): { read: () => Promise<string>; stop: () => void } {
+  let requests = 0;
+  const onRequest = (r: { url(): string }) => {
+    if (/\/recaptcha\//.test(r.url())) requests++;
+  };
+  tab.on("request", onRequest);
+  return {
+    async read() {
+      const frames = tab.frames().filter((f) => /\/recaptcha\/(api2|enterprise)\/(anchor|bframe)/.test(f.url()));
+      // Google's other CAPTCHA, "type the characters" (a picture and a box, no reCAPTCHA): no
+      // extension solves it, so it isn't waited for.
+      if (!frames.length && (await tab.$('img[src*="/sorry/image"], input[name="captcha"]').catch(() => null))) return "text";
+      const states = await Promise.all(frames.map((f) => f.evaluate(readCaptchaFrame).catch(() => "")));
+      return states.includes("refused") ? "refused" : `${requests}#${states.join("#")}`;
+    },
+    stop: () => void tab.off("request", onRequest),
+  };
+}
+
+/**
+ * Runs inside one of reCAPTCHA's frames (its checkbox, or its challenge): what it shows, as text, or
+ * "refused" for its "try again later" page. Self-contained: it's sent to the page as text.
+ */
+function readCaptchaFrame(): string {
+  const shown = (s: string) => Array.from(document.querySelectorAll(s)).some((e) => e.getClientRects().length > 0);
+  if (shown(".rc-doscaptcha-header")) return "refused";
+  const box = document.querySelector("#recaptcha-anchor");
+  return [
+    box?.getAttribute("aria-checked") ?? "",
+    box?.className ?? "",
+    document.querySelector(".rc-imageselect-instructions")?.textContent ?? "",
+    document.querySelector("#rc-imageselect-target img")?.getAttribute("src") ?? "",
+    document.querySelectorAll(".rc-imageselect-tileselected").length,
+    (document.querySelector("#audio-response") as HTMLInputElement | null)?.value ?? "",
+    document.querySelector(".rc-audiochallenge-tdownload-link")?.getAttribute("href") ?? "",
+    document.querySelector(".rc-audiochallenge-error-message")?.textContent ?? "",
+  ].join("|");
+}
+
+/**
+ * Runs inside Google's results page: how many organic results it shows, and the site's results on it
+ * (host, without www; never ads), each marked with data-sa-link="<index>" so the visit can click it.
+ * Two layouts: results that are links (<a href>), and Google's layout without them (the title is a
+ * role="link" element opened by Google's script; where it goes is only the address shown above it,
+ * "https://www.site.org › …"). Then any other link to the site (sitelinks, a phone's layout). Each
+ * result: its title, its href when it has one, and its place among the organic results.
+ * Self-contained: it's sent to the page as text.
+ */
+function findSiteResults(host: string): { organic: number; titles: number; links: { text: string; href: string | null; position: number | null }[] } {
+  const hostOf = (s: string): string | null => {
     try {
-      const u = new URL(href);
+      const u = new URL(/^https?:\/\//i.test(s) ? s : `https://${s}`);
       const real = /(^|\.)google\./.test(u.hostname) && u.pathname === "/url" ? new URL(u.searchParams.get("q") ?? u.searchParams.get("url") ?? "") : u;
       return real.hostname.replace(/^www\./, "").toLowerCase();
     } catch {
       return null;
     }
   };
-  for (const a of Array.from(document.querySelectorAll<HTMLAnchorElement>("a[href]"))) {
-    if (a.closest("#tads, #bottomads, [data-text-ad]")) continue;
-    const t = target(a.href);
-    if (t === host || t?.endsWith(`.${host}`)) return a.href;
+  const isSite = (h: string | null) => !!h && (h === host || h.endsWith(`.${host}`));
+  const isAd = (el: Element) => !!el.closest("#tads, #bottomads, [data-text-ad]");
+  const shown = (el: Element) => el.getClientRects().length > 0;
+  // An address as Google shows it above a result, the start of a line: "https://www.site.org › page",
+  // "site.org"… (a title or a snippet doesn't start with one).
+  const ADDRESS = /^(https?:\/\/)?[\w-]+(\.[\w-]+)*\.[a-z]{2,}$/i;
+  const addressIn = (text: string | null | undefined): string | null => {
+    const first = (text ?? "").trim().split(/\s|›/)[0];
+    return first && ADDRESS.test(first) ? hostOf(first) : null;
+  };
+  const shownHost = (heading: Element): string | null => {
+    // The nearest block around the title that shows an address (not so far up it's the next result's):
+    // a <cite>, or an element with no others inside whose text is the address.
+    for (let e = heading.parentElement, up = 0; e && up < 5; e = e.parentElement, up++) {
+      const found = [e.querySelector("cite"), ...Array.from(e.querySelectorAll("span, div")).filter((s) => s.children.length === 0)]
+        .map((s) => addressIn(s?.textContent))
+        .find(Boolean);
+      if (found) return found;
+    }
+    return null;
+  };
+  document.querySelectorAll("[data-sa-link]").forEach((e) => e.removeAttribute("data-sa-link"));
+  const marked: Element[] = [];
+  const links: { text: string; href: string | null; position: number | null }[] = [];
+  const mark = (el: Element, text: string, href: string | null, position: number | null) => {
+    if (marked.includes(el)) return;
+    el.setAttribute("data-sa-link", String(links.length));
+    marked.push(el);
+    links.push({ text: text.trim().slice(0, 100), href, position });
+  };
+  const root = document.querySelector("#rso") ?? document.querySelector("#search") ?? document.body;
+  let organic = 0;
+  const titles = Array.from(root.querySelectorAll("h3, [role='heading'][aria-level='3']"));
+  for (const h of titles) {
+    if (isAd(h) || !shown(h)) continue;
+    const a = h.closest<HTMLAnchorElement>("a[href]") ?? h.querySelector<HTMLAnchorElement>("a[href]");
+    const clickable = a ?? h.querySelector("[role='link']") ?? h.closest("[role='link']");
+    if (!clickable) continue;
+    // Where it goes: its link's host, unless that's Google's own redirect (/goto?url=<encrypted>…),
+    // then the address Google shows with it.
+    const linked = a && /^https?:\/\//i.test(a.getAttribute("href") ?? "") ? hostOf(a.href) : null;
+    const target = linked && !/(^|\.)google\./.test(linked) ? linked : shownHost(h);
+    if (!target || /(^|\.)google\./.test(target)) continue;
+    organic++;
+    if (isSite(target)) mark(clickable, h.textContent ?? "", a ? a.href : null, organic);
   }
-  return null;
+  for (const a of Array.from(document.querySelectorAll<HTMLAnchorElement>("a[href]"))) {
+    if (!isAd(a) && shown(a) && isSite(hostOf(a.href))) mark(a, a.textContent ?? "", a.href, null);
+  }
+  return { organic, titles: titles.length, links };
+}
+
+/** findSiteResults in the tab; nothing found when the page can't be read (e.g. it's moving on), and why. */
+async function readSiteResults(tab: Page, host: string): Promise<ReturnType<typeof findSiteResults> & { error?: string }> {
+  return tab.evaluate(findSiteResults, host).catch((err) => ({ organic: 0, titles: 0, links: [], error: friendly(err) }));
 }
 
 /**
  * Clicks the site's result on Google's results page (as a person would: Google is the referer), in
- * the same tab, and resolves once the site's page has its content (DOMContentLoaded).
+ * the same tab, and resolves once the site's page has its content (DOMContentLoaded). A click that
+ * doesn't open the site is tried again, CLICK_TRIES times in all, each on a different one of the
+ * site's results when Google shows several (back to the first when there are fewer) and each a
+ * different way (the mouse on it, the mouse moved there by hand, the keyboard); only then is the site
+ * opened in this tab directly (the result's href, else the site), still from Google (its referer).
  */
-async function clickResult(tab: Page, link: string): Promise<{ status(): number } | null> {
-  const anchor = await tab.evaluateHandle((href) => {
-    // In this tab, never a new one: no target on the links, and Google's own window.open goes here too.
-    document.querySelectorAll("a[target]").forEach((a) => a.removeAttribute("target"));
-    window.open = (u?: string | URL) => {
-      if (u) location.href = String(u);
-      return null;
-    };
-    return Array.from(document.querySelectorAll<HTMLAnchorElement>("a[href]")).find((el) => el.href === href) ?? null;
-  }, link);
-  const el = anchor.asElement();
-  if (!el) throw new Error("The site's result wasn't on Google's results page any more.");
+async function clickResult(tab: Page, siteUrl: string, say: (message: string) => void): Promise<{ status(): number } | null> {
   const googleUrl = tab.url();
+  const host = new URL(siteUrl).hostname.replace(/^www\./, "").toLowerCase();
   const offGoogle = (u: URL) => !/(^|\.)google\./.test(u.hostname);
-  const nav = tab.waitForNavigation({ url: offGoogle, waitUntil: "domcontentloaded" });
-  nav.catch(() => {}); // not waited for when the click did nothing (below)
-  await el.click();
-  // The click did nothing (still on Google after CLICK_WAIT_MS): the result is opened in this tab
-  // directly, still from Google (its referer), instead of the visit waiting and failing.
-  const moved = await Promise.race([nav.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), CLICK_WAIT_MS))]);
-  if (moved || offGoogle(new URL(tab.url()))) return nav;
-  return tab.goto(link, { waitUntil: "domcontentloaded", referer: googleUrl });
+  let fallback: string | null = null;
+  let firstText: string | null = null;
+  for (let attempt = 1; attempt <= CLICK_TRIES; attempt++) {
+    // A try that left the results for another Google page (a redirect notice…): back to the results.
+    if (attempt > 1 && tab.url() !== googleUrl) {
+      await tab.goBack({ waitUntil: "domcontentloaded" }).catch(() => null);
+      if (tab.url() !== googleUrl) await tab.goto(googleUrl, { waitUntil: "domcontentloaded", referer: googleUrl }).catch(() => null);
+    }
+    // In this tab, never a new one: no target on the links, and Google's own window.open goes here too.
+    await tab
+      .evaluate(() => {
+        document.querySelectorAll("a[target]").forEach((a) => a.removeAttribute("target"));
+        window.open = (u?: string | URL) => {
+          if (u) location.href = String(u);
+          return null;
+        };
+      })
+      .catch(() => {});
+    const { links } = await readSiteResults(tab, host);
+    // Try n on the site's n-th result; back to the first when there are fewer.
+    const i = links[attempt - 1] ? attempt - 1 : 0;
+    const pick = links[i];
+    fallback ??= links.find((l) => l.href)?.href ?? null;
+    firstText ??= links[0]?.text ?? null;
+    const el = pick ? await tab.$(`[data-sa-link="${i}"]`) : null;
+    if (!pick || !el) {
+      say(`Click ${attempt} of ${CLICK_TRIES}: the site's result isn't on Google's results page${attempt < CLICK_TRIES ? "; trying again…" : "."}`);
+      continue;
+    }
+    if (attempt > 1) say(`Click ${attempt} of ${CLICK_TRIES}: ${i === 0 ? "the site's first result again" : `another of the site's results (“${pick.text}”)`}…`);
+    const nav = tab.waitForNavigation({ url: offGoogle, waitUntil: "domcontentloaded" });
+    nav.catch(() => {}); // not waited for when the click did nothing (below)
+    try {
+      await el.scrollIntoViewIfNeeded({ timeout: 5_000 }).catch(() => {});
+      if (attempt === 1) {
+        await el.click({ timeout: 10_000 });
+      } else if (attempt === 2) {
+        // The mouse moved onto it in small steps, then pressed: nothing in the way is waited for.
+        const box = await el.boundingBox();
+        if (!box) throw new Error("the result isn't visible");
+        const x = box.x + Math.min(box.width / 2, 40 + Math.random() * 40);
+        const y = box.y + box.height / 2;
+        await tab.mouse.move(x, y, { steps: 12 });
+        await tab.mouse.click(x, y, { delay: 60 + Math.random() * 80 });
+      } else {
+        await el.focus();
+        await tab.keyboard.press("Enter");
+      }
+    } catch (err) {
+      say(`Click ${attempt} of ${CLICK_TRIES} on the site's result didn't work (${friendly(err)})${attempt < CLICK_TRIES ? "; trying again…" : "."}`);
+      continue;
+    }
+    const moved = await Promise.race([nav.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), CLICK_WAIT_MS))]);
+    if (moved || offGoogle(new URL(tab.url()))) return nav;
+    say(`Click ${attempt} of ${CLICK_TRIES} on the site's result didn't open it in ${CLICK_WAIT_MS / 1000}s${attempt < CLICK_TRIES ? "; clicking again…" : "."}`);
+  }
+  const direct = fallback ?? siteUrl;
+  say(`The site's result${firstText ? ` (“${firstText}”)` : ""} didn't open after ${CLICK_TRIES} clicks: opening ${direct.slice(0, 100)} directly, from Google's results page.`);
+  return tab.goto(direct, { waitUntil: "domcontentloaded", referer: googleUrl });
 }
 
 /** A screenshot of the tab in the temp folder, for a step message: " · screenshot <path>", or "". */
@@ -750,8 +1041,11 @@ async function saveShot(tab: Page): Promise<string> {
 /** The IP check at the end of a visit: at most this long. */
 const END_CHECK_MS = 8_000;
 
-/** How long a click on Google's result has to start opening the site before it's opened directly. */
+/** How long each click on Google's result has to start opening the site before the next try. */
 const CLICK_WAIT_MS = 15_000;
+
+/** How many times the site's result on Google is clicked before it's opened directly (at least 3). */
+const CLICK_TRIES = 3;
 
 /** Downloads through the browser context, so it uses the same proxy as the visit. */
 function proxiedFetcher(context: BrowserContext): SitemapFetcher {

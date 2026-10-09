@@ -9,6 +9,8 @@
 
 import { existsSync } from "node:fs";
 import type { Browser, Page, Target } from "puppeteer-core";
+import type { PuppeteerExtra } from "puppeteer-extra";
+import { stealthPlugin } from "./stealth";
 import { NO_WEBRTC_ARGS, NO_WEBRTC_SCRIPT } from "./no-webrtc";
 import { ProxyWaitError, burnProxy, getProxy, getProxyOrReuse, type ProxyConfig } from "./proxy-api";
 import { takeGoogleTurn } from "./google-turn";
@@ -119,10 +121,17 @@ export async function openBrowserSearch({ newIp = false, signal }: { newIp?: boo
   }
 }
 
+/** Puppeteer with the stealth plugin (src/lib/stealth.ts): set up once. */
+let puppeteerExtra: Promise<PuppeteerExtra> | null = null;
+function stealthPuppeteer(): Promise<PuppeteerExtra> {
+  return (puppeteerExtra ??= Promise.all([import("puppeteer-core"), import("puppeteer-extra")]).then(([puppeteer, { addExtra }]) =>
+    addExtra(puppeteer.default).use(stealthPlugin()),
+  ));
+}
+
 async function openWithProxy(executablePath: string, proxy: ProxyConfig, profileDir?: string): Promise<BrowserSearch> {
   // Loaded only here: the browser library isn't available on Vercel.
-  const puppeteer = await import("puppeteer-core");
-  const browser: Browser = await puppeteer
+  const browser: Browser = await (await stealthPuppeteer())
     .launch({
       executablePath,
       // Headed: a visible browser window, like a person searching.
@@ -146,9 +155,12 @@ async function openWithProxy(executablePath: string, proxy: ProxyConfig, profile
       const locked = profileDir ? profileLockedMessage(err, profileDir) : null;
       throw locked ? new Error(locked) : err;
     });
-  // Everything happens in the one tab Chrome starts with. Any other tab (e.g. Adobe Acrobat's welcome
+  // Everything happens in one tab, opened by the app: the stealth plugin only sets up tabs opened
+  // after launch, so Chrome's starting tab is closed. Any other tab (e.g. Adobe Acrobat's welcome
   // page, opened by the extension itself) is closed at once.
-  const tab: Page = (await browser.pages())[0] ?? (await browser.newPage());
+  const starting = await browser.pages();
+  const tab: Page = await browser.newPage();
+  for (const t of starting) void t.close().catch(() => {});
   browser.on("targetcreated", async (target: Target) => {
     if (target.type() !== "page") return;
     const other = await target.page().catch(() => null);
@@ -179,7 +191,7 @@ async function openWithProxy(executablePath: string, proxy: ProxyConfig, profile
       let blocked = googleBlocked(tab.url(), !!(await tab.$("#captcha-form")));
       if (blocked === "captcha") {
         console.log(`[ranking] Google asked for a CAPTCHA (proxy ${proxy.address}): waiting up to ${CAPTCHA_WAIT_MS / 1000}s for it to be solved in the browser window…`);
-        blocked = (await waitForCaptcha(async () => (tab.isClosed() ? "closed" : googleBlocked(tab.url(), !!(await tab.$("#captcha-form"))) === "captcha"))) ? null : "captcha";
+        blocked = (await waitForCaptcha(async () => (tab.isClosed() ? "closed" : googleBlocked(tab.url(), !!(await tab.$("#captcha-form"))) === "captcha"))) === "solved" ? null : "captcha";
       }
       // The browser was closed (by hand, or the app stopping): the check ends, it isn't tried again.
       if (tab.isClosed() || !browser.connected) throw new Error("the browser was closed");
@@ -213,23 +225,60 @@ export const CAPTCHA_WAIT_MS = (Number(process.env.CAPTCHA_WAIT_SEC) || 30) * 10
 export class GoogleBlockedError extends Error {}
 
 /**
- * Waits until the CAPTCHA is gone (Google then goes on to the results), checking every 2 seconds, for
- * up to waitMs (CAPTCHA_WAIT_MS; Infinity = until it's solved). True when it's gone; false when it's
- * still there, or the tab was closed ("closed": the visit or check was stopped, so no more waiting).
+ * While a CAPTCHA is being solved (something in it keeps changing: a new picture, an answer typed…),
+ * the wait goes on past CAPTCHA_WAIT_MS, until nothing has changed in it for this long.
  */
-export async function waitForCaptcha(stillThere: () => Promise<boolean | "closed">, waitMs = CAPTCHA_WAIT_MS): Promise<boolean> {
-  const until = Date.now() + waitMs;
-  while (Date.now() < until) {
+export const CAPTCHA_STALL_MS = 30_000;
+
+/** The longest a CAPTCHA is waited for, even while it's still being solved. */
+export const CAPTCHA_MAX_MS = 5 * 60_000;
+
+/**
+ * How a CAPTCHA wait ended: solved; the tab closed (the visit or check was stopped); nothing happening
+ * in it for waitMs ("idle"); its solving stopped for CAPTCHA_STALL_MS ("stuck"); still being solved
+ * after CAPTCHA_MAX_MS ("too-long"); Google refusing to give a CAPTCHA at all ("refused"); or its
+ * "type the characters" CAPTCHA, which the extension can't solve ("text": tried again at once).
+ */
+export type CaptchaEnd = "solved" | "closed" | "idle" | "stuck" | "too-long" | "refused" | "text";
+
+/**
+ * Waits until the CAPTCHA is gone (Google then goes on to the results), checking every 2 seconds, for
+ * up to waitMs (CAPTCHA_WAIT_MS; Infinity = until it's solved). With `activity` (what the CAPTCHA
+ * shows now, as text; "refused" when Google won't give one, "text" for its type-the-characters
+ * CAPTCHA: both end the wait at once), the wait goes on past waitMs while that
+ * keeps changing (the CAPTCHA being solved), calling onBusy once when it does.
+ */
+export async function waitForCaptcha(
+  stillThere: () => Promise<boolean | "closed">,
+  { waitMs = CAPTCHA_WAIT_MS, activity, onBusy }: { waitMs?: number; activity?: () => Promise<string>; onBusy?: () => void } = {},
+): Promise<CaptchaEnd> {
+  const start = Date.now();
+  let last: string | undefined;
+  let changedAt: number | null = null;
+  let told = false;
+  for (;;) {
     await new Promise((r) => setTimeout(r, 2000));
     try {
       const there = await stillThere();
-      if (there === "closed") return false;
-      if (!there) return true;
+      if (there === "closed") return "closed";
+      if (!there) return "solved";
+      const now = await activity?.();
+      if (now === "refused" || now === "text") return now;
+      if (now !== undefined && now !== last) {
+        if (last !== undefined) changedAt = Date.now();
+        last = now;
+      }
     } catch {
       /* the page is moving on (Google redirecting to the results): check again */
     }
+    const t = Date.now();
+    if (t < start + waitMs) continue;
+    if (changedAt === null) return "idle";
+    if (t >= start + CAPTCHA_MAX_MS) return "too-long";
+    if (t - changedAt >= CAPTCHA_STALL_MS) return "stuck";
+    if (!told) onBusy?.();
+    told = true;
   }
-  return false;
 }
 
 /** Why Google didn't show results, from the page's URL and whether it has a CAPTCHA form; null when it did. */
