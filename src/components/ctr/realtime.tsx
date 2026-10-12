@@ -52,6 +52,21 @@ export function RealtimePanel({ run }: { run: VisitRun }) {
   }, []);
   const [hover, setHover] = useState<number | null>(null);
 
+  // Opening the page: the bars populate once (each rises, coming in left to right), after the console's replay of
+  // earlier visits has arrived (it comes in a burst; until then the bars stay hidden, so nothing
+  // blinks). Then the class is gone, so it never plays again.
+  const [intro, setIntro] = useState<"waiting" | "playing" | "done">("waiting");
+  useEffect(() => {
+    if (intro !== "waiting") return;
+    const t = setTimeout(() => setIntro("playing"), 600);
+    return () => clearTimeout(t);
+  }, [run.visits.length, intro]);
+  useEffect(() => {
+    if (intro !== "playing") return;
+    const t = setTimeout(() => setIntro("done"), 1300);
+    return () => clearTimeout(t);
+  }, [intro]);
+
   // Like Google Analytics' realtime chart: when a new minute starts, the bars slide one step to the
   // left (from where they were) and the new minute comes in on the right. The only movement here,
   // once a minute; the axis stays put.
@@ -154,7 +169,7 @@ export function RealtimePanel({ run }: { run: VisitRun }) {
 
         <div>
           <div className="mb-1 font-mono text-[10px] tracking-[0.16em] text-muted uppercase">Visits per minute</div>
-          <div ref={chartBox} className="overflow-hidden" style={{ height: 170 }}>
+          <div ref={chartBox} className={`overflow-hidden ${intro === "waiting" ? "rt-bars-waiting" : intro === "playing" ? "rt-bars-intro" : ""}`} style={{ height: 170 }}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
                 data={perMinute}

@@ -138,3 +138,26 @@ body {
     background-position: -200% 0;
   }
 }
+
+/* The realtime chart's bars on opening (src/components/ctr/realtime.tsx): hidden while the visits
+   arrive, then populating once: rising bars, coming in left to right. */
+.rt-bars-waiting .recharts-bar-rectangles {
+  opacity: 0;
+}
+.rt-bars-intro .recharts-bar-rectangles {
+  animation: rt-bars-reveal 900ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+/* Each bar grows up from its bottom while the reveal sweeps across: the chart populates. */
+.rt-bars-intro .recharts-bar-rectangle {
+  transform-box: fill-box;
+  transform-origin: bottom;
+  animation: bar-rise 700ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes rt-bars-reveal {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
