@@ -97,7 +97,8 @@ export function CampaignDetail({ id }: { id: number }) {
   }, [load]);
 
   // The campaign's visit console: what has happened so far, then live while it runs. On another PC:
-  // through the live console relay (only while it's active or paused). Followed again when it moves.
+  // from that PC's minute check-in (Realtime updates on there; only while it's active or paused). Followed
+  // again when it moves.
   const source = !data ? null : data.here ? "here" : isOpen(data.campaign.status) && data.campaign.computerId ? data.campaign.computerId : null;
   useEffect(() => (source ? follow(id, source !== "here") : undefined), [follow, id, source]);
 
@@ -180,7 +181,7 @@ export function CampaignDetail({ id }: { id: number }) {
                 onChange={(to) =>
                   to &&
                   run("moveTo", async () => {
-                    // The console follows it (here, or through the relay) once the page reloads.
+                    // The console follows it (here, or from that PC) once the page reloads.
                     await api(`/api/ctr/campaigns/${id}`, { method: "PATCH", body: JSON.stringify({ moveTo: to }) });
                   })
                 }
@@ -217,7 +218,7 @@ export function CampaignDetail({ id }: { id: number }) {
                   } else {
                     run("status", async () => {
                       await api(`/api/ctr/campaigns/${id}`, { method: "PATCH", body: JSON.stringify({ status: "active" }) });
-                      // On another PC, it starts there at its next minute check: the relay shows it then.
+                      // On another PC, it starts there at its next minute check, and shows here after the next one.
                       follow(id, !here);
                     });
                   }
@@ -279,14 +280,15 @@ export function CampaignDetail({ id }: { id: number }) {
               {otherCopy ? (
                 <>
                   This campaign runs on this PC, but in the other copy of the app that&apos;s open here (<b>{runner!.app}</b>): only one copy
-                  runs the campaigns, so no visit is done twice. Its live console comes from there, through the relay. Quit that copy, and
+                  runs the campaigns, so no visit is done twice. Its console comes from that copy, updated every minute (with Realtime
+                  updates on in Settings → This computer). Quit that copy, and
                   this one takes over within a minute.
                 </>
               ) : c.computerName ? (
                 <>
-                  This campaign runs on <b>{c.computerName}</b>: its visits and ranking checks happen there, and its live console comes
-                  from there, through the relay (starting within a minute). Pause, Resume, Stop and Move to work from here too (that
-                  computer picks them up within a minute).
+                  This campaign runs on <b>{c.computerName}</b>: its visits and ranking checks happen there. Its console below comes from
+                  there, updated every minute, when Realtime updates are on for that PC (its Settings → This computer). Pause, Resume,
+                  Stop and Move to work from here too (that computer picks them up within a minute).
                 </>
               ) : (
                 <>No computer runs this campaign yet. The first computer with the app running takes it within a minute.</>
@@ -308,7 +310,7 @@ export function CampaignDetail({ id }: { id: number }) {
           </div>
         </Notice>
       )}
-      {/* Realtime, like Google Analytics: wherever the campaign's live console comes from (here, or the relay). */}
+      {/* Realtime, like Google Analytics: wherever the campaign's console comes from (here, or the PC that runs it). */}
       {source && <RealtimePanel run={visit} />}
       <VisitRunView run={visit} />
       {ranking && (

@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
 import { cookies } from "next/headers";
-import { AppWindow, Info, KeyRound, Monitor, Radio, UserRound, Users } from "lucide-react";
+import { AppWindow, Info, KeyRound, Monitor, UserRound, Users } from "lucide-react";
 import { SESSION_COOKIE, readSessionToken } from "@/lib/auth/session";
 import { Panel } from "@/components/ui/primitives";
 import { ProxyApiField } from "@/components/ui/proxy-api-field";
 import { ChromeProfileField } from "@/components/ui/chrome-profile-field";
 import { ComputerNameField } from "@/components/ui/computer-name-field";
-import { LiveRelayField } from "@/components/ui/live-relay-field";
+import { RealtimeUpdatesField } from "@/components/ui/realtime-updates-field";
 import { appVersion } from "@/lib/app-version";
 import { campaignRunner } from "@/lib/runner-lock";
 import { thisComputer } from "@/lib/this-computer";
@@ -50,15 +50,9 @@ export default async function SettingsPage() {
           the Windows name (e.g. <span className="font-mono">LAPTOP-5J9TO10G</span>), so everyone can tell the computers apart. Each computer saves its own.
         </p>
         <ComputerNameField />
-      </Panel>
-
-      <Panel title={<Title icon={<Radio className="size-3.5" />} text="Live console" />} bodyClassName="space-y-3 p-4 sm:p-5">
-        <p className="text-sm text-muted">
-          To watch the live console of a campaign that runs on <b className="text-ink">another PC</b> (from any computer, or from home), it
-          goes through a small relay server (<code>relay/README.md</code>: free on Render). Only used while someone watches: the PC connects
-          to it within a minute of a page opening, and lets go a few minutes after it closes. Saved for every computer.
-        </p>
-        <LiveRelayField />
+        <div className="border-t border-line pt-3">
+          <RealtimeUpdatesField />
+        </div>
       </Panel>
 
       <Panel title={<Title icon={<KeyRound className="size-3.5" />} text="Proxy" />} bodyClassName="space-y-3 p-4 sm:p-5">

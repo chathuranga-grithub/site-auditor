@@ -10,16 +10,16 @@
 // and each computer only runs its own. Every minute it also picks up what was changed from another
 // computer: a campaign paused, resumed, stopped, deleted or moved; one no computer runs yet, it takes;
 // one started for this computer from another one, it runs (and checks its ranking, as the computer that
-// starts a campaign does). And it says it's on, so other computers can start campaigns on it. And
-// the campaigns a page watches from elsewhere: their live console, through the relay (live-relay.ts).
+// starts a campaign does). And it says it's on, so other computers can start campaigns on it; with
+// Realtime updates on (Settings), also what its campaigns are doing, for pages elsewhere (live-snapshot.ts).
 
 import { appVersion } from "../app-version";
 import { isConnectionError, untilDbReachable } from "../db-retry";
-import { serveLiveConsoles } from "../live-relay";
 import { runsCampaignsHere } from "../runner-lock";
 import { thisComputer } from "../this-computer";
 import { NOT_IN_TOP_10, collectCampaign, stopCampaignCheck } from "./collect";
 import { NotConfiguredError, claimCampaign, listCampaigns, listDays, reportComputer } from "./db";
+import { liveSnapshot, realtimeUpdates } from "./live-snapshot";
 import { todayInVietnam } from "./site";
 import type { Campaign } from "./types";
 import { campaignVisitStatus, forgetCampaignVisit, runningVisitIds, startCampaignVisit, stopCampaignVisit } from "./visits";
@@ -73,7 +73,6 @@ function stopEverythingHere(): void {
     stopCampaignCheck(id);
   }
   runnableHere.clear();
-  void serveLiveConsoles(null, []);
 }
 
 export function startDailyChecks(): void {
@@ -112,7 +111,9 @@ async function syncHere(first = false): Promise<void> {
       ? await untilDbReachable(listCampaigns, { onWait: () => console.warn("Resuming campaign visits: can't reach the database; trying again in 30s…") })
       : await listCampaigns();
     // Saying it's on can wait for the next minute: it never holds up the campaigns.
-    await reportComputer(me, (await appVersion()).version).catch((err: unknown) => console.warn("Couldn't say this computer is on:", err));
+    // With Realtime updates on: what its campaigns are doing too, in the same write (pages elsewhere show it).
+    const live = (await realtimeUpdates()) ? liveSnapshot(campaigns.filter((c) => c.computerId === me.id).map((c) => c.id)) : null;
+    await reportComputer(me, (await appVersion()).version, live).catch((err: unknown) => console.warn("Couldn't say this computer is on:", err));
     const today = todayInVietnam();
     for (let c of campaigns) {
       // No computer runs it yet (made before computers were told apart, or on Vercel): this one takes it.
@@ -141,10 +142,6 @@ async function syncHere(first = false): Promise<void> {
         void collectCampaign(c, today).catch((err: unknown) => console.error(`Campaign ${c.id}: first check failed:`, err));
       }
     }
-    // Its campaigns a page watches from another computer: their live console goes through the relay
-    // (connected only while there are some; seen here, so it costs no extra reads).
-    const watched = campaigns.filter((c) => c.computerId === me.id && c.liveUntil && Date.parse(c.liveUntil) > Date.now()).map((c) => c.id);
-    await serveLiveConsoles(me, watched).catch((err: unknown) => console.warn("Live console relay:", err));
     // Deleted (maybe from another computer): its visit ends.
     const ids = new Set(campaigns.map((c) => c.id));
     for (const id of runningVisitIds()) {

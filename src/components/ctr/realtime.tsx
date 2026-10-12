@@ -123,9 +123,9 @@ export function RealtimePanel({ run }: { run: VisitRun }) {
           <span className={`rounded-full px-2 py-0.5 font-mono text-[10px] tracking-wider uppercase ${run.running ? "bg-status-good/15 text-status-good" : "bg-surface-2 text-subtle"}`}>
             {run.running ? "Live" : "Not running"}
           </span>
-          <span className="text-xs text-subtle">last {MINUTES} minutes · on this PC</span>
+          <span className="text-xs text-subtle">last {MINUTES} minutes · {run.remote ? "on the PC that runs it" : "on this PC"}</span>
         </div>
-        <span className="font-mono text-[10px] text-subtle">updates as visits finish</span>
+        <span className="font-mono text-[10px] text-subtle">{run.remote ? "updated every minute (Realtime updates on that PC)" : "updates as visits finish"}</span>
       </header>
 
       <div className="relative mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,3fr)]">

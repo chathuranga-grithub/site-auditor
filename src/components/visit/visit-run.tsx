@@ -18,7 +18,7 @@ import {
 import { MAX_PAGES, OVERFLOW_PX, type Discovery, type VisitEvent, type VisitPage, type VisitReport, type VisitStage } from "@/lib/visit-types";
 import { Notice, Panel, StatusCode, UrlLink, buttonClass } from "@/components/ui/primitives";
 import { ACTIVITY_STYLE, DetailDialog } from "./visit-dialog";
-import { relayConsole } from "./relay-console";
+import { snapshotConsole } from "./snapshot-console";
 
 /** Problems listed in the notice before "and N more". */
 const ISSUES_SHOWN = 15;
@@ -99,8 +99,8 @@ function laneReducer(l: Lane, e: VisitEvent, at: number): Lane {
  */
 export function useVisitRun() {
   const [env, setEnv] = useState<{ local: boolean } | null>(null);
-  /** The console comes through the live console relay (the campaign runs on another PC). */
-  const [viaRelay, setViaRelay] = useState(false);
+  /** The console comes from another PC's minute check-in (the campaign runs there). */
+  const [remote, setRemote] = useState(false);
   const [running, setRunning] = useState(false);
   /** Lines about the whole visit (no lane). */
   const [common, setCommon] = useState<string[]>([]);
@@ -199,12 +199,13 @@ export function useVisitRun() {
 
   /**
    * Auto CTR: shows the campaign's visit (all lines so far, then live). `remote`: it runs on another PC,
-   * so its console comes through the live console relay. Returns a function that stops following.
+   * so its console comes from that PC's minute check-in (with Realtime updates on there; up to a minute
+   * behind). Returns a function that stops following.
    */
   const follow = useCallback(
     (campaignId: number, remote = false) => {
-      setViaRelay(remote);
-      void consume((signal) => (remote ? relayConsole(campaignId, signal) : fetch(`/api/ctr/campaigns/${campaignId}/visit`, { signal, cache: "no-store" })));
+      setRemote(remote);
+      void consume((signal) => (remote ? snapshotConsole(campaignId, signal) : fetch(`/api/ctr/campaigns/${campaignId}/visit`, { signal, cache: "no-store" })));
       return () => abortRef.current?.abort();
     },
     [consume],
@@ -225,8 +226,9 @@ export function useVisitRun() {
     error,
     reports,
     now,
-    // Through the relay, the visit runs on another PC: nothing has to run here.
-    notLocal: !!env && !env.local && !viaRelay,
+    // From another PC: the visit runs there, nothing has to run here.
+    notLocal: !!env && !env.local && !remote,
+    remote,
     openPage,
     setOpenPage,
     visits,

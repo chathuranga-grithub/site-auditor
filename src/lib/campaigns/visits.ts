@@ -397,20 +397,14 @@ async function run(c: VisitCampaign, v: LiveVisit) {
  * the visit ends. Nothing if there's been no visit since the app started.
  */
 /**
- * Follows the campaign's visit for the live console relay (src/lib/live-relay.ts): `onLine` for each
- * new line, `onEnd` when the visit ends. Returns what happened so far (null: no visit since the app
- * started) and how to stop following.
+ * The campaign's visit as it is now, for the minute snapshot (src/lib/campaigns/live-snapshot.ts): its
+ * state and its console so far (the visit's own list, not a copy); null if none since the app started.
  */
-export function watchCampaignVisit(
+export function campaignVisitNow(
   campaignId: number,
-  onLine: (e: LoggedVisitEvent) => void,
-  onEnd: () => void,
-): { events: LoggedVisitEvent[]; running: boolean; stop: () => void } | null {
+): { running: boolean; startedAt: number; run: number; runs: number; lanes: number; events: LoggedVisitEvent[] } | null {
   const v = visits.get(campaignId);
-  if (!v) return null;
-  const follow = (e: LoggedVisitEvent | null) => (e ? onLine(e) : onEnd());
-  if (v.running) v.listeners.add(follow);
-  return { events: v.events, running: v.running, stop: () => v.listeners.delete(follow) };
+  return v ? { running: v.running, startedAt: v.startedAt, run: v.run, runs: v.runs, lanes: v.lanes, events: v.events } : null;
 }
 
 export function campaignVisitStream(campaignId: number, signal: AbortSignal): ReadableStream<Uint8Array> {

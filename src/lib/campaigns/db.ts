@@ -5,7 +5,7 @@
 import { neon } from "@neondatabase/serverless";
 import { withDbRetry } from "../db-retry";
 import type { Computer } from "../this-computer";
-import { endDateOf, type Campaign, type CampaignChange, type CampaignDay, type CampaignNote, type CampaignStatus, type DayFields, type DayNotes, type EditableField, type FieldChange, type KnownComputer, type NewCampaign } from "./types";
+import { endDateOf, type LiveCampaign, type LiveSnapshot, type Campaign, type CampaignChange, type CampaignDay, type CampaignNote, type CampaignStatus, type DayFields, type DayNotes, type EditableField, type FieldChange, type KnownComputer, type NewCampaign } from "./types";
 
 /** The computer a campaign runs on: its id, and the name shown for it. */
 type RunsOn = Pick<Computer, "id" | "name">;
@@ -74,8 +74,6 @@ const SCHEMA = [
   // none until a computer takes them.
   `ALTER TABLE ctr_campaigns ADD COLUMN IF NOT EXISTS computer_id TEXT`,
   `ALTER TABLE ctr_campaigns ADD COLUMN IF NOT EXISTS computer_name TEXT`,
-  // A page watches its live console from another computer until then (src/lib/live-relay.ts), added later.
-  `ALTER TABLE ctr_campaigns ADD COLUMN IF NOT EXISTS live_until TIMESTAMPTZ`,
   `CREATE TABLE IF NOT EXISTS ctr_days (
     campaign_id INT NOT NULL REFERENCES ctr_campaigns(id) ON DELETE CASCADE,
     day DATE NOT NULL,
@@ -122,6 +120,9 @@ const SCHEMA = [
     app_version TEXT,
     last_seen TIMESTAMPTZ NOT NULL DEFAULT now()
   )`,
+  // What its campaigns are doing, with each minute's "I'm on" (only with Realtime updates on for that
+  // computer, src/lib/campaigns/live-snapshot.ts): overwritten each time, never kept. Added later.
+  `ALTER TABLE ctr_computers ADD COLUMN IF NOT EXISTS live JSONB`,
   // Each campaign's change history (created, edited, status, moved: who, when, from what to what), added later.
   `CREATE TABLE IF NOT EXISTS ctr_campaign_changes (
     id SERIAL PRIMARY KEY,
@@ -185,7 +186,6 @@ function toCampaign(r: Record<string, unknown>): Campaign {
     mobilePct: Number(r.mobile_pct),
     computerId: (r.computer_id as string | null) ?? null,
     computerName: (r.computer_name as string | null) ?? null,
-    liveUntil: r.live_until ? iso(r.live_until) : null,
     startDate: isoDay(r.start_date),
     endDate: isoDay(r.end_date),
     targetCtr: Number(r.target_ctr),
@@ -389,24 +389,35 @@ export async function listChanges(campaignId: number): Promise<CampaignChange[]>
 }
 
 /**
- * A page watches the campaign's live console from another computer: the computer that runs it sends it
- * through the relay until `seconds` from now (asked again while the page stays open). Its computer, or
- * null if no such campaign.
+ * This computer is on (every minute): its name, Windows name and app version, and the time. `live`:
+ * what its campaigns are doing now (Realtime updates on), or null (off: nothing kept).
  */
-export async function requestLive(id: number, seconds: number): Promise<Pick<Campaign, "computerId" | "computerName"> | null> {
-  const q = await db();
-  const rows = await q(`UPDATE ctr_campaigns SET live_until = now() + make_interval(secs => $2) WHERE id = $1 RETURNING computer_id, computer_name`, [id, seconds]);
-  return rows[0] ? { computerId: (rows[0].computer_id as string | null) ?? null, computerName: (rows[0].computer_name as string | null) ?? null } : null;
-}
-
-/** This computer is on (every minute): its name, Windows name and app version, and the time. */
-export async function reportComputer(computer: Computer, appVersion: string | null): Promise<void> {
+export async function reportComputer(computer: Computer, appVersion: string | null, live: LiveSnapshot | null = null): Promise<void> {
   const q = await db();
   await q(
-    `INSERT INTO ctr_computers (id, name, hostname, app_version, last_seen) VALUES ($1, $2, $3, $4, now())
-     ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, hostname = EXCLUDED.hostname, app_version = EXCLUDED.app_version, last_seen = now()`,
-    [computer.id, computer.name, computer.hostname, appVersion],
+    `INSERT INTO ctr_computers (id, name, hostname, app_version, last_seen, live) VALUES ($1, $2, $3, $4, now(), $5::jsonb)
+     ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, hostname = EXCLUDED.hostname, app_version = EXCLUDED.app_version, last_seen = now(), live = EXCLUDED.live`,
+    [computer.id, computer.name, computer.hostname, appVersion, live ? JSON.stringify(live) : null],
   );
+}
+
+/**
+ * What a campaign is doing on the computer that runs it, as of its last minute check-in: only that
+ * campaign's part of the snapshot is read. `sharing`: Realtime updates are on there.
+ */
+export async function readLiveSnapshot(
+  computerId: string,
+  campaignId: number,
+): Promise<{ name: string; lastSeen: string; sharing: boolean; at: string | null; campaign: LiveCampaign | null } | null> {
+  const q = await db();
+  const rows = await q(
+    `SELECT name, last_seen, live IS NOT NULL AS sharing, live ->> 'at' AS at, live -> 'campaigns' -> $2::text AS campaign FROM ctr_computers WHERE id = $1`,
+    [computerId, String(campaignId)],
+  );
+  const r = rows[0];
+  if (!r) return null;
+  const campaign = typeof r.campaign === "string" ? (JSON.parse(r.campaign) as LiveCampaign) : ((r.campaign as LiveCampaign | null) ?? null);
+  return { name: String(r.name), lastSeen: iso(r.last_seen), sharing: r.sharing === true, at: (r.at as string | null) ?? null, campaign };
 }
 
 /**

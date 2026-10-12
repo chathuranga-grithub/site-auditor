@@ -3,7 +3,6 @@
 # dependencies
 /node_modules
 /desktop/node_modules
-/relay/node_modules
 
 # desktop installer output (npm run desktop:build)
 /dist-desktop

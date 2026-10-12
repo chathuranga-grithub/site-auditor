@@ -69,8 +69,6 @@ export interface Campaign {
   /** The computer that runs its visits and ranking checks (others only show it); null = none yet. */
   computerId: string | null;
   computerName: string | null;
-  /** A page watches its live console from another computer until then (ISO); see src/lib/live-relay.ts. */
-  liveUntil: string | null;
   /** YYYY-MM-DD */
   startDate: string;
   endDate: string;
@@ -146,6 +144,26 @@ export interface CampaignChange {
   by: string | null;
   kind: "created" | "edited" | "status" | "moved";
   changes: FieldChange[];
+}
+
+/**
+ * What one campaign's visit is doing on the computer that runs it, as of its last minute check-in
+ * (src/lib/campaigns/live-snapshot.ts): its latest console lines (each with `at`, ms, and its `lane`),
+ * and the visits that finished in the last 30 minutes (their reports trimmed to what pages show).
+ */
+export interface LiveCampaign {
+  running: boolean;
+  startedAt: number;
+  run: number;
+  runs: number;
+  lanes: number;
+  lines: ({ type: string; at: number; lane?: number } & Record<string, unknown>)[];
+}
+
+/** A computer's snapshot of what its campaigns are doing (Realtime updates on), by campaign id. */
+export interface LiveSnapshot {
+  at: string;
+  campaigns: Record<string, LiveCampaign>;
 }
 
 /**
