@@ -1,4 +1,4 @@
-// GET  /api/ctr/campaigns → { items: { campaign, summary }[], setup, computer } (computer: this one,
+// GET  /api/ctr/campaigns → { items: { campaign, summary, days }[], setup, computer } (computer: this one,
 //   { id, name }, to tell which campaigns run here; null on Vercel)
 // POST /api/ctr/campaigns  body: NewCampaign → saves it (run by this computer), starts its visits, and
 //   starts the first check in the background (the page doesn't wait for the Google search).
@@ -20,7 +20,8 @@ export async function GET() {
     const setup = ctrSetup();
     const campaigns = await listCampaigns();
     const days = await listDaysFor(campaigns.map((c) => c.id));
-    const items = campaigns.map((campaign) => ({ campaign, summary: summarize(campaign, days.get(campaign.id) ?? [], today) }));
+    // Each campaign's days too (already read for the summaries: no extra query), for the dashboard's charts.
+    const items = campaigns.map((campaign) => ({ campaign, summary: summarize(campaign, days.get(campaign.id) ?? [], today), days: days.get(campaign.id) ?? [] }));
     return Response.json({ items, setup: await setup, computer: await thisComputer().catch(() => null) });
   } catch (err) {
     // No database yet: an empty list, and the page shows what to connect.
