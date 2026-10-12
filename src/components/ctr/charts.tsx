@@ -12,9 +12,9 @@ import { Area, AreaChart, Bar, CartesianGrid, Cell, ComposedChart, Line, Respons
 import { LineChart as LineIcon, Table2 } from "lucide-react";
 
 /** Categorical slots (dark-surface steps), in fixed order: identity follows the entity, never its rank. */
-/** Phone and desktop: two shades of one blue (one total split in two), validated as an ordinal pair. */
-export const PHONE = "#2a78d6";
-export const DESKTOP = "#86b6ef";
+/** Phone and desktop: blue and a muted copper orange, validated as a pair on this surface. */
+export const PHONE = "#3987e5";
+export const DESKTOP = "#cc7a40";
 
 export const SERIES = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"];
 /** A reference line (e.g. the plan): neutral ink, not a series hue. */
