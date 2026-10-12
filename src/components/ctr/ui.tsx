@@ -69,7 +69,7 @@ export function PageHeader({ section, title, intro, actions }: { section: string
 }
 
 /** Search Console and GA4: not used by campaigns for now, so not asked for. Set true to bring them back. */
-const GOOGLE_CONNECTOR = false;
+export const GOOGLE_CONNECTOR = false;
 
 /** What still needs connecting, in plain steps. */
 export function SetupNotice({ setup }: { setup: CtrSetup | null }) {

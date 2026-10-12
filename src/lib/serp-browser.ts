@@ -51,6 +51,12 @@ export interface BrowserResult {
   title: string;
   link: string;
   snippet: string;
+  /**
+   * What makes it one result (for removing repeats when two pages are read together): the link, and
+   * for a result whose link is Google's own redirect, the address shown plus its title (two results
+   * of one site show the same address).
+   */
+  key?: string;
 }
 
 export interface BrowserSearch {
@@ -197,7 +203,7 @@ async function openWithProxy(executablePath: string, proxy: ProxyConfig, profile
       if (tab.isClosed() || !browser.connected) throw new Error("the browser was closed");
       if (blocked === "captcha") throw new GoogleBlockedError(`Google asked for a CAPTCHA and it wasn't solved in ${CAPTCHA_WAIT_MS / 1000}s (proxy ${proxy.address})`);
       if (blocked) throw new GoogleBlockedError("Google showed its cookie consent page instead of results");
-      await tab.waitForSelector("#search", { timeout: 10_000 }).catch(() => {});
+      await tab.waitForSelector("#search, #rso", { timeout: 10_000 }).catch(() => {});
       return await tab.evaluate(readOrganicResults);
     },
     close: () => browser.close().catch(() => {}),
@@ -289,15 +295,55 @@ export function googleBlocked(at: string, captchaForm: boolean): "captcha" | "co
 }
 
 /**
- * Runs inside the results page (Puppeteer or Playwright evaluate): the organic results, links with
- * a heading inside the results column (ads sit outside it). Self-contained: it's sent to the page as text.
+ * Runs inside the results page (Puppeteer or Playwright evaluate): the organic results in Google's
+ * order, each a title (an <h3>, or a role="heading" level 3) in the results column (ads sit outside it).
+ * Two layouts: results that link to the site, and Google's layout where every result links to its own
+ * redirect (/goto?url=<encrypted>): there, where it goes is the address shown above the title
+ * ("https://www.site.org"), so that's the result's link. Self-contained: it's sent to the page as text.
  */
 export function readOrganicResults(): BrowserResult[] {
-  return Array.from(document.querySelectorAll<HTMLAnchorElement>("#search a[href]"))
-    .filter((a) => a.querySelector("h3") && /^https?:/.test(a.href) && !/(^|\.)google\./.test(new URL(a.href).hostname))
-    .map((a) => {
-      const block = a.closest("[data-hveid], .g") ?? a.parentElement;
-      const snippet = block?.querySelector<HTMLElement>("[data-sncf], .VwiC3b")?.innerText ?? "";
-      return { title: a.querySelector("h3")!.textContent?.trim() ?? "", link: a.href, snippet: snippet.trim() };
-    });
+  const isGoogle = (host: string) => /(^|\.)google\./.test(host);
+  // An address as Google shows it: "https://www.site.org", "site.org" (the first word of its line).
+  const ADDRESS = /^(https?:\/\/)?[\w-]+(\.[\w-]+)*\.[a-z]{2,}$/i;
+  const addressIn = (text: string | null | undefined) => {
+    const first = (text ?? "").trim().split(/\s|›/)[0];
+    return first && ADDRESS.test(first) ? (/^https?:\/\//i.test(first) ? first : `https://${first}`) : null;
+  };
+  /** The address shown with a title: in the nearest block around it (not so far up it's the next result's). */
+  const shownAddress = (heading: Element): string | null => {
+    for (let e = heading.parentElement, up = 0; e && up < 5; e = e.parentElement, up++) {
+      for (const s of [e.querySelector("cite"), ...Array.from(e.querySelectorAll("span, div")).filter((x) => x.children.length === 0)]) {
+        const found = addressIn(s?.textContent);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
+  /** A link's real target: Google's /url?q= redirect followed; null for Google's own pages. */
+  const target = (href: string): string | null => {
+    try {
+      const u = new URL(href);
+      if (isGoogle(u.hostname) && u.pathname === "/url") return target(u.searchParams.get("q") ?? u.searchParams.get("url") ?? "");
+      return /^https?:$/.test(u.protocol) && !isGoogle(u.hostname) ? u.href : null;
+    } catch {
+      return null;
+    }
+  };
+  const root = document.querySelector("#rso") ?? document.querySelector("#search") ?? document.body;
+  const out: BrowserResult[] = [];
+  for (const h of Array.from(root.querySelectorAll("h3, [role='heading'][aria-level='3']"))) {
+    if (h.closest("#tads, #bottomads, [data-text-ad]")) continue;
+    const a = h.closest<HTMLAnchorElement>("a[href]") ?? h.querySelector<HTMLAnchorElement>("a[href]");
+    if (!a && !h.querySelector("[role='link']") && !h.closest("[role='link']")) continue;
+    // A link only counts when it's written in full (a relative /goto?… is Google's redirect).
+    const linked = a && /^https?:\/\//i.test(a.getAttribute("href") ?? "") ? target(a.href) : null;
+    const shown = linked ? null : shownAddress(h);
+    const link = linked ?? (shown ? target(shown) : null);
+    if (!link) continue;
+    const title = h.textContent?.trim() ?? "";
+    const block = h.closest("[data-hveid], .g") ?? h.parentElement?.parentElement ?? h.parentElement;
+    const snippet = block?.querySelector<HTMLElement>("[data-sncf], .VwiC3b")?.innerText ?? "";
+    out.push({ title, link, snippet: snippet.trim(), key: linked ? link : `${link} ${title}` });
+  }
+  return out;
 }

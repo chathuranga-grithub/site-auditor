@@ -22,7 +22,7 @@ import type { VisitDevice, VisitEvent } from "../visit-types";
 import { isConnectionError, untilDbReachable } from "../db-retry";
 import { deviceLabel, pickDevice } from "../device-profiles";
 import { thisComputer } from "../this-computer";
-import { addVisitDone, visitsDoneOn } from "./db";
+import { recordVisits, visitsDoneOn, type VisitDayDelta } from "./db";
 import { todayInVietnam } from "./site";
 import { daysBetween } from "./metrics";
 import { mobileVisits, plannedVisits, type Campaign } from "./types";
@@ -46,7 +46,14 @@ interface LiveVisit {
   controller: AbortController;
   /** Open campaign pages following it; called with null when the visit ends. */
   listeners: Set<(e: LoggedVisitEvent | null) => void>;
+  /**
+   * What happened since the last visit that counted (failed tries, CAPTCHAs): kept here and saved with
+   * the next one that counts (recordVisits), so these details cost no extra writes.
+   */
+  pending: Pick<VisitDayDelta, "failed" | "captchasMet" | "captchasSolved">;
 }
+
+const noPending = (): LiveVisit["pending"] => ({ failed: 0, captchasMet: 0, captchasSolved: 0 });
 
 // On globalThis, so a code reload in `next dev` doesn't lose visits that are running.
 const g = globalThis as typeof globalThis & { __campaignVisits?: Map<number, LiveVisit> };
@@ -85,12 +92,13 @@ function shuffle<T>(items: T[]): T[] {
 const dwellTime = (c: VisitCampaign) => c.minDwellSec + Math.floor(Math.random() * (c.maxDwellSec - c.minDwellSec + 1));
 
 /**
- * Counts a finished visit for today. The database not reachable: the visit still counts, in the
- * background, as soon as it is again (the lane carries on with its next visit meanwhile).
+ * Saves visit numbers for today: a finished visit (with its details), or only tries that didn't count.
+ * The database not reachable: they're saved in the background as soon as it is again (the lane carries
+ * on with its next visit meanwhile).
  */
-async function countVisit(campaignId: number, phone: boolean, send: (e: VisitEvent) => void): Promise<void> {
+async function countVisit(campaignId: number, delta: VisitDayDelta, send: (e: VisitEvent) => void): Promise<void> {
   const day = todayInVietnam();
-  const count = () => addVisitDone(campaignId, day, phone);
+  const count = () => recordVisits(campaignId, day, delta);
   try {
     await count();
   } catch (err) {
@@ -114,7 +122,7 @@ export function startCampaignVisit(c: VisitCampaign): void {
   // After its last day (the end date): no more visits; the daily check marks it finished.
   if (todayInVietnam() > c.endDate) return;
   const runs = targetVisitsToday(c);
-  const v: LiveVisit = { startedAt: Date.now(), runs, run: 0, lanes: 0, events: [], running: true, controller: new AbortController(), listeners: new Set() };
+  const v: LiveVisit = { startedAt: Date.now(), runs, run: 0, lanes: 0, events: [], running: true, controller: new AbortController(), listeners: new Set(), pending: noPending() };
   visits.set(c.id, v);
   void run(c, v);
 }
@@ -206,7 +214,13 @@ async function run(c: VisitCampaign, v: LiveVisit) {
     if (v.lanes > 1) log({ type: "step", message: `Running ${v.lanes} visits at the same time, each through its own proxy link and IP.` });
 
     /** One visit run, through a free proxy link; takes another link while one makes it wait or repeats an IP. */
-    const runOnce = async (runNo: number, send: (e: VisitEvent) => void) => {
+    const runOnce = async (runNo: number, laneSend: (e: VisitEvent) => void) => {
+      // The CAPTCHAs met (and solved) along the way, for the day's numbers.
+      const send = (e: VisitEvent) => {
+        if (e.type === "stage" && e.stage === "captcha") v.pending.captchasMet++;
+        else if (e.type === "step" && e.message.startsWith("The CAPTCHA was solved")) v.pending.captchasSolved++;
+        laneSend(e);
+      };
       const device = deviceOf(runNo);
       // A run never gives up until the campaign is stopped: Google's CAPTCHA not solved in time, or
       // anything else going wrong, starts it again in a new browser with a new IP.
@@ -255,9 +269,25 @@ async function run(c: VisitCampaign, v: LiveVisit) {
           // unconfirmed proxy IP, proxy died), for the visits done per day; before "done", so a page
           // that reloads its numbers on "done" already sees it.
           if (!signal.aborted && !report.stopReason) {
-            await countVisit(c.id, device === "phone", send);
+            // With what happened before it since the last one (failed tries, CAPTCHAs), in the same write.
+            const before = v.pending;
+            v.pending = noPending();
+            const position = report.google?.position;
+            await countVisit(
+              c.id,
+              {
+                ...before,
+                done: 1,
+                mobile: device === "phone" ? 1 : 0,
+                seconds: Math.round(report.onSiteSec ?? 0),
+                pages: (report.start?.ok ? 1 : 0) + report.pages.length,
+                positions: position ? [position] : [],
+                computer: (await thisComputer().catch(() => null))?.name ?? null,
+              },
+              send,
+            );
             send({ type: "stage", stage: "done" });
-          }
+          } else if (!signal.aborted) v.pending.failed++;
           send({ type: "done", report });
           if (signal.aborted) send({ type: "step", message: "Stopped." });
           else if (report.stopReason) {
@@ -270,6 +300,7 @@ async function run(c: VisitCampaign, v: LiveVisit) {
           if (signal.aborted) throw err;
           // The browser is already closed; its IP counts as used, so the next try gets a new one.
           if (err instanceof GoogleBlockedError) {
+            v.pending.failed++;
             send({ type: "step", message: `${err.message}: closed this browser; trying again with a new proxy IP and a new browser (try ${++tries})…` });
             continue;
           }
@@ -287,6 +318,7 @@ async function run(c: VisitCampaign, v: LiveVisit) {
           }
           // Anything else (Chrome didn't start, the proxy failed…): the run doesn't give up, it waits a bit
           // and starts again in a new browser with a new IP. Shown as a step: the lane carries on.
+          v.pending.failed++;
           send({ type: "step", message: `This visit failed (${err instanceof Error ? err.message : String(err)}); trying again in ${RETRY_AFTER_SEC}s in a new browser (a new proxy IP if the provider gives one, else its current one; try ${++tries})…` });
           retryAfter = true;
         } finally {
@@ -334,6 +366,13 @@ async function run(c: VisitCampaign, v: LiveVisit) {
     v.running = false;
     for (const f of v.listeners) f(null);
     v.listeners.clear();
+    // Tries that didn't count since the last visit that did: saved once now, so the day shows them.
+    const left = v.pending;
+    v.pending = noPending();
+    if (left.failed || left.captchasMet) {
+      const computer = (await thisComputer().catch(() => null))?.name ?? null;
+      void countVisit(c.id, { ...left, done: 0, mobile: 0, seconds: 0, pages: 0, positions: [], computer }, () => {});
+    }
   }
 }
 

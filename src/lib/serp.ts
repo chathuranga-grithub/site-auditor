@@ -112,8 +112,11 @@ export function clean(raw: BrowserResult[]): SerpResult[] {
   const out: SerpResult[] = [];
   const seen = new Set<string>();
   for (const r of raw) {
-    if (!r.link || !/^https?:\/\//i.test(r.link) || seen.has(r.link)) continue;
-    seen.add(r.link);
+    // Repeats (e.g. page 1 and page 2 overlapping) by the result's key: two results of one site
+    // shown with the same address stay two results.
+    const key = r.key ?? r.link;
+    if (!r.link || !/^https?:\/\//i.test(r.link) || seen.has(key)) continue;
+    seen.add(key);
     let domain = "";
     try {
       domain = new URL(r.link).hostname.replace(/^www\./, "");

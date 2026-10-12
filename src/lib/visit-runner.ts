@@ -181,7 +181,7 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
     let phone: BrowserContext | null;
     // The visit's one tab: profile check, IP check, Google, then the site, all in it.
     let main: Page;
-    let fromGoogle: { link: string | null; page: number } | null = null;
+    let fromGoogle: { link: string | null; page: number; position: number | null } | null = null;
     let claimedIp: string | null = null;
     // TEMPORARY (testing): set when the site is opened directly after an unsolved CAPTCHA (see below).
     let openedDirectly = false;
@@ -291,6 +291,7 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
     }
     const page = main;
     report.reachedBy = fromGoogle ? "google" : "direct";
+    if (fromGoogle) report.google = { page: fromGoogle.page, position: fromGoogle.position };
     const onSiteFrom = Date.now();
     // Reading one page takes at most a quarter of the time on the site (10s at least), so a visit sees several pages.
     const readCap = dwellSec ? Math.min(READ_MAX_SEC, Math.max(10, Math.round(dwellSec / 4))) : READ_MAX_SEC;
@@ -628,7 +629,7 @@ async function searchGoogleFirst(
   siteUrl: string,
   send: VisitOptions["send"],
   signal: AbortSignal,
-): Promise<{ link: string | null; page: number } | null> {
+): Promise<{ link: string | null; page: number; position: number | null } | null> {
   if (country.toUpperCase() !== BROWSER_SEARCH_COUNTRY) {
     send({ type: "step", message: "Only Vietnam can be searched (the proxy is in Vietnam), so the Google search was skipped; opening the site directly." });
     return null;
@@ -692,7 +693,8 @@ async function searchGoogleFirst(
       if (first) {
         const others = found.links.length > 1 ? ` (${found.links.length} links to it there)` : "";
         send({ type: "step", message: `The site is ${first.position ? `#${first.position} ` : ""}on ${on} for “${keyword}”${others}.` });
-        return { link: first.href, page: n };
+        // Its place on Google overall (page 2 starts at #11).
+        return { link: first.href, page: n, position: first.position ? (n - 1) * 10 + first.position : null };
       }
       // Nothing read at all: not a results page (or a layout this can't read); a picture to see why.
       const why = found.organic ? `The site isn't on ${on}` : `Couldn't read any results on ${on} (page: ${tab.url().slice(0, 120)} · ${found.titles} titles${found.error ? ` · ${found.error}` : ""}${await saveShot(tab)})`;

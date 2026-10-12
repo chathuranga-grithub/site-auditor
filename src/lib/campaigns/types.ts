@@ -110,6 +110,20 @@ export interface CampaignDay {
   visitsDone: number;
   /** Of those, the ones made on a phone. */
   mobileVisitsDone: number;
+  /** Visit tries that didn't count (a CAPTCHA not solved, the site not found, a proxy failing…). */
+  visitTriesFailed: number;
+  /** Google CAPTCHAs the visits met, and how many were solved. */
+  captchasMet: number;
+  captchasSolved: number;
+  /** Seconds on the site and pages read, over the visits that counted. */
+  visitSeconds: number;
+  pagesRead: number;
+  /** The site's Google position in the visits' own searches: average and best (null: none seen). */
+  visitPositionAvg: number | null;
+  visitPositionBest: number | null;
+  /** The day's last visit that counted (ISO time), and the computer that made it. */
+  lastVisitAt: string | null;
+  lastComputer: string | null;
   /** What couldn't be read that day, per source, in plain words. */
   notes: DayNotes;
 }
@@ -118,8 +132,25 @@ export type DaySource = "serp" | "gsc" | "ga4";
 export type DayNotes = Partial<Record<DaySource, string>>;
 
 /** The columns of a day that one source fills in. */
-/** (Visit runs are counted on their own, addVisitDone.) */
-export type DayFields = Partial<Omit<CampaignDay, "campaignId" | "day" | "visitsDone" | "mobileVisitsDone">>;
+/** (Visit runs are counted on their own, recordVisits.) */
+export type DayFields = Partial<
+  Omit<
+    CampaignDay,
+    | "campaignId"
+    | "day"
+    | "visitsDone"
+    | "mobileVisitsDone"
+    | "visitTriesFailed"
+    | "captchasMet"
+    | "captchasSolved"
+    | "visitSeconds"
+    | "pagesRead"
+    | "visitPositionAvg"
+    | "visitPositionBest"
+    | "lastVisitAt"
+    | "lastComputer"
+  >
+>;
 
 export interface CampaignNote {
   id: number;

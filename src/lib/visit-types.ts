@@ -140,6 +140,8 @@ export interface VisitReport {
   reachedBy?: "google" | "direct";
   /** Seconds on the site: from opening it until leaving (campaign visits). */
   onSiteSec?: number;
+  /** The site's result on Google that the visit clicked: its results page, and its place there (null: not known). */
+  google?: { page: number; position: number | null };
 }
 
 /** How many internal pages the test found, and where. */

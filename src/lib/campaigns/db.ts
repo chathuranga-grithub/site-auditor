@@ -89,6 +89,19 @@ const SCHEMA = [
   `ALTER TABLE ctr_days ADD COLUMN IF NOT EXISTS visits_done INT NOT NULL DEFAULT 0`,
   // Of those, the ones on a phone, added later.
   `ALTER TABLE ctr_days ADD COLUMN IF NOT EXISTS mobile_visits_done INT NOT NULL DEFAULT 0`,
+  // What the day's visits did (added later, saved with each visit's count: no extra writes): the tries
+  // that didn't count, the CAPTCHAs met and solved, seconds on the site and pages read, the site's
+  // Google position seen in the visits' own searches, and the last visit (when, on which computer).
+  `ALTER TABLE ctr_days ADD COLUMN IF NOT EXISTS visit_tries_failed INT NOT NULL DEFAULT 0`,
+  `ALTER TABLE ctr_days ADD COLUMN IF NOT EXISTS captchas_met INT NOT NULL DEFAULT 0`,
+  `ALTER TABLE ctr_days ADD COLUMN IF NOT EXISTS captchas_solved INT NOT NULL DEFAULT 0`,
+  `ALTER TABLE ctr_days ADD COLUMN IF NOT EXISTS visit_seconds INT NOT NULL DEFAULT 0`,
+  `ALTER TABLE ctr_days ADD COLUMN IF NOT EXISTS pages_read INT NOT NULL DEFAULT 0`,
+  `ALTER TABLE ctr_days ADD COLUMN IF NOT EXISTS visit_position_sum INT NOT NULL DEFAULT 0`,
+  `ALTER TABLE ctr_days ADD COLUMN IF NOT EXISTS visit_position_count INT NOT NULL DEFAULT 0`,
+  `ALTER TABLE ctr_days ADD COLUMN IF NOT EXISTS visit_position_best INT`,
+  `ALTER TABLE ctr_days ADD COLUMN IF NOT EXISTS last_visit_at TIMESTAMPTZ`,
+  `ALTER TABLE ctr_days ADD COLUMN IF NOT EXISTS last_computer TEXT`,
   `CREATE TABLE IF NOT EXISTS ctr_notes (
     id SERIAL PRIMARY KEY,
     campaign_id INT NOT NULL REFERENCES ctr_campaigns(id) ON DELETE CASCADE,
@@ -178,6 +191,15 @@ function toDay(r: Record<string, unknown>): CampaignDay {
     engagementSec: num(r.engagement_sec),
     visitsDone: Number(r.visits_done ?? 0),
     mobileVisitsDone: Number(r.mobile_visits_done ?? 0),
+    visitTriesFailed: Number(r.visit_tries_failed ?? 0),
+    captchasMet: Number(r.captchas_met ?? 0),
+    captchasSolved: Number(r.captchas_solved ?? 0),
+    visitSeconds: Number(r.visit_seconds ?? 0),
+    pagesRead: Number(r.pages_read ?? 0),
+    visitPositionAvg: Number(r.visit_position_count ?? 0) > 0 ? Math.round((Number(r.visit_position_sum) / Number(r.visit_position_count)) * 10) / 10 : null,
+    visitPositionBest: num(r.visit_position_best),
+    lastVisitAt: r.last_visit_at ? new Date(r.last_visit_at as string).toISOString() : null,
+    lastComputer: (r.last_computer as string | null) ?? null,
     notes,
   };
 }
@@ -287,14 +309,50 @@ export async function upsertDay(campaignId: number, day: string, fields: DayFiel
   );
 }
 
-/** One more visit run finished on that day; `mobile`: it was on a phone. */
-export async function addVisitDone(campaignId: number, day: string, mobile: boolean): Promise<void> {
+/** What visits add to a day: see recordVisits. */
+export interface VisitDayDelta {
+  /** Visits that counted (0: only tries that didn't, saved when a lane stops). */
+  done: number;
+  mobile: number;
+  /** Tries that didn't count (a CAPTCHA not solved, the site not found, a proxy failing…). */
+  failed: number;
+  captchasMet: number;
+  captchasSolved: number;
+  /** Seconds on the site and pages read, over the visits that counted. */
+  seconds: number;
+  pages: number;
+  /** The site's Google position in those visits' searches. */
+  positions: number[];
+  /** The computer that made them. */
+  computer: string | null;
+}
+
+/**
+ * Adds to a day's visit numbers in one write: each visit that counts is saved together with what
+ * happened before it (its failed tries and CAPTCHAs), so the details cost no extra writes.
+ */
+export async function recordVisits(campaignId: number, day: string, d: VisitDayDelta): Promise<void> {
   const q = await db();
-  const m = mobile ? 1 : 0;
+  const best = d.positions.length ? Math.min(...d.positions) : null;
+  const sum = d.positions.reduce((a, b) => a + b, 0);
   await q(
-    `INSERT INTO ctr_days (campaign_id, day, visits_done, mobile_visits_done) VALUES ($1, $2, 1, $3)
-     ON CONFLICT (campaign_id, day) DO UPDATE SET visits_done = ctr_days.visits_done + 1, mobile_visits_done = ctr_days.mobile_visits_done + $3`,
-    [campaignId, day, m],
+    `INSERT INTO ctr_days (campaign_id, day, visits_done, mobile_visits_done, visit_tries_failed, captchas_met, captchas_solved,
+       visit_seconds, pages_read, visit_position_sum, visit_position_count, visit_position_best, last_visit_at, last_computer)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CASE WHEN $3::int > 0 THEN now() END, $13)
+     ON CONFLICT (campaign_id, day) DO UPDATE SET
+       visits_done = ctr_days.visits_done + EXCLUDED.visits_done,
+       mobile_visits_done = ctr_days.mobile_visits_done + EXCLUDED.mobile_visits_done,
+       visit_tries_failed = ctr_days.visit_tries_failed + EXCLUDED.visit_tries_failed,
+       captchas_met = ctr_days.captchas_met + EXCLUDED.captchas_met,
+       captchas_solved = ctr_days.captchas_solved + EXCLUDED.captchas_solved,
+       visit_seconds = ctr_days.visit_seconds + EXCLUDED.visit_seconds,
+       pages_read = ctr_days.pages_read + EXCLUDED.pages_read,
+       visit_position_sum = ctr_days.visit_position_sum + EXCLUDED.visit_position_sum,
+       visit_position_count = ctr_days.visit_position_count + EXCLUDED.visit_position_count,
+       visit_position_best = LEAST(ctr_days.visit_position_best, EXCLUDED.visit_position_best),
+       last_visit_at = COALESCE(EXCLUDED.last_visit_at, ctr_days.last_visit_at),
+       last_computer = COALESCE(EXCLUDED.last_computer, ctr_days.last_computer)`,
+    [campaignId, day, d.done, d.mobile, d.failed, d.captchasMet, d.captchasSolved, d.seconds, d.pages, sum, d.positions.length, best, d.computer],
   );
 }
 

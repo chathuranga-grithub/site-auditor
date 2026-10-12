@@ -14,7 +14,7 @@ import { todayInVietnam } from "@/lib/campaigns/site";
 import { plannedVisits, visitPlanProgress, type Campaign, type CampaignDay } from "@/lib/campaigns/types";
 import { Notice, Panel, StatTile, buttonClass } from "@/components/ui/primitives";
 import { VisitRunView, useVisitRun } from "@/components/visit/visit-run";
-import { CONFIRM, CampaignConfirm, isOpen, HealthBadge, PageHeader, Progress, StatusBadge, api, ComputerBadge, type ThisComputer } from "./ui";
+import { CONFIRM, CampaignConfirm, isOpen, HealthBadge, PageHeader, Progress, StatusBadge, api, ComputerBadge, GOOGLE_CONNECTOR, type ThisComputer } from "./ui";
 
 const HEARTBEAT_MS = 5 * 60_000;
 
@@ -290,10 +290,15 @@ export function CampaignDetail({ id }: { id: number }) {
       <div className="flex flex-wrap items-center gap-4">
         <HealthBadge health={s.health} />
         <Progress day={s.dayNumber} total={c.durationDays} />
-        <span className="text-xs text-subtle">{s.daysLeft} day(s) left · Search Console and GA4 numbers arrive about 3 days late</span>
+        <span className="text-xs text-subtle">
+          {s.daysLeft} day(s) left{GOOGLE_CONNECTOR ? " · Search Console and GA4 numbers arrive about 3 days late" : ""}
+        </span>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
+      {/* Without Search Console and GA4: what the visits did today, from their own numbers. */}
+      {!GOOGLE_CONNECTOR && <VisitDayTiles day={days.find((d) => d.day === todayInVietnam()) ?? null} position={s.position} positionDay={s.positionDay} target={c.targetPosition} />}
+
+      <div className={`grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6 ${GOOGLE_CONNECTOR ? "" : "hidden"}`}>
         <StatTile label="Google position" value={s.position ?? "—"} detail={c.targetPosition != null ? `goal ≤ ${c.targetPosition}` : s.positionDay ?? "not checked yet"} severity={s.position != null && c.targetPosition != null ? (s.position <= c.targetPosition ? "good" : "warning") : undefined} />
         <StatTile label="CTR (7 days)" value={s.ctr != null ? `${s.ctr}%` : "—"} detail={`goal ${c.targetCtr}%${s.expected != null ? ` · typical ${s.expected}%` : ""}`} severity={s.ctr != null ? (s.ctr >= c.targetCtr ? "good" : "warning") : undefined} />
         <StatTile label="Clicks (7 days)" value={s.clicks7 ?? "—"} detail={s.growthPct != null ? `${s.growthPct > 0 ? "+" : ""}${s.growthPct}% vs last week${c.weeklyGrowthPct != null ? ` · goal +${c.weeklyGrowthPct}%` : ""}` : "growth after 2 weeks of data"} severity={s.growthPct != null && c.weeklyGrowthPct != null ? (s.growthPct >= c.weeklyGrowthPct ? "good" : "warning") : undefined} />
@@ -305,7 +310,9 @@ export function CampaignDetail({ id }: { id: number }) {
       {c.status === "active" && <VisitPlanTiles campaign={c} day={s.dayNumber} done={s.visitsDone} doneToday={s.visitsDoneToday} />}
 
       <Panel title={`Daily numbers · ${days.length}`} bodyClassName="">
-        {days.length ? (
+        {days.length && !GOOGLE_CONNECTOR ? (
+          <VisitDaysTable campaign={c} days={days} />
+        ) : days.length ? (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[900px] text-left font-mono text-xs">
               <thead className="border-b border-line text-[10px] tracking-[0.12em] text-subtle uppercase">
@@ -342,6 +349,136 @@ export function CampaignDetail({ id }: { id: number }) {
       </Panel>
 
     </Shell>
+  );
+}
+
+/** "1m 32s" / "45s". */
+const duration = (sec: number) => (sec >= 60 ? `${Math.floor(sec / 60)}m ${Math.round(sec % 60)}s` : `${Math.round(sec)}s`);
+/** The day's average per visit that counted, or null. */
+const perVisit = (total: number, d: CampaignDay) => (d.visitsDone ? total / d.visitsDone : null);
+/** Visits that counted, out of every try. */
+const successRate = (d: CampaignDay) => (d.visitsDone + d.visitTriesFailed ? Math.round((d.visitsDone / (d.visitsDone + d.visitTriesFailed)) * 100) : null);
+
+/** Today, from the visits' own numbers: how they went, what they met, how long they stayed. */
+function VisitDayTiles({ day: d, position, positionDay, target }: { day: CampaignDay | null; position: number | null; positionDay: string | null; target: number | null }) {
+  const rate = d ? successRate(d) : null;
+  const seconds = d ? perVisit(d.visitSeconds, d) : null;
+  const pages = d ? perVisit(d.pagesRead, d) : null;
+  return (
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
+      <StatTile
+        label="Google position"
+        value={position ?? "—"}
+        detail={`${target != null ? `goal ≤ ${target} · ` : ""}${positionDay ? `daily check ${positionDay}` : "not checked yet"}`}
+        severity={position != null && target != null ? (position <= target ? "good" : "warning") : undefined}
+      />
+      <StatTile
+        label="Position in visits"
+        value={d?.visitPositionAvg != null ? `#${d.visitPositionAvg}` : "—"}
+        detail={d?.visitPositionBest != null ? `average today · best #${d.visitPositionBest}` : "where the visits found the site today"}
+      />
+      <StatTile
+        label="Visits that worked"
+        value={rate != null ? `${rate}%` : "—"}
+        detail={d ? `${d.visitsDone} counted · ${d.visitTriesFailed} tries failed today` : "no visits today yet"}
+        severity={rate != null ? (rate >= 50 ? "good" : "warning") : undefined}
+      />
+      <StatTile label="CAPTCHAs" value={d ? `${d.captchasSolved} / ${d.captchasMet}` : "—"} detail="solved / met today" severity={d && d.captchasMet ? (d.captchasSolved >= d.captchasMet / 2 ? "good" : "warning") : undefined} />
+      <StatTile label="Time on site" value={seconds != null ? duration(seconds) : "—"} detail="average per visit today" />
+      <StatTile
+        label="Pages per visit"
+        value={pages != null ? pages.toFixed(1) : "—"}
+        detail={d?.lastVisitAt ? `last visit ${new Date(d.lastVisitAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}${d.lastComputer ? ` · ${d.lastComputer}` : ""}` : "average per visit today"}
+      />
+    </div>
+  );
+}
+
+/** One row per day, from the visits' own numbers (no Search Console or GA4): what was actually done. */
+function VisitDaysTable({ campaign: c, days }: { campaign: Campaign; days: CampaignDay[] }) {
+  const head = [
+    ["Day", ""],
+    ["Visits", "done / planned"],
+    ["Phone / desktop", "visits done"],
+    ["Worked", "visits that counted, of every try"],
+    ["CAPTCHAs", "solved / met"],
+    ["Position", "daily check · in visits: average (best)"],
+    ["Time on site", "average per visit"],
+    ["Pages", "per visit"],
+    ["Last visit", "time · computer"],
+    ["Notes", ""],
+  ];
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[1100px] text-left font-mono text-xs">
+        <thead className="border-b border-line text-[10px] tracking-[0.12em] text-subtle uppercase">
+          <tr>
+            {head.map(([h, hint]) => (
+              <th key={h} className="px-3 py-2 font-medium" title={hint || undefined}>
+                {h}
+                {hint && <span className="block font-sans text-[9px] tracking-normal normal-case opacity-70">{hint}</span>}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-line">
+          {[...days].reverse().map((d) => {
+            const planned = plannedVisits(c.day1Visits, c.dailyIncreasePct, Math.max(1, daysBetween(c.startDate, d.day) + 1));
+            const rate = successRate(d);
+            const seconds = perVisit(d.visitSeconds, d);
+            const pages = perVisit(d.pagesRead, d);
+            const dash = <span className="text-subtle">–</span>;
+            return (
+              <tr key={d.day} className="align-top">
+                <td className="px-3 py-2 text-muted">{d.day}</td>
+                <td className="px-3 py-2">
+                  {d.visitsDone.toLocaleString()} <span className="text-subtle">/ {planned.toLocaleString()}</span>
+                  <span className={`block text-[10px] ${d.visitsDone >= planned ? "text-status-good" : "text-subtle"}`}>{planned ? `${Math.round((d.visitsDone / planned) * 100)}% of the plan` : ""}</span>
+                </td>
+                <td className="px-3 py-2">
+                  {d.visitsDone ? (
+                    <>
+                      {d.mobileVisitsDone} / {d.visitsDone - d.mobileVisitsDone}
+                    </>
+                  ) : (
+                    dash
+                  )}
+                </td>
+                <td className="px-3 py-2">
+                  {rate != null ? (
+                    <>
+                      <span className={rate >= 50 ? "text-status-good" : "text-status-warning"}>{rate}%</span>
+                      <span className="block text-[10px] text-subtle">{d.visitTriesFailed} failed</span>
+                    </>
+                  ) : (
+                    dash
+                  )}
+                </td>
+                <td className="px-3 py-2">{d.captchasMet ? `${d.captchasSolved} / ${d.captchasMet}` : dash}</td>
+                <td className="px-3 py-2">
+                  {d.position != null ? `#${d.position}` : dash}
+                  {d.visitPositionAvg != null && (
+                    <span className="block text-[10px] text-subtle">
+                      visits #{d.visitPositionAvg} (#{d.visitPositionBest})
+                    </span>
+                  )}
+                </td>
+                <td className="px-3 py-2">{seconds != null && d.visitSeconds ? duration(seconds) : dash}</td>
+                <td className="px-3 py-2">{pages != null && d.pagesRead ? pages.toFixed(1) : dash}</td>
+                <td className="px-3 py-2">
+                  {d.lastVisitAt ? new Date(d.lastVisitAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : dash}
+                  {d.lastComputer && <span className="block text-[10px] text-subtle">{d.lastComputer}</span>}
+                </td>
+                <td className="px-3 py-2 font-sans text-[11px] text-subtle">{d.notes.serp ?? ""}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <p className="border-t border-line px-3 py-2 font-sans text-[11px] text-subtle">
+        Visit details (failed tries, CAPTCHAs, time on site, pages, position in visits) are counted from version 1.0.2 of the app; earlier days show only the visits done.
+      </p>
+    </div>
   );
 }
 
