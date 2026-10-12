@@ -2,12 +2,12 @@
 
 // The Auto CTR dashboard's charts, on Recharts: smooth lines with a soft glow over a gradient wash,
 // rounded gradient bars, a frosted tooltip listing every series at that day, and animations (lines
-// draw in, bars grow, numbers count up; none when the system asks for reduced motion). The dataviz
+// draw in, bars grow, numbers count up; always, even with Windows' animation effects off). The dataviz
 // rules still hold: one y-axis per chart, whole-number ticks, hairline grid, a legend for two or
 // more series, text in text tokens (never a series color), and a table view of every chart.
 // Colors: the dark categorical slots, validated on this app's surface (#0f1118), in fixed order.
 
-import { useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Area, AreaChart, Bar, CartesianGrid, Cell, ComposedChart, Line, Rectangle, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { LineChart as LineIcon, Table2 } from "lucide-react";
 
@@ -64,17 +64,12 @@ export function PlayInView({ children, className = "" }: { children: ReactNode; 
   );
 }
 
-const REDUCED = "(prefers-reduced-motion: reduce)";
+/**
+ * Whether to skip the animations. Never: the dashboard always animates, even when Windows' "Animation
+ * effects" is off (which browsers pass on as prefers-reduced-motion) - asked for by the team.
+ */
 export function useReducedMotion(): boolean {
-  return useSyncExternalStore(
-    (on) => {
-      const m = window.matchMedia(REDUCED);
-      m.addEventListener("change", on);
-      return () => m.removeEventListener("change", on);
-    },
-    () => window.matchMedia(REDUCED).matches,
-    () => false,
-  );
+  return false;
 }
 
 /** A number counting up to its value (ease-out, ~0.9s), again when the value changes. */
@@ -83,14 +78,22 @@ export function CountUp({ value, format = (n: number) => Math.round(n).toLocaleS
   // Counts once it's on screen (a number further down starts when it's scrolled to).
   const [ref, seen] = useInView<HTMLSpanElement>(0.1);
   const [shown, setShown] = useState(0);
+  // It counts up once; later changes (e.g. a live number updating) show the new value straight away.
+  const counted = useRef(false);
   useEffect(() => {
     if (reduced || !seen) return;
     let raf = 0;
+    if (counted.current) {
+      raf = requestAnimationFrame(() => setShown(value));
+      return () => cancelAnimationFrame(raf);
+    }
     const start = performance.now();
     const tick = (t: number) => {
-      const k = Math.min(1, (t - start) / duration);
+      // A frame can be timed just before the start: never below 0.
+      const k = Math.min(1, Math.max(0, (t - start) / duration));
       setShown(value * (1 - (1 - k) ** 3));
       if (k < 1) raf = requestAnimationFrame(tick);
+      else counted.current = true;
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);

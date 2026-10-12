@@ -101,7 +101,7 @@ export function RealtimePanel({ run }: { run: VisitRun }) {
       <header className="relative flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2.5">
           <span className="relative flex size-2.5" aria-hidden>
-            {run.running && <span className="absolute inline-flex size-full animate-ping rounded-full bg-status-good opacity-75" />}
+            {/* Still, not pulsing: nothing in this panel keeps animating (it updates for as long as the page is open). */}
             <span className={`relative inline-flex size-2.5 rounded-full ${run.running ? "bg-status-good" : "bg-subtle"}`} />
           </span>
           <h2 className="text-sm font-semibold">Realtime</h2>
@@ -199,7 +199,7 @@ export function RealtimePanel({ run }: { run: VisitRun }) {
                 key={key}
                 className={`inline-flex items-center gap-2 rounded-xl border px-3 py-1.5 text-xs transition ${n ? "border-accent/50 bg-accent/10 text-ink shadow-[0_0_16px_-4px_#8b5cf680]" : "border-line text-subtle"}`}
               >
-                <Icon className={`size-3.5 ${n ? "text-accent" : ""} ${n && key === "browser" ? "animate-spin" : n && !reduced ? "animate-pulse" : ""}`} aria-hidden />
+                <Icon className={`size-3.5 ${n ? "text-accent" : ""}`} aria-hidden />
                 {label}
                 <span className="font-mono font-semibold">{n}</span>
               </span>

@@ -123,11 +123,6 @@ body {
     opacity: 0;
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .bar-rise {
-    animation: none;
-  }
-}
 
 /* A placeholder that softly shimmers while its content loads (the dashboard's skeleton). */
 .skeleton {
@@ -141,10 +136,5 @@ body {
   }
   to {
     background-position: -200% 0;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .skeleton {
-    animation: none;
   }
 }
