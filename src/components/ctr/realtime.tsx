@@ -11,7 +11,7 @@ import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis
 import { Globe, Loader2, MousePointerClick, Search, ShieldCheck, Timer, type LucideIcon } from "lucide-react";
 import type { VisitRun } from "@/components/visit/visit-run";
 import type { VisitStage } from "@/lib/visit-types";
-import { BarList, CountUp, DESKTOP, PHONE, SERIES, useReducedMotion } from "./charts";
+import { BarList, CountUp, DESKTOP, PHONE, PlayInView, RisingBar, SERIES, useReducedMotion, type BarShapeProps } from "./charts";
 
 const MINUTES = 30;
 const GRID = "#ffffff12";
@@ -138,6 +138,7 @@ export function RealtimePanel({ run }: { run: VisitRun }) {
 
         <div>
           <div className="mb-1 font-mono text-[10px] tracking-[0.16em] text-muted uppercase">Visits per minute</div>
+          <PlayInView>
           <div style={{ height: 170 }}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
@@ -175,7 +176,7 @@ export function RealtimePanel({ run }: { run: VisitRun }) {
                     );
                   }}
                 />
-                <Bar dataKey="visits" fill={SERIES[0]} radius={[2, 2, 0, 0]} maxBarSize={24} minPointSize={2} isAnimationActive={!reduced} animationDuration={500} animationEasing="ease-out">
+                <Bar dataKey="visits" fill={SERIES[0]} radius={[2, 2, 0, 0]} maxBarSize={24} minPointSize={2} isAnimationActive={false} shape={(p: BarShapeProps) => <RisingBar {...p} delay={reduced ? 0 : (p.index ?? 0) * 25} />}>
                   {perMinute.map((r, i) => (
                     <Cell key={r.ago} fill={r.visits ? SERIES[0] : "#ffffff14"} fillOpacity={hover == null || hover === i ? 1 : 0.4} style={{ transition: "fill-opacity 200ms ease" }} />
                   ))}
@@ -183,6 +184,7 @@ export function RealtimePanel({ run }: { run: VisitRun }) {
               </BarChart>
             </ResponsiveContainer>
           </div>
+          </PlayInView>
         </div>
       </div>
 

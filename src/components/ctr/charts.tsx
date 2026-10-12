@@ -7,16 +7,16 @@
 // more series, text in text tokens (never a series color), and a table view of every chart.
 // Colors: the dark categorical slots, validated on this app's surface (#0f1118), in fixed order.
 
-import { useEffect, useId, useState, useSyncExternalStore, type ReactNode } from "react";
-import { Area, AreaChart, Bar, CartesianGrid, Cell, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { Area, AreaChart, Bar, CartesianGrid, Cell, ComposedChart, Line, Rectangle, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { LineChart as LineIcon, Table2 } from "lucide-react";
 
 /** Categorical slots (dark-surface steps), in fixed order: identity follows the entity, never its rank. */
-/** Phone and desktop: blue and a muted copper orange, validated as a pair on this surface. */
-export const PHONE = "#3987e5";
-export const DESKTOP = "#cc7a40";
 
-export const SERIES = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"];
+export const SERIES = ["#3987e5", "#199e70", "#d95926", "#9085e9", "#c98500", "#d55181", "#008300", "#e66767"];
+/** Phone and desktop (and any chart's two parts): blue and teal, the first two slots. */
+export const PHONE = SERIES[0];
+export const DESKTOP = SERIES[1];
 /** A reference line (e.g. the plan): neutral ink, not a series hue. */
 const REFERENCE = "#9aa0b4";
 const GRID = "#ffffff12";
@@ -26,6 +26,44 @@ export const shortDay = (day: string) => new Date(`${day}T00:00:00Z`).toLocaleDa
 export const compact = (n: number) => (Math.abs(n) >= 10_000 ? `${(n / 1000).toFixed(n >= 100_000 ? 0 : 1)}K` : Math.round(n).toLocaleString());
 
 /** True when the system asks for less motion: charts and numbers then appear at once. */
+/**
+ * Whether the element has been scrolled into view (a quarter of it on screen), once: charts play
+ * their animation then, not when the page loads. Without IntersectionObserver: at once.
+ */
+export function useInView<T extends Element>(threshold = 0.25): [React.RefObject<T | null>, boolean] {
+  const ref = useRef<T>(null);
+  const [seen, setSeen] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || seen) return;
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) {
+        setSeen(true);
+        io.disconnect();
+      }
+    }, { threshold });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [seen, threshold]);
+  return [ref, seen];
+}
+
+/**
+ * Children that play their animation when scrolled into view: kept invisible until then (the page
+ * keeps its layout), and drawn afresh at that moment, so bars rise, lines draw in and numbers count.
+ */
+export function PlayInView({ children, className = "" }: { children: ReactNode; className?: string }) {
+  const [ref, seen] = useInView<HTMLDivElement>();
+  const reduced = useReducedMotion();
+  return (
+    <div ref={ref} className={className}>
+      <div key={seen || reduced ? "in" : "out"} style={{ opacity: seen || reduced ? 1 : 0, transition: "opacity 300ms ease" }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 const REDUCED = "(prefers-reduced-motion: reduce)";
 export function useReducedMotion(): boolean {
   return useSyncExternalStore(
@@ -40,22 +78,28 @@ export function useReducedMotion(): boolean {
 }
 
 /** A number counting up to its value (ease-out, ~0.9s), again when the value changes. */
-export function CountUp({ value, format = (n: number) => Math.round(n).toLocaleString() }: { value: number; format?: (n: number) => string }) {
+export function CountUp({ value, format = (n: number) => Math.round(n).toLocaleString(), duration = 1100 }: { value: number; format?: (n: number) => string; duration?: number }) {
   const reduced = useReducedMotion();
+  // Counts once it's on screen (a number further down starts when it's scrolled to).
+  const [ref, seen] = useInView<HTMLSpanElement>(0.1);
   const [shown, setShown] = useState(0);
   useEffect(() => {
-    if (reduced) return;
+    if (reduced || !seen) return;
     let raf = 0;
     const start = performance.now();
     const tick = (t: number) => {
-      const k = Math.min(1, (t - start) / 900);
+      const k = Math.min(1, (t - start) / duration);
       setShown(value * (1 - (1 - k) ** 3));
       if (k < 1) raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [value, reduced]);
-  return <>{format(reduced ? value : shown)}</>;
+  }, [value, reduced, seen, duration]);
+  return (
+    <span ref={ref} className="tabular-nums">
+      {format(reduced ? value : shown)}
+    </span>
+  );
 }
 
 export interface Legend {
@@ -182,7 +226,7 @@ export function ChartCard({
             <span className="max-w-64">{empty}</span>
           </div>
         ) : (
-          children
+          <PlayInView>{children}</PlayInView>
         )}
       </div>
     </section>
@@ -260,9 +304,10 @@ export function ColumnChart({
               stroke="#0f1118"
               strokeWidth={stacks.length > 1 ? 1 : 0}
               maxBarSize={40}
-              isAnimationActive={!reduced}
-              animationDuration={600}
-              animationEasing="ease-out"
+              // On opening: the bars rise one after another, left to right (a CSS wave, see bar-rise in
+              // globals.css; none with reduced motion), the upper segment just after the lower one.
+              isAnimationActive={false}
+              shape={(p: BarShapeProps) => <RisingBar {...p} delay={(p.index ?? 0) * 45 + k * 140} />}
             >
               {data.map((_, i) => (
                 <Cell key={i} fillOpacity={hover == null || hover === i ? 1 : 0.4} style={{ transition: "fill-opacity 200ms ease" }} />
@@ -285,6 +330,17 @@ export function ColumnChart({
         </ComposedChart>
       </ResponsiveContainer>
     </div>
+  );
+}
+
+export type BarShapeProps = React.ComponentProps<typeof Rectangle> & { index?: number };
+
+/** One bar segment that rises from its bottom when it first appears, after `delay` ms. */
+export function RisingBar({ delay, ...p }: BarShapeProps & { delay: number }) {
+  return (
+    <g className="bar-rise" style={{ animationDelay: `${delay}ms` }}>
+      <Rectangle {...p} />
+    </g>
   );
 }
 
@@ -327,13 +383,6 @@ export function LineChart({
                 <stop offset="100%" stopColor={s.color} stopOpacity={0} />
               </linearGradient>
             ))}
-            <filter id={`${id}-glow`} x="-20%" y="-20%" width="140%" height="140%">
-              <feGaussianBlur stdDeviation="3" result="b" />
-              <feMerge>
-                <feMergeNode in="b" />
-                <feMergeNode in="SourceGraphic" />
-              </feMerge>
-            </filter>
           </defs>
           <CartesianGrid vertical={false} stroke={GRID} />
           <XAxis dataKey="day" tickFormatter={shortDay} tick={TICK} tickLine={false} axisLine={{ stroke: GRID }} minTickGap={24} />
@@ -360,7 +409,6 @@ export function LineChart({
               stroke={s.color}
               strokeWidth={2}
               fill={`url(#${id}-a${k})`}
-              filter={`url(#${id}-glow)`}
               connectNulls={false}
               dot={false}
               activeDot={{ r: 5, fill: s.color, stroke: "#0f1118", strokeWidth: 2 }}
@@ -380,11 +428,12 @@ export function LineChart({
 export function Sparkline({ values, width = 96, height = 28, color = SERIES[0] }: { values: (number | null)[]; width?: number; height?: number; color?: string }) {
   const id = useId().replace(/:/g, "");
   const reduced = useReducedMotion();
+  const [ref, seen] = useInView<HTMLDivElement>(0.5);
   if (values.filter((v) => v != null).length < 2) return <span className="inline-block" style={{ width, height }} aria-hidden />;
   const data = values.map((v, i) => ({ i, v }));
   return (
-    <div style={{ width, height }} aria-hidden>
-      <AreaChart width={width} height={height} data={data} margin={{ top: 3, right: 3, bottom: 1, left: 1 }}>
+    <div ref={ref} style={{ width, height }} aria-hidden>
+      <AreaChart key={seen || reduced ? "in" : "out"} style={{ opacity: seen || reduced ? 1 : 0 }} width={width} height={height} data={data} margin={{ top: 3, right: 3, bottom: 1, left: 1 }}>
         <defs>
           <linearGradient id={`${id}-s`} x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor={color} stopOpacity={0.35} />
@@ -401,21 +450,19 @@ export function Sparkline({ values, width = 96, height = 28, color = SERIES[0] }
 /** One horizontal bar per row (one series: one color), growing in; the value at the bar's tip. */
 export function BarList({ rows, format = compact }: { rows: { label: ReactNode; value: number; detail?: string; highlight?: boolean }[]; format?: (n: number) => string }) {
   const reduced = useReducedMotion();
-  const [grown, setGrown] = useState(reduced);
-  useEffect(() => {
-    const t = requestAnimationFrame(() => setGrown(true));
-    return () => cancelAnimationFrame(t);
-  }, []);
+  // The bars grow in when the list is scrolled into view.
+  const [ref, seen] = useInView<HTMLUListElement>();
+  const grown = reduced || seen;
   const max = Math.max(1, ...rows.map((r) => r.value));
   if (!rows.length) return <div className="py-6 text-center text-xs text-subtle">Nothing in this range yet.</div>;
   return (
-    <ul className="space-y-3">
+    <ul ref={ref} className="space-y-3">
       {rows.map((r, i) => (
         <li key={i} className={`text-xs ${r.highlight ? "-mx-2 rounded-lg bg-accent/10 px-2 py-1.5 ring-1 ring-accent/40" : ""}`}>
           <div className="mb-1 flex items-baseline justify-between gap-2">
             <span className="min-w-0 truncate text-muted">{r.label}</span>
             <span className="shrink-0 font-mono text-ink tabular-nums">
-              {format(r.value)}
+              <CountUp value={r.value} format={format} />
               {r.detail && <span className="ml-1.5 text-subtle">{r.detail}</span>}
             </span>
           </div>

@@ -31,6 +31,15 @@ const RANGES: { value: Range; label: string }[] = [
 /** "1m 32s" / "45s". */
 const duration = (sec: number) => (sec >= 60 ? `${Math.floor(sec / 60)}m ${Math.round(sec % 60)}s` : `${Math.round(sec)}s`);
 const pct = (n: number | null) => (n == null ? "—" : `${n}%`);
+/** Numbers that count up to their value when they come into view. */
+const N = ({ v }: { v: number }) => <CountUp value={v} />;
+const P = ({ v }: { v: number | null }) => (v == null ? <>—</> : <CountUp value={v} format={(n) => `${Math.round(n)}%`} />);
+/** A position, counting up (#1.4); in the visits' searches, else the daily check. */
+const Pos = ({ t }: { t: Totals }) => {
+  const p = rates(t).position ?? t.checkPosition;
+  return p == null ? <>—</> : <CountUp value={p} format={(n) => `#${Math.round(n * 10) / 10}`} />;
+};
+
 /** A position to show: in the visits' searches, else the daily check. */
 const positionText = (t: Totals) => {
   const p = rates(t).position ?? t.checkPosition;
@@ -133,7 +142,7 @@ export function CtrDashboard() {
       </div>
 
       {!data ? (
-        <div className="py-16 text-center text-sm text-muted">Loading…</div>
+        <DashboardSkeleton />
       ) : !all.length ? (
         <div className="glass rounded-xl py-16 text-center text-sm text-muted">
           No campaigns yet. Create one under{" "}
@@ -161,7 +170,7 @@ export function CtrDashboard() {
                     <CountUp value={o.total.visits} />
                   </div>
                   <div className="mt-1 text-xs text-subtle">
-                    of {o.total.planned.toLocaleString()} planned · {pct(r.planPct)} of the plan
+                    of <N v={o.total.planned} /> planned · <P v={r.planPct} /> of the plan
                   </div>
                 </div>
                 <Sparkline values={o.perDay.map((d) => d.visits)} width={120} height={44} />
@@ -186,7 +195,7 @@ export function CtrDashboard() {
               <Kpi
                 icon={ShieldCheck}
                 label="CAPTCHAs solved"
-                value={o.total.captchasMet ? `${o.total.captchasSolved}/${o.total.captchasMet}` : "—"}
+                value={o.total.captchasMet ? (<><N v={o.total.captchasSolved} />/<N v={o.total.captchasMet} /></>) : "—"}
                 detail={r.captchaSolvedPct != null ? `${r.captchaSolvedPct}% solved` : "none met"}
                 now={r.captchaSolvedPct}
                 before={compare ? p.captchaSolvedPct : null}
@@ -214,7 +223,7 @@ export function CtrDashboard() {
               <Kpi
                 icon={Trophy}
                 label="Google position"
-                value={positionText(o.total)}
+                value={<Pos t={o.total} />}
                 detail={r.position != null ? `in the visits' searches · best #${o.total.bestPosition}` : o.total.checkDay ? `daily check ${o.total.checkDay}` : "not seen yet"}
                 now={r.position}
                 before={compare ? p.position : null}
@@ -259,7 +268,7 @@ export function CtrDashboard() {
                   { label: "Total", value: <CountUp value={o.total.visits} />, detail: `${pct(r.planPct)} of ${o.total.planned.toLocaleString()} planned` },
                   { label: "Peak day", value: <CountUp value={o.perDay[peak]?.visits ?? 0} />, detail: o.perDay[peak]?.visits ? shortDay(days[peak]) : "—" },
                   { label: "Average per day", value: <CountUp value={withVisits ? o.total.visits / withVisits : 0} />, detail: `over ${withVisits} day${withVisits === 1 ? "" : "s"} with visits` },
-                  { label: "Phone / desktop", value: `${o.total.mobile.toLocaleString()} / ${(o.total.visits - o.total.mobile).toLocaleString()}`, detail: `${pct(r.mobilePct)} on a phone` },
+                  { label: "Phone / desktop", value: (<><N v={o.total.mobile} /> / <N v={o.total.visits - o.total.mobile} /></>), detail: `${pct(r.mobilePct)} on a phone` },
                 ].map((s) => (
                   <div key={s.label} className="rounded-xl border border-line bg-surface px-3 py-2">
                     <div className="font-mono text-[10px] tracking-wider text-subtle uppercase">{s.label}</div>
@@ -373,10 +382,10 @@ export function CtrDashboard() {
                           <td className="px-3 py-2 font-mono tabular-nums">
                             {running} <span className="text-subtle">active / {s.campaigns.length}</span>
                           </td>
-                          <td className="px-3 py-2 font-mono tabular-nums">{s.total.visits.toLocaleString()}</td>
-                          <td className="px-3 py-2 font-mono tabular-nums">{pct(x.planPct)}</td>
-                          <td className="px-3 py-2 font-mono tabular-nums">{pct(x.successPct)}</td>
-                          <td className="px-3 py-2 font-mono tabular-nums">{positionText(s.total)}</td>
+                          <td className="px-3 py-2 font-mono tabular-nums"><N v={s.total.visits} /></td>
+                          <td className="px-3 py-2 font-mono tabular-nums"><P v={x.planPct} /></td>
+                          <td className="px-3 py-2 font-mono tabular-nums"><P v={x.successPct} /></td>
+                          <td className="px-3 py-2 font-mono tabular-nums"><Pos t={s.total} /></td>
                           <td className="px-3 py-2 font-mono tabular-nums">{x.secondsPerVisit != null ? duration(x.secondsPerVisit) : "—"}</td>
                           <td className="px-3 py-1">
                             <Sparkline values={s.perDay.map((d) => d.visits)} width={90} height={24} color={colorOf(s.site)} />
@@ -466,11 +475,11 @@ export function CtrDashboard() {
                             {cpn.startDate} → {cpn.status === "stopped" && lastDay ? lastDay : cpn.endDate}
                           </td>
                           <td className="px-3 py-2 font-mono tabular-nums">
-                            {allTime.visits.toLocaleString()} <span className="text-subtle">/ {allTime.planned.toLocaleString()}</span>
+                            <N v={allTime.visits} /> <span className="text-subtle">/ <N v={allTime.planned} /></span>
                           </td>
-                          <td className="px-3 py-2 font-mono tabular-nums">{pct(x.planPct)}</td>
-                          <td className="px-3 py-2 font-mono tabular-nums">{pct(x.successPct)}</td>
-                          <td className="px-3 py-2 font-mono tabular-nums">{positionText(allTime)}</td>
+                          <td className="px-3 py-2 font-mono tabular-nums"><P v={x.planPct} /></td>
+                          <td className="px-3 py-2 font-mono tabular-nums"><P v={x.successPct} /></td>
+                          <td className="px-3 py-2 font-mono tabular-nums"><Pos t={allTime} /></td>
                           <td className="px-3 py-2 font-mono tabular-nums">{x.secondsPerVisit != null ? duration(x.secondsPerVisit) : "—"}</td>
                           <td className="px-3 py-2 font-mono text-[11px] text-muted">
                             <span className="inline-flex items-center gap-1.5">
@@ -618,10 +627,10 @@ function CampaignCard({ c, days, today, me, siteColor }: { c: Overview["campaign
         </div>
       </div>
       <div className="mt-3 grid grid-cols-4 gap-2 text-center">
-        <Mini label="Visits" value={c.total.visits.toLocaleString()} />
-        <Mini label="Of plan" value={pct(x.planPct)} />
-        <Mini label="Worked" value={pct(x.successPct)} />
-        <Mini label="Position" value={positionText(c.total)} />
+        <Mini label="Visits" value={<N v={c.total.visits} />} />
+        <Mini label="Of plan" value={<P v={x.planPct} />} />
+        <Mini label="Worked" value={<P v={x.successPct} />} />
+        <Mini label="Position" value={<Pos t={c.total} />} />
       </div>
       <div className="mt-3">
         <div className="mb-1 font-mono text-[10px] text-subtle">Visits per day · {days.length > 1 ? `${shortDay(days[0])} – ${shortDay(days[days.length - 1])}` : "today"}</div>
@@ -631,12 +640,38 @@ function CampaignCard({ c, days, today, me, siteColor }: { c: Overview["campaign
   );
 }
 
+/**
+ * While the numbers load (the database can take a moment to wake up): the dashboard's shape, softly
+ * shimmering, so the page builds in place instead of showing a blank "Loading…".
+ */
+function DashboardSkeleton() {
+  const block = "skeleton rounded-2xl border border-line";
+  return (
+    <div className="space-y-5" aria-busy="true" aria-label="Loading the dashboard">
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,3fr)]">
+        <div className={`${block} h-[180px]`} />
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {Array.from({ length: 8 }, (_, i) => (
+            <div key={i} className={`${block} h-[84px]`} style={{ animationDelay: `${i * 80}ms` }} />
+          ))}
+        </div>
+      </div>
+      <div className={`${block} h-[420px]`} />
+      <div className="grid gap-5 lg:grid-cols-2">
+        {Array.from({ length: 4 }, (_, i) => (
+          <div key={i} className={`${block} h-[280px]`} style={{ animationDelay: `${i * 120}ms` }} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /** "This PC": marks what this computer runs, wherever a computer is named. */
 function ThisPcTag() {
   return <span className="rounded-full bg-accent px-1.5 py-px font-sans text-[9px] font-semibold tracking-wide text-white uppercase">This PC</span>;
 }
 
-function Mini({ label, value }: { label: string; value: string }) {
+function Mini({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="rounded-lg bg-surface px-1 py-1.5">
       <div className="font-mono text-sm font-semibold text-ink">{value}</div>
