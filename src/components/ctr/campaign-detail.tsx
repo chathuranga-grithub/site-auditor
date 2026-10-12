@@ -13,6 +13,7 @@ import { daysBetween, summarize } from "@/lib/campaigns/metrics";
 import { todayInVietnam } from "@/lib/campaigns/site";
 import { plannedVisits, visitPlanProgress, type Campaign, type CampaignDay } from "@/lib/campaigns/types";
 import { Notice, Panel, StatTile, buttonClass } from "@/components/ui/primitives";
+import { Loader } from "@/components/ui/loader";
 import { VisitRunView, useVisitRun } from "@/components/visit/visit-run";
 import { RealtimePanel } from "./realtime";
 import { CONFIRM, CampaignConfirm, isOpen, HealthBadge, PageHeader, Progress, StatusBadge, api, ComputerBadge, GOOGLE_CONNECTOR, type ThisComputer } from "./ui";
@@ -91,13 +92,14 @@ export function CampaignDetail({ id }: { id: number }) {
   // The campaign's visit console: what has happened so far, then live while it runs.
   useEffect(() => follow(id), [follow, id]);
 
-  // A run finished: reload the numbers, so the visits done go up without reloading the page.
-  // (A short delay as well, for a server still on code that counts the run just after "done".)
+  // A run finished: reload the numbers, so the visits done go up without reloading the page. Once
+  // finished runs stop arriving for a moment: opening the page replays every visit since the app
+  // started in one burst, which would otherwise reload the page once per visit (and make it blink).
+  // The moment also lets the server count the run (it counts just before "done").
   const { reports } = visit;
   useEffect(() => {
     if (!reports) return;
-    load();
-    const t = setTimeout(load, 3000);
+    const t = setTimeout(load, 1500);
     return () => clearTimeout(t);
   }, [reports, load]);
 
@@ -132,7 +134,7 @@ export function CampaignDetail({ id }: { id: number }) {
   }
 
   if (error && !data) return <Shell><Notice tone="error">{error}</Notice></Shell>;
-  if (!data) return <Shell><div className="py-16 text-center text-sm text-muted">Loading…</div></Shell>;
+  if (!data) return <Shell><Loader title="Loading the campaign…" detail="Its numbers, days and live console" className="py-16" /></Shell>;
 
   const { campaign: c, days, here = false, canRunHere = false, computer = null } = data;
   const s = summarize(c, days, todayInVietnam());

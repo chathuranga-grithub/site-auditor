@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Monitor, Pause, Play, Plus, Square, Trash2 } from "lucide-react";
 import type { Campaign, CampaignStatus, CtrSetup } from "@/lib/campaigns/types";
 import { Notice, Panel, buttonClass } from "@/components/ui/primitives";
+import { Loader } from "@/components/ui/loader";
 import { CONFIRM, CampaignConfirm, CampaignTable, PageHeader, SetupNotice, api, isOpen, runsOnThisPc, type CampaignItem, type ThisComputer } from "./ui";
 
 type Filter = "all" | CampaignStatus;
@@ -107,7 +108,7 @@ export function CampaignList() {
         bodyClassName=""
       >
         {!data ? (
-          <div className="px-4 py-10 text-center text-sm text-muted">Loading…</div>
+          <Loader title="Loading campaigns…" detail="Every saved campaign and its numbers" className="px-4 py-10" />
         ) : shown.length ? (
           <CampaignTable
             items={shown}

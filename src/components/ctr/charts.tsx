@@ -80,18 +80,26 @@ export function CountUp({ value, format = (n: number) => Math.round(n).toLocaleS
   const [shown, setShown] = useState(0);
   // It counts up once; later changes (e.g. a live number updating) show the new value straight away.
   const counted = useRef(false);
+  // Where the count is now: a value that changes mid-count (numbers arriving in a burst) carries on
+  // from here towards the new one, never back to 0 (which made it blink).
+  const at = useRef(0);
   useEffect(() => {
     if (reduced || !seen) return;
     let raf = 0;
     if (counted.current) {
-      raf = requestAnimationFrame(() => setShown(value));
+      raf = requestAnimationFrame(() => {
+        at.current = value;
+        setShown(value);
+      });
       return () => cancelAnimationFrame(raf);
     }
+    const from = at.current;
     const start = performance.now();
     const tick = (t: number) => {
-      // A frame can be timed just before the start: never below 0.
+      // A frame can be timed just before the start: never before `from`.
       const k = Math.min(1, Math.max(0, (t - start) / duration));
-      setShown(value * (1 - (1 - k) ** 3));
+      at.current = from + (value - from) * (1 - (1 - k) ** 3);
+      setShown(at.current);
       if (k < 1) raf = requestAnimationFrame(tick);
       else counted.current = true;
     };
@@ -451,11 +459,11 @@ export function Sparkline({ values, width = 96, height = 28, color = SERIES[0] }
 }
 
 /** One horizontal bar per row (one series: one color), growing in; the value at the bar's tip. */
-export function BarList({ rows, format = compact }: { rows: { label: ReactNode; value: number; detail?: string; highlight?: boolean }[]; format?: (n: number) => string }) {
+export function BarList({ rows, format = compact, still = false }: { rows: { label: ReactNode; value: number; detail?: string; highlight?: boolean }[]; format?: (n: number) => string; still?: boolean }) {
   const reduced = useReducedMotion();
   // The bars grow in when the list is scrolled into view.
   const [ref, seen] = useInView<HTMLUListElement>();
-  const grown = reduced || seen;
+  const grown = still || reduced || seen;
   const max = Math.max(1, ...rows.map((r) => r.value));
   if (!rows.length) return <div className="py-6 text-center text-xs text-subtle">Nothing in this range yet.</div>;
   return (
@@ -465,13 +473,13 @@ export function BarList({ rows, format = compact }: { rows: { label: ReactNode; 
           <div className="mb-1 flex items-baseline justify-between gap-2">
             <span className="min-w-0 truncate text-muted">{r.label}</span>
             <span className="shrink-0 font-mono text-ink tabular-nums">
-              <CountUp value={r.value} format={format} />
+              {still ? format(r.value) : <CountUp value={r.value} format={format} />}
               {r.detail && <span className="ml-1.5 text-subtle">{r.detail}</span>}
             </span>
           </div>
           <div className="h-2 overflow-hidden rounded-full bg-surface-2">
             <div
-              className="h-2 rounded-full transition-[width] duration-1000 ease-out"
+              className={`h-2 rounded-full ${still ? "" : "transition-[width] duration-1000 ease-out"}`}
               style={{ width: grown ? `${Math.max(2, (r.value / max) * 100)}%` : "0%", background: `linear-gradient(90deg, ${SERIES[0]}99, ${SERIES[0]})`, boxShadow: `0 0 12px ${SERIES[0]}55`, transitionDelay: `${i * 80}ms` }}
             />
           </div>

@@ -4,14 +4,15 @@
 // 30 minutes, one bar per minute (moving on live), what each browser is doing right now, and the
 // last 30 minutes by device, visitor location and page. Only on the computer that runs the campaign:
 // it's read from the live visit console (no database reads), which holds every visit since the app
-// started.
+// started. Nothing in it animates: it changes all the time, so its numbers and bars are shown as
+// they are (the dashboard's charts animate; this one stays still).
 
 import { useEffect, useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Globe, Loader2, MousePointerClick, Search, ShieldCheck, Timer, type LucideIcon } from "lucide-react";
 import type { VisitRun } from "@/components/visit/visit-run";
 import type { VisitStage } from "@/lib/visit-types";
-import { BarList, CountUp, DESKTOP, PHONE, PlayInView, RisingBar, SERIES, useReducedMotion, type BarShapeProps } from "./charts";
+import { BarList, DESKTOP, PHONE, SERIES } from "./charts";
 
 const MINUTES = 30;
 const GRID = "#ffffff12";
@@ -43,7 +44,6 @@ function tally(names: string[]) {
 }
 
 export function RealtimePanel({ run }: { run: VisitRun }) {
-  const reduced = useReducedMotion();
   // The clock the minutes are counted from: moves on every few seconds, so the bars slide left.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -118,7 +118,7 @@ export function RealtimePanel({ run }: { run: VisitRun }) {
           <div>
             <div className="font-mono text-[10px] tracking-[0.16em] text-muted uppercase">Visits in the last {MINUTES} minutes</div>
             <div className="mt-1 text-5xl font-semibold tracking-tight">
-              <CountUp value={counted.length} />
+              {counted.length.toLocaleString()}
             </div>
           </div>
           <dl className="grid grid-cols-2 gap-2 text-xs">
@@ -138,7 +138,6 @@ export function RealtimePanel({ run }: { run: VisitRun }) {
 
         <div>
           <div className="mb-1 font-mono text-[10px] tracking-[0.16em] text-muted uppercase">Visits per minute</div>
-          <PlayInView>
           <div style={{ height: 170 }}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
@@ -176,7 +175,7 @@ export function RealtimePanel({ run }: { run: VisitRun }) {
                     );
                   }}
                 />
-                <Bar dataKey="visits" fill={SERIES[0]} radius={[2, 2, 0, 0]} maxBarSize={24} minPointSize={2} isAnimationActive={false} shape={(p: BarShapeProps) => <RisingBar {...p} delay={reduced ? 0 : (p.index ?? 0) * 25} />}>
+                <Bar dataKey="visits" fill={SERIES[0]} radius={[2, 2, 0, 0]} maxBarSize={24} minPointSize={2} isAnimationActive={false}>
                   {perMinute.map((r, i) => (
                     <Cell key={r.ago} fill={r.visits ? SERIES[0] : "#ffffff14"} fillOpacity={hover == null || hover === i ? 1 : 0.4} style={{ transition: "fill-opacity 200ms ease" }} />
                   ))}
@@ -184,7 +183,6 @@ export function RealtimePanel({ run }: { run: VisitRun }) {
               </BarChart>
             </ResponsiveContainer>
           </div>
-          </PlayInView>
         </div>
       </div>
 
@@ -222,7 +220,7 @@ export function RealtimePanel({ run }: { run: VisitRun }) {
               <h3 className="text-xs font-semibold">{title}</h3>
               <span className="font-mono text-[10px] text-subtle">last {MINUTES} min</span>
             </div>
-            <BarList rows={rows.slice(0, 5).map(([name, n]) => ({ label: <span className={title === "Top pages" ? "font-mono" : ""}>{name}</span>, value: n }))} />
+            <BarList still rows={rows.slice(0, 5).map(([name, n]) => ({ label: <span className={title === "Top pages" ? "font-mono" : ""}>{name}</span>, value: n }))} />
           </div>
         ))}
       </div>
