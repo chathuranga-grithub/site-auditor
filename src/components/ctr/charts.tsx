@@ -12,6 +12,10 @@ import { Area, AreaChart, Bar, CartesianGrid, Cell, ComposedChart, Line, Respons
 import { LineChart as LineIcon, Table2 } from "lucide-react";
 
 /** Categorical slots (dark-surface steps), in fixed order: identity follows the entity, never its rank. */
+/** Phone and desktop: two shades of one blue (one total split in two), validated as an ordinal pair. */
+export const PHONE = "#2a78d6";
+export const DESKTOP = "#86b6ef";
+
 export const SERIES = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"];
 /** A reference line (e.g. the plan): neutral ink, not a series hue. */
 const REFERENCE = "#9aa0b4";
@@ -250,10 +254,11 @@ export function ColumnChart({
               dataKey={`s${k}`}
               stackId="a"
               fill={s.color}
-              // Crisp: square ends with a hint of rounding on top, and a surface gap between segments.
+              // Crisp: square ends with a hint of rounding on top, and a surface gap between segments (the
+              // same outline on every segment, so they all keep the same width).
               radius={k === stacks.length - 1 ? [2, 2, 0, 0] : [0, 0, 0, 0]}
               stroke="#0f1118"
-              strokeWidth={k < stacks.length - 1 ? 2 : 0}
+              strokeWidth={stacks.length > 1 ? 1 : 0}
               maxBarSize={40}
               isAnimationActive={!reduced}
               animationDuration={600}

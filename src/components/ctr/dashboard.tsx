@@ -15,7 +15,7 @@ import { todayInVietnam } from "@/lib/campaigns/site";
 import { daysBetween } from "@/lib/campaigns/metrics";
 import { buildOverview, rangeDays, rates, siteOf, type Overview, type OverviewItem, type Totals } from "@/lib/campaigns/overview";
 import { Notice } from "@/components/ui/primitives";
-import { BarList, ChartCard, ColumnChart, CountUp, LineChart, SERIES, Sparkline, compact, shortDay } from "./charts";
+import { BarList, ChartCard, ColumnChart, CountUp, LineChart, DESKTOP, PHONE, SERIES, Sparkline, compact, shortDay } from "./charts";
 import { ComputerBadge, PageHeader, SetupNotice, StatusBadge, api, isOpen, type CampaignItem, type ThisComputer } from "./ui";
 
 type Item = CampaignItem & { days: CampaignDay[] };
@@ -238,8 +238,8 @@ export function CtrDashboard() {
             empty={!o.total.visits && !o.total.planned ? "No visits or planned visits in this range." : false}
             subtitle="Visits that counted, on a phone and on a desktop, against the visit plan"
             legend={[
-              { label: "Phone", color: SERIES[0], kind: "bar" },
-              { label: "Desktop", color: SERIES[2], kind: "bar" },
+              { label: "Phone", color: PHONE, kind: "bar" },
+              { label: "Desktop", color: DESKTOP, kind: "bar" },
               { label: "Planned", color: "#9aa0b4", kind: "reference" },
             ]}
             table={{
@@ -273,8 +273,8 @@ export function CtrDashboard() {
               days={days}
               height={280}
               stacks={[
-                { label: "phone", color: SERIES[0], values: o.perDay.map((d) => d.mobile) },
-                { label: "desktop", color: SERIES[2], values: o.perDay.map((d) => d.visits - d.mobile) },
+                { label: "phone", color: PHONE, values: o.perDay.map((d) => d.mobile) },
+                { label: "desktop", color: DESKTOP, values: o.perDay.map((d) => d.visits - d.mobile) },
               ]}
               reference={{ label: "planned", values: o.perDay.map((d) => d.planned) }}
             />

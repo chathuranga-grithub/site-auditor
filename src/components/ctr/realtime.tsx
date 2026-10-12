@@ -11,7 +11,7 @@ import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis
 import { Globe, Loader2, MousePointerClick, Search, ShieldCheck, Timer, type LucideIcon } from "lucide-react";
 import type { VisitRun } from "@/components/visit/visit-run";
 import type { VisitStage } from "@/lib/visit-types";
-import { BarList, CountUp, SERIES, useReducedMotion } from "./charts";
+import { BarList, CountUp, DESKTOP, PHONE, SERIES, useReducedMotion } from "./charts";
 
 const MINUTES = 30;
 const GRID = "#ffffff12";
@@ -160,8 +160,8 @@ export function RealtimePanel({ run }: { run: VisitRun }) {
                         <div className="mb-1.5 font-mono text-[10px] text-subtle">{r.ago === 0 ? "this minute" : `${r.ago} min ago`}</div>
                         {[
                           [r.visits, "visits", SERIES[0]],
-                          [r.phone, "on a phone", SERIES[0]],
-                          [r.desktop, "on a desktop", SERIES[2]],
+                          [r.phone, "on a phone", PHONE],
+                          [r.desktop, "on a desktop", DESKTOP],
                           [r.pages, "page views", "#9aa0b4"],
                           [r.failed, "didn't count", "#646a80"],
                         ].map(([v, label, color]) => (
