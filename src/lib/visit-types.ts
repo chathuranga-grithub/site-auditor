@@ -32,6 +32,10 @@ export interface ExitInfo {
   country: string | null;
   countryCode: string | null;
   city: string | null;
+  /** The province (e.g. "Hanoi"), and where the IP is (the city's middle, roughly): for the realtime map. */
+  region?: string | null;
+  lat?: number | null;
+  lon?: number | null;
   /** Network / ISP, e.g. "AS7552 Viettel Group". */
   org: string | null;
   /** Residential (home / mobile ISP) or datacenter, guessed from the ISP name. */

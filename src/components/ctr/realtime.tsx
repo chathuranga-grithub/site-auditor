@@ -2,7 +2,7 @@
 
 // A campaign's realtime view, in the spirit of Google Analytics' Realtime report: visits in the last
 // 30 minutes, one bar per minute (moving on live), what each browser is doing right now, and the
-// last 30 minutes by device, visitor location and page. Only on the computer that runs the campaign:
+// last 30 minutes by visitor location (on a map of Vietnam too: vietnam-map.tsx), device and page. Only on the computer that runs the campaign:
 // it's read from the live visit console (no database reads), which holds every visit since the app
 // started. Nothing in it animates: it changes all the time, so its numbers and bars are shown as
 // they are (the dashboard's charts animate; this one stays still).
@@ -13,6 +13,7 @@ import { Globe, Loader2, MousePointerClick, Search, ShieldCheck, Timer, type Luc
 import type { VisitRun } from "@/components/visit/visit-run";
 import type { VisitStage } from "@/lib/visit-types";
 import { BarList, DESKTOP, PHONE, SERIES } from "./charts";
+import { VietnamMap, type MapPlace } from "./vietnam-map";
 
 const MINUTES = 30;
 const GRID = "#ffffff12";
@@ -94,7 +95,19 @@ export function RealtimePanel({ run }: { run: VisitRun }) {
   const active = [...doing.values()].reduce((a, b) => a + b, 0);
 
   const devices = tally(counted.map((v) => v.report.deviceName ?? (v.report.device === "phone" ? "Phone" : "Desktop")));
-  const places = tally(counted.map((v) => [v.report.exit?.city, v.report.exit?.country].filter(Boolean).join(", ") || "Unknown"));
+  const placeOf = (v: (typeof counted)[number]) => [v.report.exit?.city, v.report.exit?.country].filter(Boolean).join(", ") || "Unknown";
+  const places = tally(counted.map(placeOf));
+  // The map's dots: each place where its visits' IPs are (the IP lookup's coordinates).
+  const mapAt = new Map<string, MapPlace>();
+  for (const v of counted) {
+    const { lat, lon } = v.report.exit ?? {};
+    if (lat == null || lon == null) continue;
+    const label = placeOf(v);
+    const p = mapAt.get(label) ?? { key: label, label, lat, lon, visits: 0 };
+    p.visits++;
+    mapAt.set(label, p);
+  }
+  const mapPlaces = [...mapAt.values()];
   const pages = tally(counted.flatMap((v) => [...(v.report.start?.ok ? [v.report.start.finalUrl] : []), ...v.report.pages.filter((p) => p.ok).map((p) => p.finalUrl)].map(pathOf)));
 
   return (
@@ -164,21 +177,30 @@ export function RealtimePanel({ run }: { run: VisitRun }) {
         </div>
       </div>
 
-      {/* The last 30 minutes, broken down. */}
-      <div className="relative mt-4 grid gap-4 md:grid-cols-3">
+      {/* The last 30 minutes, broken down. Visitor locations: on a map of Vietnam too, like Google Analytics. */}
+      <div className="relative mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)]">
         {(
           [
-            ["Devices", devices],
             ["Visitor locations", places],
+            ["Devices", devices],
             ["Top pages", pages],
           ] as const
         ).map(([title, rows]) => (
-          <div key={title} className="rounded-xl border border-line bg-surface p-3">
+          <div key={title} className={`rounded-xl border border-line bg-surface p-3 ${title === "Visitor locations" ? "md:col-span-2 xl:col-span-1" : ""}`}>
             <div className="mb-2 flex items-baseline justify-between">
               <h3 className="text-xs font-semibold">{title}</h3>
               <span className="font-mono text-[10px] text-subtle">last {MINUTES} min</span>
             </div>
-            <BarList still rows={rows.slice(0, 5).map(([name, n]) => ({ label: <span className={title === "Top pages" ? "font-mono" : ""}>{name}</span>, value: n }))} />
+            {title === "Visitor locations" ? (
+              <div className="flex gap-3">
+                <VietnamMap places={mapPlaces} className="h-44 shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <BarList still rows={rows.slice(0, 6).map(([name, n]) => ({ label: <span>{name}</span>, value: n }))} />
+                </div>
+              </div>
+            ) : (
+              <BarList still rows={rows.slice(0, 5).map(([name, n]) => ({ label: <span className={title === "Top pages" ? "font-mono" : ""}>{name}</span>, value: n }))} />
+            )}
           </div>
         ))}
       </div>

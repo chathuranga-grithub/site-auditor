@@ -11,11 +11,17 @@ const IP_SERVICES = ["https://ipinfo.io/json", "https://api.country.is/"];
 function toExitInfo(j: Record<string, string> | undefined, lookupMs: number): ExitInfo | null {
   if (!j?.ip) return null;
   const names = new Intl.DisplayNames(["en"], { type: "region" });
+  // ipinfo: "loc": "21.0245,105.8412" (latitude, longitude). The other service only gives the country.
+  const [lat, lon] = (j.loc ?? "").split(",").map(Number);
+  const located = Number.isFinite(lat) && Number.isFinite(lon) && !(lat === 0 && lon === 0);
   return {
     ip: j.ip,
     countryCode: j.country ?? null,
     country: j.country ? (names.of(j.country) ?? j.country) : null,
     city: j.city ?? null,
+    region: j.region ?? null,
+    lat: located ? lat : null,
+    lon: located ? lon : null,
     org: j.org ?? null,
     network: networkType(j.org ?? null),
     lookupMs,
