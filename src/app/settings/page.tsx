@@ -5,6 +5,8 @@ import { SESSION_COOKIE, readSessionToken } from "@/lib/auth/session";
 import { Panel } from "@/components/ui/primitives";
 import { ProxyApiField } from "@/components/ui/proxy-api-field";
 import { ChromeProfileField } from "@/components/ui/chrome-profile-field";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { thisComputer } from "@/lib/this-computer";
 
 export const metadata: Metadata = { title: "Settings" };
@@ -12,8 +14,10 @@ export const metadata: Metadata = { title: "Settings" };
 // Admins only (src/proxy.ts sends everyone else back to their tool).
 export default async function SettingsPage() {
   const session = await readSessionToken((await cookies()).get(SESSION_COOKIE)?.value);
-  // The desktop app passes its version to the server it starts (desktop/main.js); npm run dev has none.
-  const version = process.env.APP_VERSION ?? null;
+  // The desktop app passes its version to the server it starts (desktop/main.js); with npm run dev,
+  // the version the code is at (desktop/package.json, which the installer is built with).
+  const installed = process.env.APP_VERSION ?? null;
+  const version = installed ?? (await codeVersion());
   const computer = await thisComputer().catch(() => null);
   return (
     <div className="mx-auto w-full max-w-4xl space-y-5 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
@@ -26,8 +30,8 @@ export default async function SettingsPage() {
       <Panel title={<Title icon={<Info className="size-3.5" />} text="About this app" />} bodyClassName="p-4 sm:p-5">
         <dl className="grid gap-3 text-sm sm:grid-cols-3">
           {[
-            ["Version", version ?? "development"],
-            ["Running as", version ? "Desktop app (Windows)" : process.env.VERCEL ? "Website (Vercel)" : "Development (npm run dev)"],
+            ["Version", version ? (installed ? version : `${version} (development)`) : "—"],
+            ["Running as", installed ? "Desktop app (Windows)" : process.env.VERCEL ? "Website (Vercel)" : "Development (npm run dev)"],
             ["This computer", computer?.name ?? "—"],
           ].map(([k, v]) => (
             <div key={k} className="rounded-xl border border-line bg-surface px-3 py-2">
@@ -74,4 +78,13 @@ function Title({ icon, text }: { icon: React.ReactNode; text: string }) {
       {text}
     </span>
   );
+}
+
+/** The desktop app version the code is at (desktop/package.json); null when it can't be read. */
+async function codeVersion(): Promise<string | null> {
+  try {
+    return (JSON.parse(await readFile(path.join(process.cwd(), "desktop", "package.json"), "utf8")) as { version?: string }).version ?? null;
+  } catch {
+    return null;
+  }
 }
