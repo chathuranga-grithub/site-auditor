@@ -3,7 +3,7 @@
 // Auto CTR dashboard: the overview, in the spirit of Google Analytics. One row of filters (date range,
 // site) scopes everything below: the headline tiles (each against the period before), the visits per
 // day against the plan, Google position by site, how the visits went (worked, CAPTCHAs, time on
-// site), visits by computer, a table per site (campaigns of the same site together), every active
+// site), visits by computer, visitor locations (on a map of Vietnam), a table per site (campaigns of the same site together), every active
 // campaign with its own charts, and the results of the finished and stopped ones. Numbers come from
 // the campaigns' daily rows (GET /api/ctr/campaigns): no extra database reads.
 
@@ -18,6 +18,7 @@ import { Notice } from "@/components/ui/primitives";
 import { Loader } from "@/components/ui/loader";
 import { BarList, ChartCard, ColumnChart, CountUp, LineChart, DESKTOP, PHONE, SERIES, Sparkline, compact, shortDay } from "./charts";
 import { ComputerBadge, PageHeader, SetupNotice, StatusBadge, api, isOpen, type CampaignItem, type ThisComputer } from "./ui";
+import { VietnamMap } from "./vietnam-map";
 
 type Item = CampaignItem & { days: CampaignDay[] };
 type Range = 1 | 7 | 14 | 30 | "all";
@@ -415,6 +416,25 @@ export function CtrDashboard() {
               />
             </ChartCard>
           </div>
+
+          {/* Where the visits came from: their proxy IPs' cities, on a map of Vietnam (saved with each visit). */}
+          <ChartCard
+            title="Visitor locations"
+            subtitle="Where the visits came from in this range: the city of each visit's proxy IP"
+            table={{ head: ["Place", "Visits"], rows: o.places.map((pl) => [pl.label, pl.visits]) }}
+            empty={o.places.length ? undefined : "No locations yet: they're kept for visits made with app 1.0.7 or later."}
+          >
+            <div className="flex flex-col gap-4 sm:flex-row">
+              <VietnamMap
+                places={o.places.filter((pl) => pl.lat != null && pl.lon != null).map((pl) => ({ key: pl.label, label: pl.label, lat: pl.lat!, lon: pl.lon!, visits: pl.visits }))}
+                className="h-64 shrink-0 self-center"
+              />
+              <div className="min-w-0 flex-1">
+                <BarList rows={o.places.slice(0, 10).map((pl) => ({ label: pl.label, value: pl.visits }))} />
+                {o.places.length > 10 && <p className="mt-2 text-xs text-subtle">and {o.places.length - 10} more places (see the table)</p>}
+              </div>
+            </div>
+          </ChartCard>
 
           {/* Every active campaign, with its own charts. */}
           <section className="space-y-3">

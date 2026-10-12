@@ -110,6 +110,9 @@ const SCHEMA = [
   `ALTER TABLE ctr_days ADD COLUMN IF NOT EXISTS visit_position_best INT`,
   `ALTER TABLE ctr_days ADD COLUMN IF NOT EXISTS last_visit_at TIMESTAMPTZ`,
   `ALTER TABLE ctr_days ADD COLUMN IF NOT EXISTS last_computer TEXT`,
+  // Where the day's visits came from (their proxy IPs' cities), added later: { "Hanoi, Vietnam": { n, lat, lon } },
+  // saved with each visit's count (no extra writes), for the dashboard's map.
+  `ALTER TABLE ctr_days ADD COLUMN IF NOT EXISTS places JSONB NOT NULL DEFAULT '{}'::jsonb`,
   // The computers with the app (src/lib/this-computer.ts), added later: each says it's on every
   // minute, so a campaign can be started on any of them from another computer.
   `CREATE TABLE IF NOT EXISTS ctr_computers (
@@ -228,6 +231,7 @@ function toDay(r: Record<string, unknown>): CampaignDay {
     visitPositionBest: num(r.visit_position_best),
     lastVisitAt: r.last_visit_at ? new Date(r.last_visit_at as string).toISOString() : null,
     lastComputer: (r.last_computer as string | null) ?? null,
+    places: (typeof r.places === "string" ? JSON.parse(r.places) : r.places) ?? {},
     notes,
   };
 }
@@ -505,6 +509,8 @@ export interface VisitDayDelta {
   positions: number[];
   /** The computer that made them. */
   computer: string | null;
+  /** Where the visit that counted came from (its proxy IP's city), when known. */
+  place?: { label: string; lat: number | null; lon: number | null } | null;
 }
 
 /**
@@ -515,11 +521,17 @@ export async function recordVisits(campaignId: number, day: string, d: VisitDayD
   const q = await db();
   const best = d.positions.length ? Math.min(...d.positions) : null;
   const sum = d.positions.reduce((a, b) => a + b, 0);
+  // Its place: counted once per visit that counted ($14 the place, $15 / $16 where it is).
+  const place = d.done > 0 && d.place ? d.place : null;
+  const placeEntry = (n: string) => `jsonb_build_object($14::text, jsonb_build_object('n', ${n}, 'lat', $15::float8, 'lon', $16::float8))`;
   await q(
     `INSERT INTO ctr_days (campaign_id, day, visits_done, mobile_visits_done, visit_tries_failed, captchas_met, captchas_solved,
-       visit_seconds, pages_read, visit_position_sum, visit_position_count, visit_position_best, last_visit_at, last_computer)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CASE WHEN $3::int > 0 THEN now() END, $13)
+       visit_seconds, pages_read, visit_position_sum, visit_position_count, visit_position_best, last_visit_at, last_computer, places)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CASE WHEN $3::int > 0 THEN now() END, $13,
+       CASE WHEN $14::text IS NULL THEN '{}'::jsonb ELSE ${placeEntry("$3::int")} END)
      ON CONFLICT (campaign_id, day) DO UPDATE SET
+       places = CASE WHEN $14::text IS NULL THEN ctr_days.places
+         ELSE ctr_days.places || ${placeEntry("coalesce((ctr_days.places -> $14::text ->> 'n')::int, 0) + $3::int")} END,
        visits_done = ctr_days.visits_done + EXCLUDED.visits_done,
        mobile_visits_done = ctr_days.mobile_visits_done + EXCLUDED.mobile_visits_done,
        visit_tries_failed = ctr_days.visit_tries_failed + EXCLUDED.visit_tries_failed,
@@ -532,7 +544,7 @@ export async function recordVisits(campaignId: number, day: string, d: VisitDayD
        visit_position_best = LEAST(ctr_days.visit_position_best, EXCLUDED.visit_position_best),
        last_visit_at = COALESCE(EXCLUDED.last_visit_at, ctr_days.last_visit_at),
        last_computer = COALESCE(EXCLUDED.last_computer, ctr_days.last_computer)`,
-    [campaignId, day, d.done, d.mobile, d.failed, d.captchasMet, d.captchasSolved, d.seconds, d.pages, sum, d.positions.length, best, d.computer],
+    [campaignId, day, d.done, d.mobile, d.failed, d.captchasMet, d.captchasSolved, d.seconds, d.pages, sum, d.positions.length, best, d.computer, place?.label ?? null, place?.lat ?? null, place?.lon ?? null],
   );
 }
 

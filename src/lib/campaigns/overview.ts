@@ -123,6 +123,8 @@ export interface Overview {
   perDay: Totals[];
   sites: { site: string; campaigns: OverviewItem[]; total: Totals; perDay: Totals[] }[];
   computers: { name: string; total: Totals }[];
+  /** Where the visits came from (their proxy IPs' cities), most first: for the map. */
+  places: { label: string; visits: number; lat: number | null; lon: number | null }[];
   campaigns: { item: OverviewItem; total: Totals; perDay: Totals[]; allTime: Totals }[];
 }
 
@@ -137,6 +139,7 @@ export function buildOverview(items: OverviewItem[], days: string[]): Overview {
   const perDay = days.map(() => empty());
   const bySite = new Map<string, Overview["sites"][number]>();
   const byComputer = new Map<string, Totals>();
+  const byPlace = new Map<string, Overview["places"][number]>();
   const campaigns: Overview["campaigns"] = [];
 
   for (const item of items) {
@@ -158,6 +161,11 @@ export function buildOverview(items: OverviewItem[], days: string[]): Overview {
         add(t, d, 0);
         byComputer.set(pc, t);
       }
+      for (const [label, at] of Object.entries(d?.places ?? {})) {
+        const p = byPlace.get(label) ?? { label, visits: 0, lat: at.lat, lon: at.lon };
+        p.visits += at.n;
+        byPlace.set(label, p);
+      }
     });
     before.forEach((day) => add(previous, byDay.get(day), plannedOn(c, day, lastDay)));
     // Its whole run so far, whatever the range: every day from its start to its end (or today).
@@ -172,6 +180,7 @@ export function buildOverview(items: OverviewItem[], days: string[]): Overview {
     perDay,
     sites: [...bySite.values()].sort((a, b) => b.total.visits - a.total.visits || a.site.localeCompare(b.site)),
     computers: [...byComputer].map(([name, t]) => ({ name, total: t })).sort((a, b) => b.total.visits - a.total.visits),
+    places: [...byPlace.values()].sort((a, b) => b.visits - a.visits || a.label.localeCompare(b.label)),
     campaigns,
   };
 }

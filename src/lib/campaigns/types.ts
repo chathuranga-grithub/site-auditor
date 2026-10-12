@@ -203,8 +203,17 @@ export interface CampaignDay {
   /** The day's last visit that counted (ISO time), and the computer that made it. */
   lastVisitAt: string | null;
   lastComputer: string | null;
+  /** Where the day's visits came from: their proxy IPs' cities ("Hanoi, Vietnam"), with how many and where it is. */
+  places: Record<string, DayPlace>;
   /** What couldn't be read that day, per source, in plain words. */
   notes: DayNotes;
+}
+
+/** A place a day's visits came from: how many, and where it is (null: not known). */
+export interface DayPlace {
+  n: number;
+  lat: number | null;
+  lon: number | null;
 }
 
 export type DaySource = "serp" | "gsc" | "ga4";
@@ -228,6 +237,7 @@ export type DayFields = Partial<
     | "visitPositionBest"
     | "lastVisitAt"
     | "lastComputer"
+    | "places"
   >
 >;
 

@@ -18,7 +18,7 @@ import { leaseChromeProfile } from "../browser-profile";
 import { ProxyWaitError } from "../proxy-api";
 import { ProxyIpInUseError, claimProxyIp, leaseProxyApi, restProxyApi } from "../proxy-pool";
 import { GoogleBlockedError } from "../serp-browser";
-import type { VisitDevice, VisitEvent } from "../visit-types";
+import type { ExitInfo, VisitDevice, VisitEvent } from "../visit-types";
 import { isConnectionError, untilDbReachable } from "../db-retry";
 import { deviceLabel, pickDevice } from "../device-profiles";
 import { runsCampaignsHere } from "../runner-lock";
@@ -111,6 +111,12 @@ async function countVisit(campaignId: number, delta: VisitDayDelta, send: (e: Vi
     send({ type: "step", message: "Can't reach the database to count this visit; it's counted as soon as it's back." });
     void untilDbReachable(count).catch((e: unknown) => console.error(`Campaign ${campaignId}: couldn't count the visit:`, e));
   }
+}
+
+/** A visit's place, as counted per day: "City, Country" (or just the country) and where it is; null if not known. */
+function placeOf(exit: ExitInfo | null | undefined): VisitDayDelta["place"] {
+  const label = [exit?.city, exit?.country].filter(Boolean).join(", ");
+  return label ? { label, lat: exit?.lat ?? null, lon: exit?.lon ?? null } : null;
 }
 
 /** The campaign's target visits for today (Vietnam date), from its visit plan. */
@@ -291,6 +297,8 @@ async function run(c: VisitCampaign, v: LiveVisit) {
                 pages: (report.start?.ok ? 1 : 0) + report.pages.length,
                 positions: position ? [position] : [],
                 computer: (await thisComputer().catch(() => null))?.name ?? null,
+                // Where it came from (its proxy IP's city), for the dashboard's map.
+                place: placeOf(report.exit),
               },
               send,
             );

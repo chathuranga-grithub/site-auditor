@@ -55,7 +55,7 @@ export function VietnamMap({ places, className = "" }: { places: MapPlace[]; cla
         })}
       </svg>
       {active && (
-        <div className="pointer-events-none absolute top-1 left-full ml-2 rounded-lg border border-line-strong bg-surface-solid px-2 py-1 text-[11px] whitespace-nowrap shadow-lg">
+        <div className="pointer-events-none absolute top-1 left-full z-10 ml-2 rounded-lg border border-line-strong bg-surface-solid px-2 py-1 text-[11px] whitespace-nowrap shadow-lg">
           <b className="text-ink">{active.label}</b> <span className="font-mono text-muted">{active.visits}</span>
         </div>
       )}
