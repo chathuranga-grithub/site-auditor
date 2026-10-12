@@ -33,3 +33,5 @@ publish:
   provider: github
   owner: chathuranga-grithub
   repo: site-auditor
+  # A published release (not a draft): installed apps only see published ones.
+  releaseType: release
