@@ -8,7 +8,6 @@ import { ChromeProfileField } from "@/components/ui/chrome-profile-field";
 import { ComputerNameField } from "@/components/ui/computer-name-field";
 import { RealtimeUpdatesField } from "@/components/ui/realtime-updates-field";
 import { appVersion } from "@/lib/app-version";
-import { campaignRunner } from "@/lib/runner-lock";
 import { thisComputer } from "@/lib/this-computer";
 
 export const metadata: Metadata = { title: "Settings" };
@@ -18,7 +17,6 @@ export default async function SettingsPage() {
   const session = await readSessionToken((await cookies()).get(SESSION_COOKIE)?.value);
   const { version, installed } = await appVersion();
   const computer = await thisComputer().catch(() => null);
-  const runner = campaignRunner();
   return (
     <div className="mx-auto w-full max-w-4xl space-y-5 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
       <header>
@@ -33,8 +31,6 @@ export default async function SettingsPage() {
             ["Version", version ? (installed ? version : `${version} (development)`) : "—"],
             ["Running as", installed ? "Desktop app (Windows)" : process.env.VERCEL ? "Website (Vercel)" : "Development (npm run dev)"],
             ["This computer", computer ? (computer.named ? `${computer.name} (${computer.hostname})` : computer.name) : "—"],
-            // Only one copy of the app on a computer runs its campaigns (src/lib/runner-lock.ts).
-            ...(computer ? [["Runs the campaigns", runner ? `No: ${runner.app} does (process ${runner.pid})` : "Yes, this copy"]] : []),
           ].map(([k, v]) => (
             <div key={k} className="rounded-xl border border-line bg-surface px-3 py-2">
               <dt className="font-mono text-[10px] tracking-wider text-subtle uppercase">{k}</dt>
