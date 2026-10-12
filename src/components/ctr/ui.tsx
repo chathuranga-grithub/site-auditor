@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useEffect, type ReactNode } from "react";
 import { CircleCheck, CircleDashed, CircleX, Monitor, Pause, Square, Trash2, TriangleAlert } from "lucide-react";
 import type { CampaignSummary, Health } from "@/lib/campaigns/metrics";
-import { visitPlanProgress, type Campaign, type CampaignStatus, type CtrSetup } from "@/lib/campaigns/types";
+import { FIELD_LABELS, visitPlanProgress, type Campaign, type CampaignStatus, type CtrSetup, type FieldChange } from "@/lib/campaigns/types";
 import { Notice } from "@/components/ui/primitives";
 
 export interface CampaignItem {
@@ -303,6 +303,12 @@ export function Progress({ day, total }: { day: number; total: number }) {
       </div>
     </div>
   );
+}
+
+/** One change in a line, e.g. "Duration (days): 30 → 45" (the edit form, and the change history). */
+export function changeText(ch: FieldChange): string {
+  const show = (v: FieldChange["from"]) => (v == null || v === "" ? "none" : String(v));
+  return `${FIELD_LABELS[ch.field] ?? ch.field}: ${show(ch.from)} → ${show(ch.to)}`;
 }
 
 export async function api<T>(url: string, init?: RequestInit): Promise<T> {

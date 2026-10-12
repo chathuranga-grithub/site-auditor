@@ -5,7 +5,13 @@
 import { neon } from "@neondatabase/serverless";
 import { withDbRetry } from "../db-retry";
 import type { Computer } from "../this-computer";
-import type { Campaign, CampaignDay, CampaignNote, CampaignStatus, DayFields, DayNotes, NewCampaign } from "./types";
+import { endDateOf, type Campaign, type CampaignChange, type CampaignDay, type CampaignNote, type CampaignStatus, type DayFields, type DayNotes, type EditableField, type FieldChange, type KnownComputer, type NewCampaign } from "./types";
+
+/** The computer a campaign runs on: its id, and the name shown for it. */
+type RunsOn = Pick<Computer, "id" | "name">;
+
+/** A computer that said it's on less than this long ago counts as on (it says so every minute). */
+const ONLINE_MS = 3 * 60_000;
 
 export type Query = (text: string, params?: unknown[]) => Promise<Record<string, unknown>[]>;
 
@@ -68,6 +74,8 @@ const SCHEMA = [
   // none until a computer takes them.
   `ALTER TABLE ctr_campaigns ADD COLUMN IF NOT EXISTS computer_id TEXT`,
   `ALTER TABLE ctr_campaigns ADD COLUMN IF NOT EXISTS computer_name TEXT`,
+  // A page watches its live console from another computer until then (src/lib/live-relay.ts), added later.
+  `ALTER TABLE ctr_campaigns ADD COLUMN IF NOT EXISTS live_until TIMESTAMPTZ`,
   `CREATE TABLE IF NOT EXISTS ctr_days (
     campaign_id INT NOT NULL REFERENCES ctr_campaigns(id) ON DELETE CASCADE,
     day DATE NOT NULL,
@@ -102,6 +110,25 @@ const SCHEMA = [
   `ALTER TABLE ctr_days ADD COLUMN IF NOT EXISTS visit_position_best INT`,
   `ALTER TABLE ctr_days ADD COLUMN IF NOT EXISTS last_visit_at TIMESTAMPTZ`,
   `ALTER TABLE ctr_days ADD COLUMN IF NOT EXISTS last_computer TEXT`,
+  // The computers with the app (src/lib/this-computer.ts), added later: each says it's on every
+  // minute, so a campaign can be started on any of them from another computer.
+  `CREATE TABLE IF NOT EXISTS ctr_computers (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    hostname TEXT,
+    app_version TEXT,
+    last_seen TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`,
+  // Each campaign's change history (created, edited, status, moved: who, when, from what to what), added later.
+  `CREATE TABLE IF NOT EXISTS ctr_campaign_changes (
+    id SERIAL PRIMARY KEY,
+    campaign_id INT NOT NULL REFERENCES ctr_campaigns(id) ON DELETE CASCADE,
+    at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    by_user TEXT,
+    kind TEXT NOT NULL,
+    changes JSONB NOT NULL DEFAULT '[]'::jsonb
+  )`,
+  `CREATE INDEX IF NOT EXISTS ctr_campaign_changes_campaign ON ctr_campaign_changes (campaign_id, at)`,
   `CREATE TABLE IF NOT EXISTS ctr_notes (
     id SERIAL PRIMARY KEY,
     campaign_id INT NOT NULL REFERENCES ctr_campaigns(id) ON DELETE CASCADE,
@@ -155,6 +182,7 @@ function toCampaign(r: Record<string, unknown>): Campaign {
     mobilePct: Number(r.mobile_pct),
     computerId: (r.computer_id as string | null) ?? null,
     computerName: (r.computer_name as string | null) ?? null,
+    liveUntil: r.live_until ? iso(r.live_until) : null,
     startDate: isoDay(r.start_date),
     endDate: isoDay(r.end_date),
     targetCtr: Number(r.target_ctr),
@@ -204,23 +232,37 @@ function toDay(r: Record<string, unknown>): CampaignDay {
   };
 }
 
-/** `computer`: the one that runs it (null on Vercel: the first computer that starts takes it). */
-export async function createCampaign(input: NewCampaign, today: string, computer: Computer | null): Promise<Campaign> {
+/**
+ * Saves a change and its entry in the change history in one statement (both or neither): `change` is a
+ * statement on ctr_campaigns ending in RETURNING * (`paramCount` parameters, then who made it), and
+ * `changes` the SQL for the entry's field changes (`c`: the row as changed). No row changed: no entry.
+ */
+function withHistory(change: string, kind: CampaignChange["kind"], changes: string, paramCount: number) {
+  return `WITH c AS (${change}),
+     h AS (INSERT INTO ctr_campaign_changes (campaign_id, by_user, kind, changes) SELECT c.id, $${paramCount + 1}, '${kind}', ${changes} FROM c)
+   SELECT * FROM c`;
+}
+
+/** `computer`: the one that runs it (null: none yet, the first computer that starts takes it). `by`: who made it. */
+export async function createCampaign(input: NewCampaign, today: string, computer: RunsOn | null, by: string | null = null): Promise<Campaign> {
   const q = await db();
-  const end = new Date(`${today}T00:00:00Z`);
-  end.setUTCDate(end.getUTCDate() + input.durationDays - 1);
   const rows = await q(
-    `INSERT INTO ctr_campaigns (site_url, keyword, page_url, duration_days, start_date, end_date, target_ctr, target_position,
-       weekly_growth_pct, target_engagement_sec, gsc_property, ga4_property, day1_visits, daily_increase_pct, concurrency,
-       min_dwell_sec, max_dwell_sec, mobile_pct, computer_id, computer_name)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING *`,
+    withHistory(
+      `INSERT INTO ctr_campaigns (site_url, keyword, page_url, duration_days, start_date, end_date, target_ctr, target_position,
+         weekly_growth_pct, target_engagement_sec, gsc_property, ga4_property, day1_visits, daily_increase_pct, concurrency,
+         min_dwell_sec, max_dwell_sec, mobile_pct, computer_id, computer_name)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING *`,
+      "created",
+      `jsonb_build_array(jsonb_build_object('field', 'computer', 'from', NULL, 'to', c.computer_name))`,
+      20,
+    ),
     [
       input.siteUrl,
       input.keyword,
       input.pageUrl || null,
       input.durationDays,
       today,
-      end.toISOString().slice(0, 10),
+      endDateOf(today, input.durationDays),
       input.targetCtr,
       input.targetPosition ?? null,
       input.weeklyGrowthPct ?? null,
@@ -235,6 +277,7 @@ export async function createCampaign(input: NewCampaign, today: string, computer
       input.mobilePct,
       computer?.id ?? null,
       computer?.name ?? null,
+      by,
     ],
   );
   return toCampaign(rows[0]);
@@ -251,23 +294,148 @@ export async function getCampaign(id: number): Promise<Campaign | null> {
   return rows[0] ? toCampaign(rows[0]) : null;
 }
 
-export async function setCampaignStatus(id: number, status: CampaignStatus): Promise<void> {
+/** Paused, resumed, stopped (`by`: who), or finished by the daily check (`by` null). Kept in the change history. */
+export async function setCampaignStatus(id: number, status: CampaignStatus, by: string | null = null): Promise<void> {
   const q = await db();
-  await q(`UPDATE ctr_campaigns SET status = $2 WHERE id = $1`, [id, status]);
+  // `o`: the row before the change (every part of the statement sees the database as it was).
+  await q(
+    withHistory(
+      `UPDATE ctr_campaigns SET status = $2 WHERE id = $1 AND status <> $2 RETURNING *`,
+      "status",
+      `(SELECT jsonb_build_array(jsonb_build_object('field', 'status', 'from', o.status, 'to', c.status)) FROM ctr_campaigns o WHERE o.id = c.id)`,
+      2,
+    ),
+    [id, status, by],
+  );
 }
 
 /** A campaign no computer runs yet: this one takes it. Null if another computer took it first. */
 export async function claimCampaign(id: number, computer: Computer): Promise<Campaign | null> {
   const q = await db();
-  const rows = await q(`UPDATE ctr_campaigns SET computer_id = $2, computer_name = $3 WHERE id = $1 AND computer_id IS NULL RETURNING *`, [id, computer.id, computer.name]);
+  const rows = await q(
+    withHistory(
+      `UPDATE ctr_campaigns SET computer_id = $2, computer_name = $3 WHERE id = $1 AND computer_id IS NULL RETURNING *`,
+      "moved",
+      `jsonb_build_array(jsonb_build_object('field', 'computer', 'from', NULL, 'to', c.computer_name))`,
+      3,
+    ),
+    [id, computer.id, computer.name, null],
+  );
   return rows[0] ? toCampaign(rows[0]) : null;
 }
 
-/** "Run on this computer": the campaign moves here, from whichever computer ran it. */
-export async function moveCampaign(id: number, computer: Computer): Promise<Campaign | null> {
+/** The campaign moves to `computer` (this one, or any other), from whichever computer ran it. `by`: who moved it. */
+export async function moveCampaign(id: number, computer: RunsOn, by: string | null = null): Promise<Campaign | null> {
   const q = await db();
-  const rows = await q(`UPDATE ctr_campaigns SET computer_id = $2, computer_name = $3 WHERE id = $1 RETURNING *`, [id, computer.id, computer.name]);
+  const rows = await q(
+    withHistory(
+      `UPDATE ctr_campaigns SET computer_id = $2, computer_name = $3 WHERE id = $1 AND computer_id IS DISTINCT FROM $2 RETURNING *`,
+      "moved",
+      `(SELECT jsonb_build_array(jsonb_build_object('field', 'computer', 'from', o.computer_name, 'to', c.computer_name)) FROM ctr_campaigns o WHERE o.id = c.id)`,
+      3,
+    ),
+    [id, computer.id, computer.name, by],
+  );
+  return rows[0] ? toCampaign(rows[0]) : getCampaign(id);
+}
+
+const EDIT_COLUMNS: Record<EditableField | "endDate" | "status", string> = {
+  siteUrl: "site_url",
+  keyword: "keyword",
+  pageUrl: "page_url",
+  durationDays: "duration_days",
+  endDate: "end_date",
+  day1Visits: "day1_visits",
+  dailyIncreasePct: "daily_increase_pct",
+  concurrency: "concurrency",
+  minDwellSec: "min_dwell_sec",
+  maxDwellSec: "max_dwell_sec",
+  mobilePct: "mobile_pct",
+  status: "status",
+};
+
+/**
+ * Saves an edit: `changes` (field, from, to; see FIELD_LABELS), kept in the change history with `by`.
+ * Only the fields in `changes` are written. The campaign as it is now, or null if there's no such one.
+ */
+export async function updateCampaign(id: number, changes: FieldChange[], by: string | null): Promise<Campaign | null> {
+  const writes = changes.filter((ch): ch is FieldChange & { field: keyof typeof EDIT_COLUMNS } => ch.field in EDIT_COLUMNS);
+  if (!writes.length) return getCampaign(id);
+  const q = await db();
+  const sets = writes.map((ch, i) => `${EDIT_COLUMNS[ch.field]} = $${i + 2}`);
+  const rows = await q(
+    withHistory(`UPDATE ctr_campaigns SET ${sets.join(", ")} WHERE id = $1 RETURNING *`, "edited", `$${writes.length + 3}::jsonb`, writes.length + 1),
+    [id, ...writes.map((ch) => ch.to), by, JSON.stringify(changes)],
+  );
   return rows[0] ? toCampaign(rows[0]) : null;
+}
+
+/** The campaign's change history, newest first. */
+export async function listChanges(campaignId: number): Promise<CampaignChange[]> {
+  const q = await db();
+  const rows = await q(`SELECT * FROM ctr_campaign_changes WHERE campaign_id = $1 ORDER BY at DESC, id DESC`, [campaignId]);
+  return rows.map((r) => ({
+    id: Number(r.id),
+    campaignId: Number(r.campaign_id),
+    at: iso(r.at),
+    by: (r.by_user as string | null) ?? null,
+    kind: String(r.kind) as CampaignChange["kind"],
+    changes: ((typeof r.changes === "string" ? JSON.parse(r.changes) : r.changes) ?? []) as FieldChange[],
+  }));
+}
+
+/**
+ * A page watches the campaign's live console from another computer: the computer that runs it sends it
+ * through the relay until `seconds` from now (asked again while the page stays open). Its computer, or
+ * null if no such campaign.
+ */
+export async function requestLive(id: number, seconds: number): Promise<Pick<Campaign, "computerId" | "computerName"> | null> {
+  const q = await db();
+  const rows = await q(`UPDATE ctr_campaigns SET live_until = now() + make_interval(secs => $2) WHERE id = $1 RETURNING computer_id, computer_name`, [id, seconds]);
+  return rows[0] ? { computerId: (rows[0].computer_id as string | null) ?? null, computerName: (rows[0].computer_name as string | null) ?? null } : null;
+}
+
+/** This computer is on (every minute): its name, Windows name and app version, and the time. */
+export async function reportComputer(computer: Computer, appVersion: string | null): Promise<void> {
+  const q = await db();
+  await q(
+    `INSERT INTO ctr_computers (id, name, hostname, app_version, last_seen) VALUES ($1, $2, $3, $4, now())
+     ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, hostname = EXCLUDED.hostname, app_version = EXCLUDED.app_version, last_seen = now()`,
+    [computer.id, computer.name, computer.hostname, appVersion],
+  );
+}
+
+/**
+ * The computers campaigns can run on, those on first, then by name. Also the ones that only appear on
+ * campaigns (their app is older than computers saying they're on): they still run what's theirs.
+ */
+export async function listComputers(): Promise<KnownComputer[]> {
+  const q = await db();
+  const rows = await q(
+    `WITH open AS (
+       SELECT computer_id, max(computer_name) AS name, count(*) FILTER (WHERE status IN ('active', 'paused')) AS campaigns
+       FROM ctr_campaigns WHERE computer_id IS NOT NULL GROUP BY computer_id
+     )
+     SELECT coalesce(k.id, o.computer_id) AS id, coalesce(k.name, o.name, 'Unnamed PC') AS name, k.hostname, k.app_version, k.last_seen,
+       coalesce(k.last_seen > now() - make_interval(secs => $1), false) AS online, coalesce(o.campaigns, 0) AS campaigns
+     FROM ctr_computers k FULL JOIN open o ON o.computer_id = k.id
+     ORDER BY online DESC, lower(coalesce(k.name, o.name, ''))`,
+    [ONLINE_MS / 1000],
+  );
+  return rows.map((r) => ({
+    id: String(r.id),
+    name: String(r.name),
+    hostname: (r.hostname as string | null) ?? null,
+    appVersion: (r.app_version as string | null) ?? null,
+    lastSeen: r.last_seen ? iso(r.last_seen) : null,
+    online: r.online === true,
+    campaigns: Number(r.campaigns),
+  }));
+}
+
+/** One computer campaigns can run on (see listComputers); null if no such computer. */
+export async function getComputer(id: string): Promise<KnownComputer | null> {
+  return (await listComputers()).find((c) => c.id === id) ?? null;
 }
 
 /**
@@ -279,6 +447,7 @@ export async function renameComputer(computerId: string, oldName: string, newNam
   const q = await db();
   await q(`UPDATE ctr_days SET last_computer = $3 WHERE last_computer = $2 AND campaign_id IN (SELECT id FROM ctr_campaigns WHERE computer_id = $1)`, [computerId, oldName, newName]);
   await q(`UPDATE ctr_campaigns SET computer_name = $2 WHERE computer_id = $1`, [computerId, newName]);
+  await q(`UPDATE ctr_computers SET name = $2 WHERE id = $1`, [computerId, newName]);
 }
 
 export async function deleteCampaign(id: number): Promise<void> {

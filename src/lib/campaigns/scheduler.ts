@@ -8,13 +8,20 @@
 // The database not reachable never ends this: it's tried again until it is (src/lib/db-retry.ts).
 // Several computers share the database: each campaign runs on one of them (src/lib/this-computer.ts),
 // and each computer only runs its own. Every minute it also picks up what was changed from another
-// computer: a campaign paused, resumed, stopped, deleted or moved; one no computer runs yet, it takes.
+// computer: a campaign paused, resumed, stopped, deleted or moved; one no computer runs yet, it takes;
+// one started for this computer from another one, it runs (and checks its ranking, as the computer that
+// starts a campaign does). And it says it's on, so other computers can start campaigns on it. And
+// the campaigns a page watches from elsewhere: their live console, through the relay (live-relay.ts).
 
+import { appVersion } from "../app-version";
 import { isConnectionError, untilDbReachable } from "../db-retry";
+import { serveLiveConsoles } from "../live-relay";
+import { runsCampaignsHere } from "../runner-lock";
 import { thisComputer } from "../this-computer";
 import { NOT_IN_TOP_10, collectCampaign, stopCampaignCheck } from "./collect";
-import { NotConfiguredError, claimCampaign, listCampaigns, listDays } from "./db";
+import { NotConfiguredError, claimCampaign, listCampaigns, listDays, reportComputer } from "./db";
 import { todayInVietnam } from "./site";
+import type { Campaign } from "./types";
 import { campaignVisitStatus, forgetCampaignVisit, runningVisitIds, startCampaignVisit, stopCampaignVisit } from "./visits";
 
 /** How often to look for campaigns that are due. */
@@ -37,6 +44,37 @@ const g = globalThis as typeof globalThis & {
 };
 const failures = (g.__rankingFailures ??= new Map());
 const runnableHere = (g.__runnableHere ??= new Map<number, boolean>());
+/** Per campaign: what its visits use (site, keyword, plan, behavior), at the last sync. */
+const visitSettings = ((g as typeof g & { __visitSettings?: Map<number, string> }).__visitSettings ??= new Map<number, string>());
+
+/** What a campaign's visits use: when it changes (an edit), the visit running here starts again with it. */
+const settingsOf = (c: Campaign) =>
+  JSON.stringify([c.siteUrl, c.keyword, c.pageUrl, c.day1Visits, c.dailyIncreasePct, c.concurrency, c.minDwellSec, c.maxDwellSec, c.mobilePct]);
+
+/**
+ * The campaign was edited on this computer: if it runs here, its visit starts again with the new
+ * settings now (today's visits done so far still count), not at the next minute check.
+ */
+export function campaignEdited(before: Campaign, after: Campaign, here: boolean): void {
+  visitSettings.set(after.id, settingsOf(after));
+  if (!here || after.status !== "active") return;
+  runnableHere.set(after.id, true);
+  // Given days again after it finished, or its visits' settings changed.
+  if (before.status !== "active" || settingsOf(before) !== settingsOf(after)) startCampaignVisit(after);
+}
+
+/** Whether this copy of the app ran this computer's campaigns at the last minute check. */
+let runnerHeld = false;
+
+/** This copy doesn't run the campaigns any more (another copy took over): everything it ran ends. */
+function stopEverythingHere(): void {
+  for (const id of runningVisitIds()) {
+    stopCampaignVisit(id);
+    stopCampaignCheck(id);
+  }
+  runnableHere.clear();
+  void serveLiveConsoles(null, []);
+}
 
 export function startDailyChecks(): void {
   if (process.env.VERCEL || g.__campaignScheduler) return;
@@ -53,22 +91,38 @@ let syncing = false;
  * Runs what should run on this computer, and stops what shouldn't (any more). `first`: just after the
  * app started; the database not reachable yet (the computer just woke up, no internet…), it keeps
  * trying, so visits never stay stopped after a restart.
+ * Only in the copy of the app that runs this computer's campaigns (src/lib/runner-lock.ts): another
+ * copy runs nothing, and takes over here (as if just started) once that one has quit.
  */
 async function syncHere(first = false): Promise<void> {
   if (syncing) return;
   syncing = true;
   try {
+    const held = runnerHeld;
+    runnerHeld = runsCampaignsHere(true);
+    if (!runnerHeld) {
+      // Another copy runs them (or took over from this one): nothing runs here.
+      if (held) stopEverythingHere();
+      return;
+    }
+    if (!held && !first) first = true;
     const me = await thisComputer();
     if (!me) return;
     const campaigns = first
       ? await untilDbReachable(listCampaigns, { onWait: () => console.warn("Resuming campaign visits: can't reach the database; trying again in 30s…") })
       : await listCampaigns();
+    // Saying it's on can wait for the next minute: it never holds up the campaigns.
+    await reportComputer(me, (await appVersion()).version).catch((err: unknown) => console.warn("Couldn't say this computer is on:", err));
+    const today = todayInVietnam();
     for (let c of campaigns) {
       // No computer runs it yet (made before computers were told apart, or on Vercel): this one takes it.
       if (!c.computerId && (c.status === "active" || c.status === "paused")) c = (await claimCampaign(c.id, me)) ?? c;
       const runnable = c.status === "active" && c.computerId === me.id;
       const was = runnableHere.get(c.id);
       runnableHere.set(c.id, runnable);
+      const settings = settingsOf(c);
+      const edited = visitSettings.has(c.id) && visitSettings.get(c.id) !== settings;
+      visitSettings.set(c.id, settings);
       const v = campaignVisitStatus(c.id);
       if (!runnable) {
         // Paused, stopped or moved to another computer (maybe from another computer): end what runs here.
@@ -78,9 +132,19 @@ async function syncHere(first = false): Promise<void> {
         }
         continue;
       }
-      // No visit since the app started, or resumed (or moved here) from another computer.
-      if (!v || (was === false && !v.running)) startCampaignVisit(c);
+      // No visit since the app started, or resumed (or moved here) from another computer, or edited
+      // from another computer (it starts again with the new settings; today's visits done still count).
+      if (!v || (was === false && !v.running) || edited) startCampaignVisit(c);
+      // New since the last minute, with no visit here before: started for this computer from another
+      // one. Its first ranking check, right away (one started here had it when it was made).
+      if (!first && was === undefined && !v && c.startDate === today) {
+        void collectCampaign(c, today).catch((err: unknown) => console.error(`Campaign ${c.id}: first check failed:`, err));
+      }
     }
+    // Its campaigns a page watches from another computer: their live console goes through the relay
+    // (connected only while there are some; seen here, so it costs no extra reads).
+    const watched = campaigns.filter((c) => c.computerId === me.id && c.liveUntil && Date.parse(c.liveUntil) > Date.now()).map((c) => c.id);
+    await serveLiveConsoles(me, watched).catch((err: unknown) => console.warn("Live console relay:", err));
     // Deleted (maybe from another computer): its visit ends.
     const ids = new Set(campaigns.map((c) => c.id));
     for (const id of runningVisitIds()) {
@@ -106,6 +170,8 @@ async function runDue(): Promise<void> {
   try {
     const today = todayInVietnam();
     // Only the campaigns this computer runs.
+    // Only the copy of the app that runs this computer's campaigns.
+    if (!runsCampaignsHere()) return;
     const me = await thisComputer();
     const active = (await listCampaigns()).filter((x) => x.status === "active" && !!me && x.computerId === me.id);
     // Today's visit: started first, as it runs on its own while the checks below take their time.

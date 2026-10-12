@@ -1,7 +1,11 @@
 // Server-only helpers for the Auto CTR API routes: input checks and error responses.
 
+import { cookies } from "next/headers";
+import { SESSION_COOKIE, readSessionToken } from "../auth/session";
+import { thisComputer } from "../this-computer";
 import { isBlockedHost, parseSiteUrl } from "../url";
-import { NotConfiguredError } from "./db";
+import { NotConfiguredError, getComputer } from "./db";
+import { daysBetween } from "./metrics";
 import {
   DEFAULT_CONCURRENCY,
   DEFAULT_DAILY_INCREASE_PCT,
@@ -15,6 +19,10 @@ import {
   MAX_DAY1_VISITS,
   MAX_DURATION_DAYS,
   MAX_DWELL_SEC,
+  EDITABLE_FIELDS,
+  endDateOf,
+  type Campaign,
+  type FieldChange,
   type NewCampaign,
 } from "./types";
 
@@ -25,6 +33,21 @@ export function errorResponse(err: unknown) {
 
 export function badRequest(message: string) {
   return Response.json({ error: message }, { status: 400 });
+}
+
+/**
+ * The computer picked to run a campaign (`computerId`): this one or any other the app is on. Not sent:
+ * this computer (on the website: none yet, the first computer that starts takes it). An error message
+ * if there's no such computer.
+ */
+export async function pickComputer(computerId: unknown): Promise<{ id: string; name: string } | null | string> {
+  // This computer (also from a copy of the app that doesn't run its campaigns: the one that does takes it).
+  const me = await thisComputer();
+  if (computerId == null || computerId === "") return me;
+  if (typeof computerId !== "string") return "Pick the computer to run the campaign on.";
+  if (computerId === me?.id) return me;
+  const pc = await getComputer(computerId);
+  return pc ? { id: pc.id, name: pc.name } : "That computer isn't known (yet): open the app on it once, then pick it again.";
 }
 
 /** Checks the form input; returns the campaign or an error message. `proxyApis`: links saved in Settings. */
@@ -97,6 +120,38 @@ export function parseNewCampaign(body: Record<string, unknown>, proxyApis: numbe
     gscProperty,
     ga4Property,
   };
+}
+
+/**
+ * Checks an edit (the form's fields, any of them) against the campaign as it is: the same rules as a new
+ * campaign. Returns what changes (field, from, to), or an error message. The end date follows the
+ * duration, and can't be before today; a finished campaign given days again is active again.
+ */
+export function parseCampaignEdit(c: Campaign, body: Record<string, unknown>, proxyApis: number, today: string): FieldChange[] | string {
+  if (c.status === "stopped") return "This campaign has been stopped for good, so it can't be changed.";
+  const merged: Record<string, unknown> = { ...c, ...Object.fromEntries(EDITABLE_FIELDS.filter((f) => f in body).map((f) => [f, body[f]])) };
+  // Concurrency it already has stays allowed, even if proxy links were removed since.
+  const input = parseNewCampaign(merged, Math.max(proxyApis, c.concurrency));
+  if (typeof input === "string") return input;
+
+  const changes: FieldChange[] = [];
+  for (const field of EDITABLE_FIELDS) {
+    const from = c[field] ?? null;
+    const to = input[field] ?? null;
+    if (from !== to && !(typeof from === "number" && Number(to) === from)) changes.push({ field, from, to });
+  }
+  if (input.durationDays !== c.durationDays) {
+    const endDate = endDateOf(c.startDate, input.durationDays);
+    if (endDate < today) return `It can't end before today: day ${daysBetween(c.startDate, today) + 1} of the campaign is today, so at least ${daysBetween(c.startDate, today) + 1} days.`;
+    changes.push({ field: "endDate", from: c.endDate, to: endDate });
+    if (c.status === "finished") changes.push({ field: "status", from: "finished", to: "active" });
+  }
+  return changes;
+}
+
+/** Who is signed in (for the change history); null if no one. */
+export async function signedInAs(): Promise<string | null> {
+  return (await readSessionToken((await cookies()).get(SESSION_COOKIE)?.value))?.username ?? null;
 }
 
 export function parseId(raw: string): number | null {

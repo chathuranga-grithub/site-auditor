@@ -1,14 +1,15 @@
 // GET  /api/ctr/campaigns → { items: { campaign, summary, days }[], setup, computer } (computer: this one,
 //   { id, name }, to tell which campaigns run here; null on Vercel)
-// POST /api/ctr/campaigns  body: NewCampaign → saves it (run by this computer), starts its visits, and
-//   starts the first check in the background (the page doesn't wait for the Google search).
+// POST /api/ctr/campaigns  body: NewCampaign & { computerId? } → saves it, run by the computer picked
+//   (not sent: this one). On this computer it starts its visits, and the first check in the background
+//   (the page doesn't wait for the Google search); on another one, that one does both within a minute.
 
-import { badRequest, errorResponse, parseNewCampaign } from "@/lib/campaigns/api";
+import { badRequest, errorResponse, parseNewCampaign, pickComputer, signedInAs } from "@/lib/campaigns/api";
 import { collectCampaign, ctrSetup } from "@/lib/campaigns/collect";
 import { NotConfiguredError, createCampaign, listCampaigns, listDaysFor } from "@/lib/campaigns/db";
 import { summarize } from "@/lib/campaigns/metrics";
 import { todayInVietnam } from "@/lib/campaigns/site";
-import { startCampaignVisit } from "@/lib/campaigns/visits";
+import { runsHere, startCampaignVisit } from "@/lib/campaigns/visits";
 import { thisComputer } from "@/lib/this-computer";
 
 export const runtime = "nodejs";
@@ -41,8 +42,11 @@ export async function POST(request: Request) {
   if (typeof input === "string") return badRequest(input);
   try {
     const today = todayInVietnam();
-    // It runs on this computer (on Vercel: none, the first computer that starts takes it).
-    const campaign = await createCampaign(input, today, await thisComputer());
+    const computer = await pickComputer(body.computerId);
+    if (typeof computer === "string") return badRequest(computer);
+    const campaign = await createCampaign(input, today, computer, await signedInAs());
+    // Another computer runs it (or none yet, from the website): that one starts it, within a minute.
+    if (!(await runsHere(campaign))) return Response.json({ campaign, problems: [] }, { status: 201 });
     // An active campaign runs its visit through the proxy (on the server; pages follow its console).
     startCampaignVisit(campaign);
     // First reading right away, so the campaign isn't empty until tomorrow. In the background: the

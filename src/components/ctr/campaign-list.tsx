@@ -5,7 +5,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { Monitor, Pause, Play, Plus, Square, Trash2 } from "lucide-react";
+import { Monitor, Pause, Pencil, Play, Plus, Square, Trash2 } from "lucide-react";
 import type { Campaign, CampaignStatus, CtrSetup } from "@/lib/campaigns/types";
 import { Notice, Panel, buttonClass } from "@/components/ui/primitives";
 import { Loader } from "@/components/ui/loader";
@@ -124,6 +124,17 @@ export function CampaignList() {
                   <IconButton label="Resume" onClick={() => act(c.id, "resume")}>
                     <Play className="size-3.5" />
                   </IconButton>
+                )}
+                {c.status !== "stopped" && (
+                  // Same look as the buttons beside it; a link, so it opens like any page (new tab too).
+                  <Link
+                    href={`/ctr/campaigns/${c.id}/edit`}
+                    aria-label="Edit"
+                    title={c.status === "finished" ? "Edit (give it more days to run it again)" : "Edit (kept in the change history)"}
+                    className="grid size-7 place-items-center rounded-md text-muted transition hover:bg-surface-2 hover:text-ink"
+                  >
+                    <Pencil className="size-3.5" />
+                  </Link>
                 )}
                 {isOpen(c.status) && (
                   <IconButton label="Stop" onClick={() => setConfirming({ campaign: c, action: "stop" })} danger>

@@ -1,12 +1,14 @@
 import type { Metadata } from "next";
 import { cookies } from "next/headers";
-import { AppWindow, Info, KeyRound, Monitor, UserRound, Users } from "lucide-react";
+import { AppWindow, Info, KeyRound, Monitor, Radio, UserRound, Users } from "lucide-react";
 import { SESSION_COOKIE, readSessionToken } from "@/lib/auth/session";
 import { Panel } from "@/components/ui/primitives";
 import { ProxyApiField } from "@/components/ui/proxy-api-field";
 import { ChromeProfileField } from "@/components/ui/chrome-profile-field";
 import { ComputerNameField } from "@/components/ui/computer-name-field";
+import { LiveRelayField } from "@/components/ui/live-relay-field";
 import { appVersion } from "@/lib/app-version";
+import { campaignRunner } from "@/lib/runner-lock";
 import { thisComputer } from "@/lib/this-computer";
 
 export const metadata: Metadata = { title: "Settings" };
@@ -16,6 +18,7 @@ export default async function SettingsPage() {
   const session = await readSessionToken((await cookies()).get(SESSION_COOKIE)?.value);
   const { version, installed } = await appVersion();
   const computer = await thisComputer().catch(() => null);
+  const runner = campaignRunner();
   return (
     <div className="mx-auto w-full max-w-4xl space-y-5 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
       <header>
@@ -30,6 +33,8 @@ export default async function SettingsPage() {
             ["Version", version ? (installed ? version : `${version} (development)`) : "—"],
             ["Running as", installed ? "Desktop app (Windows)" : process.env.VERCEL ? "Website (Vercel)" : "Development (npm run dev)"],
             ["This computer", computer ? (computer.named ? `${computer.name} (${computer.hostname})` : computer.name) : "—"],
+            // Only one copy of the app on a computer runs its campaigns (src/lib/runner-lock.ts).
+            ...(computer ? [["Runs the campaigns", runner ? `No: ${runner.app} does (process ${runner.pid})` : "Yes, this copy"]] : []),
           ].map(([k, v]) => (
             <div key={k} className="rounded-xl border border-line bg-surface px-3 py-2">
               <dt className="font-mono text-[10px] tracking-wider text-subtle uppercase">{k}</dt>
@@ -45,6 +50,15 @@ export default async function SettingsPage() {
           the Windows name (e.g. <span className="font-mono">LAPTOP-5J9TO10G</span>), so everyone can tell the computers apart. Each computer saves its own.
         </p>
         <ComputerNameField />
+      </Panel>
+
+      <Panel title={<Title icon={<Radio className="size-3.5" />} text="Live console" />} bodyClassName="space-y-3 p-4 sm:p-5">
+        <p className="text-sm text-muted">
+          To watch the live console of a campaign that runs on <b className="text-ink">another PC</b> (from any computer, or from home), it
+          goes through a small relay server (<code>relay/README.md</code>: free on Render). Only used while someone watches: the PC connects
+          to it within a minute of a page opening, and lets go a few minutes after it closes. Saved for every computer.
+        </p>
+        <LiveRelayField />
       </Panel>
 
       <Panel title={<Title icon={<KeyRound className="size-3.5" />} text="Proxy" />} bodyClassName="space-y-3 p-4 sm:p-5">

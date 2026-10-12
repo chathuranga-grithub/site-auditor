@@ -69,6 +69,8 @@ export interface Campaign {
   /** The computer that runs its visits and ranking checks (others only show it); null = none yet. */
   computerId: string | null;
   computerName: string | null;
+  /** A page watches its live console from another computer until then (ISO); see src/lib/live-relay.ts. */
+  liveUntil: string | null;
   /** YYYY-MM-DD */
   startDate: string;
   endDate: string;
@@ -85,6 +87,83 @@ export interface Campaign {
   ga4Property: string | null;
   status: CampaignStatus;
   createdAt: string;
+}
+
+/** The last day of a campaign that starts on `startDate` and runs `durationDays` (YYYY-MM-DD). */
+export function endDateOf(startDate: string, durationDays: number): string {
+  const end = new Date(`${startDate}T00:00:00Z`);
+  end.setUTCDate(end.getUTCDate() + durationDays - 1);
+  return end.toISOString().slice(0, 10);
+}
+
+/** The settings an edit can change (the start date stays: each day's numbers hang on it). */
+export const EDITABLE_FIELDS = [
+  "siteUrl",
+  "keyword",
+  "pageUrl",
+  "durationDays",
+  "day1Visits",
+  "dailyIncreasePct",
+  "concurrency",
+  "minDwellSec",
+  "maxDwellSec",
+  "mobilePct",
+] as const;
+export type EditableField = (typeof EDITABLE_FIELDS)[number];
+
+/** How each tracked field is named in the change history. */
+export const FIELD_LABELS: Record<string, string> = {
+  siteUrl: "Website",
+  keyword: "Keyword",
+  pageUrl: "Page",
+  durationDays: "Duration (days)",
+  endDate: "End date",
+  day1Visits: "Day 1 visits",
+  dailyIncreasePct: "Daily increase %",
+  concurrency: "Concurrency",
+  minDwellSec: "Min dwell time (s)",
+  maxDwellSec: "Max dwell time (s)",
+  mobilePct: "Mobile traffic %",
+  status: "Status",
+  computer: "Computer",
+};
+
+/** One field's change: what it was, what it is now (null: none). */
+export interface FieldChange {
+  field: string;
+  from: string | number | null;
+  to: string | number | null;
+}
+
+/**
+ * One entry of a campaign's change history: created, edited, its status changed (by hand, or finished
+ * by the daily check), or moved to another computer. `by`: who (null: the app itself).
+ */
+export interface CampaignChange {
+  id: number;
+  campaignId: number;
+  at: string;
+  by: string | null;
+  kind: "created" | "edited" | "status" | "moved";
+  changes: FieldChange[];
+}
+
+/**
+ * A computer with the app that can run campaigns: each one says it's on every minute
+ * (src/lib/campaigns/scheduler.ts), so campaigns can be started on it from any other computer.
+ */
+export interface KnownComputer {
+  id: string;
+  name: string;
+  /** The Windows computer name; null for one that ran campaigns before computers said they're on. */
+  hostname: string | null;
+  appVersion: string | null;
+  /** When it last said it's on (ISO); null: never (see hostname). */
+  lastSeen: string | null;
+  /** Said it's on in the last few minutes: the app runs there now. */
+  online: boolean;
+  /** Its campaigns that are active or paused. */
+  campaigns: number;
 }
 
 /** One day of real numbers for a campaign. */

@@ -3,20 +3,22 @@
 // Auto CTR: one campaign. Its visit to the site through the proxy runs on the server while the
 // campaign is active (src/lib/campaigns/visits.ts); this page shows its console and results, the same
 // live. Then goals vs real numbers, visits done vs the plan, daily data. Each campaign runs on one
-// computer: opened on another one, the page says which, and can move it there ("Run on this computer").
+// computer: opened on another one, the page says which, and can move it there ("Run on this computer"),
+// or from any computer to any other ("Move to…").
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { ArrowLeft, Loader2, Monitor, Pause, Play, RefreshCw, Square, Trash2 } from "lucide-react";
+import { ArrowLeft, Loader2, Monitor, Pause, Pencil, Play, RefreshCw, Square, Trash2 } from "lucide-react";
 import { daysBetween, summarize } from "@/lib/campaigns/metrics";
 import { todayInVietnam } from "@/lib/campaigns/site";
-import { plannedVisits, visitPlanProgress, type Campaign, type CampaignDay } from "@/lib/campaigns/types";
+import { plannedVisits, visitPlanProgress, type Campaign, type CampaignChange, type CampaignDay } from "@/lib/campaigns/types";
 import { Notice, Panel, StatTile, buttonClass } from "@/components/ui/primitives";
 import { Loader } from "@/components/ui/loader";
 import { VisitRunView, useVisitRun } from "@/components/visit/visit-run";
 import { RealtimePanel } from "./realtime";
-import { CONFIRM, CampaignConfirm, isOpen, HealthBadge, PageHeader, Progress, StatusBadge, api, ComputerBadge, GOOGLE_CONNECTOR, type ThisComputer } from "./ui";
+import { CONFIRM, CampaignConfirm, isOpen, HealthBadge, PageHeader, Progress, StatusBadge, api, changeText, ComputerBadge, GOOGLE_CONNECTOR, type ThisComputer } from "./ui";
+import { ComputerSelect, useComputers } from "./computer-picker";
 
 const HEARTBEAT_MS = 5 * 60_000;
 
@@ -63,11 +65,15 @@ function VisitPlanTiles({ campaign: c, day, done, doneToday }: { campaign: Campa
 interface Detail {
   campaign: Campaign;
   days: CampaignDay[];
+  /** Its change history, newest first. */
+  changes?: CampaignChange[];
   /** This computer runs it; it could (the app runs on a computer, not on Vercel). */
   here?: boolean;
   canRunHere?: boolean;
   /** The computer the page is open on; null on Vercel. */
   computer?: ThisComputer | null;
+  /** The other copy of the app on this computer that runs its campaigns (null: this one, or none). */
+  runner?: { app: string; pid: number; since: string } | null;
 }
 
 export function CampaignDetail({ id }: { id: number }) {
@@ -83,14 +89,17 @@ export function CampaignDetail({ id }: { id: number }) {
 
   const visit = useVisitRun();
   const { follow } = visit;
+  const computers = useComputers();
 
   const load = useCallback(() => api<Detail>(`/api/ctr/campaigns/${id}`).then(setData, (e: Error) => setError(e.message)), [id]);
   useEffect(() => {
     load();
   }, [load]);
 
-  // The campaign's visit console: what has happened so far, then live while it runs.
-  useEffect(() => follow(id), [follow, id]);
+  // The campaign's visit console: what has happened so far, then live while it runs. On another PC:
+  // through the live console relay (only while it's active or paused). Followed again when it moves.
+  const source = !data ? null : data.here ? "here" : isOpen(data.campaign.status) && data.campaign.computerId ? data.campaign.computerId : null;
+  useEffect(() => (source ? follow(id, source !== "here") : undefined), [follow, id, source]);
 
   // A run finished: reload the numbers, so the visits done go up without reloading the page. Once
   // finished runs stop arriving for a moment: opening the page replays every visit since the app
@@ -136,7 +145,9 @@ export function CampaignDetail({ id }: { id: number }) {
   if (error && !data) return <Shell><Notice tone="error">{error}</Notice></Shell>;
   if (!data) return <Shell><Loader title="Loading the campaign…" detail="Its numbers, days and live console" className="py-16" /></Shell>;
 
-  const { campaign: c, days, here = false, canRunHere = false, computer = null } = data;
+  const { campaign: c, days, changes = [], here = false, canRunHere = false, computer = null, runner = null } = data;
+  // It runs on this computer, but in the other copy of the app (the desktop app, or npm run dev).
+  const otherCopy = !here && !!runner && !!computer && c.computerId === computer.id;
   const s = summarize(c, days, todayInVietnam());
   const runsOn = here ? "this computer" : (c.computerName ?? "no computer yet");
 
@@ -157,6 +168,24 @@ export function CampaignDetail({ id }: { id: number }) {
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <ComputerBadge campaign={c} me={computer} size="md" />
+            {isOpen(c.status) && computers && computers.computers.some((pc) => pc.id !== c.computerId) && (
+              <ComputerSelect
+                data={computers}
+                value=""
+                exclude={c.computerId}
+                placeholder={busy === "moveTo" ? "Moving…" : "Move to…"}
+                disabled={!!busy}
+                ariaLabel="Move this campaign to another computer"
+                className={`${buttonClass.secondary} max-w-52 cursor-pointer pr-2`}
+                onChange={(to) =>
+                  to &&
+                  run("moveTo", async () => {
+                    // The console follows it (here, or through the relay) once the page reloads.
+                    await api(`/api/ctr/campaigns/${id}`, { method: "PATCH", body: JSON.stringify({ moveTo: to }) });
+                  })
+                }
+              />
+            )}
             <StatusBadge status={c.status} />
             {isOpen(c.status) && here && (
               <button
@@ -188,7 +217,8 @@ export function CampaignDetail({ id }: { id: number }) {
                   } else {
                     run("status", async () => {
                       await api(`/api/ctr/campaigns/${id}`, { method: "PATCH", body: JSON.stringify({ status: "active" }) });
-                      follow(id);
+                      // On another PC, it starts there at its next minute check: the relay shows it then.
+                      follow(id, !here);
                     });
                   }
                 }}
@@ -196,6 +226,15 @@ export function CampaignDetail({ id }: { id: number }) {
                 {c.status === "active" ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
                 {c.status === "active" ? "Pause" : "Resume"}
               </button>
+            )}
+            {c.status !== "stopped" && (
+              <Link
+                href={`/ctr/campaigns/${id}/edit`}
+                className={buttonClass.secondary}
+                title={c.status === "finished" ? "Change its settings, or give it more days (it runs again)" : "Change its settings or extend it (kept in the change history)"}
+              >
+                <Pencil className="size-3.5" /> Edit
+              </Link>
             )}
             {isOpen(c.status) && (
               <button type="button" className={buttonClass.secondary} disabled={!!busy} title="End the campaign early, for good (its data is kept)" onClick={() => setConfirming("stop")}>
@@ -237,26 +276,30 @@ export function CampaignDetail({ id }: { id: number }) {
         <Notice tone="info">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <span>
-              {c.computerName ? (
+              {otherCopy ? (
                 <>
-                  This campaign runs on <b>{c.computerName}</b>: its visits and ranking checks happen there, so its live console is shown
-                  there. Pause, Resume and Stop work from here too (that computer picks them up within a minute).
+                  This campaign runs on this PC, but in the other copy of the app that&apos;s open here (<b>{runner!.app}</b>): only one copy
+                  runs the campaigns, so no visit is done twice. Its live console comes from there, through the relay. Quit that copy, and
+                  this one takes over within a minute.
+                </>
+              ) : c.computerName ? (
+                <>
+                  This campaign runs on <b>{c.computerName}</b>: its visits and ranking checks happen there, and its live console comes
+                  from there, through the relay (starting within a minute). Pause, Resume, Stop and Move to work from here too (that
+                  computer picks them up within a minute).
                 </>
               ) : (
                 <>No computer runs this campaign yet. The first computer with the app running takes it within a minute.</>
               )}
             </span>
-            {canRunHere && (
+            {canRunHere && c.computerId !== computer?.id && (
               <button
                 type="button"
                 className={buttonClass.secondary}
                 disabled={!!busy}
                 title="Run its visits and ranking checks on this computer from now on (the other computer stops them within a minute)"
                 onClick={() =>
-                  run("move", async () => {
-                    await api(`/api/ctr/campaigns/${id}`, { method: "PATCH", body: JSON.stringify({ move: true }) });
-                    follow(id);
-                  })
+                  run("move", () => api(`/api/ctr/campaigns/${id}`, { method: "PATCH", body: JSON.stringify({ move: true }) }))
                 }
               >
                 {busy === "move" ? <Loader2 className="size-3.5 animate-spin" /> : <Monitor className="size-3.5" />} Run on this computer
@@ -265,8 +308,8 @@ export function CampaignDetail({ id }: { id: number }) {
           </div>
         </Notice>
       )}
-      {/* Realtime, like Google Analytics: only here, where the campaign's live console is. */}
-      {here && <RealtimePanel run={visit} />}
+      {/* Realtime, like Google Analytics: wherever the campaign's live console comes from (here, or the relay). */}
+      {source && <RealtimePanel run={visit} />}
       <VisitRunView run={visit} />
       {ranking && (
         <Notice tone="info">
@@ -353,7 +396,40 @@ export function CampaignDetail({ id }: { id: number }) {
         )}
       </Panel>
 
+      <ChangeHistory changes={changes} />
     </Shell>
+  );
+}
+
+const CHANGE_KIND: Record<CampaignChange["kind"], string> = { created: "Created", edited: "Edited", status: "Status", moved: "Computer" };
+
+/** Who changed what, when, from what to what: edits, pause / resume / stop, moves, finished. Newest first. */
+function ChangeHistory({ changes }: { changes: CampaignChange[] }) {
+  return (
+    <Panel title={`Changes · ${changes.length}`} bodyClassName="">
+      {changes.length ? (
+        <ul className="divide-y divide-line">
+          {changes.map((ch) => (
+            <li key={ch.id} className="flex flex-col gap-1 px-4 py-2.5 sm:flex-row sm:items-start sm:gap-4">
+              <div className="w-44 shrink-0 font-mono text-[11px] text-muted">
+                {new Date(ch.at).toLocaleString()}
+                <div className="text-subtle">{ch.by ?? "the app"}</div>
+              </div>
+              <span className="w-20 shrink-0 font-mono text-[10px] tracking-wide text-accent-2 uppercase">{CHANGE_KIND[ch.kind] ?? ch.kind}</span>
+              <div className="min-w-0 flex-1 space-y-0.5 font-mono text-xs break-words text-ink">
+                {ch.kind === "created" ? (
+                  <div>Campaign created{ch.changes[0]?.to ? `, on ${ch.changes[0].to}` : ""}</div>
+                ) : (
+                  ch.changes.map((f) => <div key={f.field}>{changeText(f)}</div>)
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="px-4 py-8 text-center text-sm text-muted">No changes yet. Edits, pause, resume, stop and moves are listed here, with who made them.</div>
+      )}
+    </Panel>
   );
 }
 

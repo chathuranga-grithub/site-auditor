@@ -8,14 +8,14 @@ export type ToolId = (typeof TOOL_IDS)[number];
 const TOOL_PATHS: Record<ToolId, string[]> = {
   audit: ["/audit", "/api/sitemap", "/api/fetch"],
   rankings: ["/rankings", "/api/serp", "/api/analyze"],
-  ctr: ["/ctr", "/api/ctr"],
+  ctr: ["/ctr", "/api/ctr", "/api/computers"],
 };
 
 /** Where each tool starts. */
 export const TOOL_HOME: Record<ToolId, string> = { audit: "/audit", rankings: "/rankings", ctr: "/ctr/campaigns" };
 
 /** Pages only admins may open (app settings). */
-const ADMIN_PATHS = ["/settings", "/api/proxy-settings", "/api/browser-settings"];
+const ADMIN_PATHS = ["/settings", "/api/proxy-settings", "/api/browser-settings", "/api/live-relay"];
 
 export function isToolId(v: unknown): v is ToolId {
   return typeof v === "string" && (TOOL_IDS as readonly string[]).includes(v);

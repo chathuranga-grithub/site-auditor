@@ -21,6 +21,7 @@ import { GoogleBlockedError } from "../serp-browser";
 import type { VisitDevice, VisitEvent } from "../visit-types";
 import { isConnectionError, untilDbReachable } from "../db-retry";
 import { deviceLabel, pickDevice } from "../device-profiles";
+import { runsCampaignsHere } from "../runner-lock";
 import { thisComputer } from "../this-computer";
 import { recordVisits, visitsDoneOn, type VisitDayDelta } from "./db";
 import { todayInVietnam } from "./site";
@@ -59,8 +60,11 @@ const noPending = (): LiveVisit["pending"] => ({ failed: 0, captchasMet: 0, capt
 const g = globalThis as typeof globalThis & { __campaignVisits?: Map<number, LiveVisit> };
 const visits = (g.__campaignVisits ??= new Map<number, LiveVisit>());
 
-/** Visits need a real browser: only when the app runs on a computer, not on Vercel. */
-export const canRunVisits = () => !process.env.VERCEL;
+/**
+ * Visits need a real browser: only when the app runs on a computer, not on Vercel; and only in the copy
+ * of the app that runs the campaigns on this computer (src/lib/runner-lock.ts), never in two at once.
+ */
+export const canRunVisits = () => !process.env.VERCEL && runsCampaignsHere();
 
 type VisitCampaign = Pick<
   Campaign,
@@ -151,8 +155,12 @@ export function runningVisitIds(): number[] {
   return [...visits].filter(([, v]) => v.running).map(([id]) => id);
 }
 
-/** The campaign runs on this computer: its visits and ranking checks happen here (not on another one). */
+/**
+ * The campaign runs here: its visits and ranking checks happen in this copy of the app (not on another
+ * computer, nor in another copy of the app on this one).
+ */
 export async function runsHere(c: Pick<Campaign, "computerId">): Promise<boolean> {
+  if (!canRunVisits()) return false;
   const me = await thisComputer().catch(() => null);
   return !!me && c.computerId === me.id;
 }
@@ -380,6 +388,23 @@ async function run(c: VisitCampaign, v: LiveVisit) {
  * The campaign's console as newline-delimited JSON: every line so far, then new lines live until
  * the visit ends. Nothing if there's been no visit since the app started.
  */
+/**
+ * Follows the campaign's visit for the live console relay (src/lib/live-relay.ts): `onLine` for each
+ * new line, `onEnd` when the visit ends. Returns what happened so far (null: no visit since the app
+ * started) and how to stop following.
+ */
+export function watchCampaignVisit(
+  campaignId: number,
+  onLine: (e: LoggedVisitEvent) => void,
+  onEnd: () => void,
+): { events: LoggedVisitEvent[]; running: boolean; stop: () => void } | null {
+  const v = visits.get(campaignId);
+  if (!v) return null;
+  const follow = (e: LoggedVisitEvent | null) => (e ? onLine(e) : onEnd());
+  if (v.running) v.listeners.add(follow);
+  return { events: v.events, running: v.running, stop: () => v.listeners.delete(follow) };
+}
+
 export function campaignVisitStream(campaignId: number, signal: AbortSignal): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   return new ReadableStream({
