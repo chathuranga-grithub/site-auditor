@@ -14,6 +14,7 @@ import { todayInVietnam } from "@/lib/campaigns/site";
 import { plannedVisits, visitPlanProgress, type Campaign, type CampaignDay } from "@/lib/campaigns/types";
 import { Notice, Panel, StatTile, buttonClass } from "@/components/ui/primitives";
 import { VisitRunView, useVisitRun } from "@/components/visit/visit-run";
+import { RealtimePanel } from "./realtime";
 import { CONFIRM, CampaignConfirm, isOpen, HealthBadge, PageHeader, Progress, StatusBadge, api, ComputerBadge, GOOGLE_CONNECTOR, type ThisComputer } from "./ui";
 
 const HEARTBEAT_MS = 5 * 60_000;
@@ -262,6 +263,8 @@ export function CampaignDetail({ id }: { id: number }) {
           </div>
         </Notice>
       )}
+      {/* Realtime, like Google Analytics: only here, where the campaign's live console is. */}
+      {here && <RealtimePanel run={visit} />}
       <VisitRunView run={visit} />
       {ranking && (
         <Notice tone="info">
