@@ -156,7 +156,16 @@ export function CampaignDetail({ id }: { id: number }) {
     <Shell>
       <PageHeader
         section="Campaigns"
-        title={c.keyword}
+        // Its labels (computer, status) by its name; only buttons on the right, so they keep to one line.
+        title={
+          <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
+            {c.keyword}
+            <span className="inline-flex items-center gap-2 text-base font-normal tracking-normal">
+              <ComputerBadge campaign={c} me={computer} size="md" />
+              <StatusBadge status={c.status} />
+            </span>
+          </span>
+        }
         intro={
           <span className="font-mono text-xs">
             <a href={c.pageUrl ?? c.siteUrl} target="_blank" rel="noopener noreferrer" className="text-link hover:underline">
@@ -167,8 +176,8 @@ export function CampaignDetail({ id }: { id: number }) {
           </span>
         }
         actions={
-          <div className="flex flex-wrap items-center gap-2">
-            <ComputerBadge campaign={c} me={computer} size="md" />
+          // From a laptop's width up the buttons keep to one line (the title has room to wrap); narrower, they wrap.
+          <div className="flex flex-wrap items-center gap-2 sm:justify-end xl:shrink-0">
             {isOpen(c.status) && computers && computers.computers.some((pc) => pc.id !== c.computerId) && (
               <ComputerSelect
                 data={computers}
@@ -177,7 +186,8 @@ export function CampaignDetail({ id }: { id: number }) {
                 placeholder={busy === "moveTo" ? "Moving…" : "Move to…"}
                 disabled={!!busy}
                 ariaLabel="Move this campaign to another computer"
-                className={`${buttonClass.secondary} max-w-52 cursor-pointer pr-2`}
+                // A set width: a dropdown is as wide as its longest option, which pushed the buttons onto a second line.
+                className={`${buttonClass.secondary} w-28 cursor-pointer pr-2`}
                 onChange={(to) =>
                   to &&
                   run("moveTo", async () => {
@@ -187,7 +197,6 @@ export function CampaignDetail({ id }: { id: number }) {
                 }
               />
             )}
-            <StatusBadge status={c.status} />
             {isOpen(c.status) && here && (
               <button
                 type="button"
