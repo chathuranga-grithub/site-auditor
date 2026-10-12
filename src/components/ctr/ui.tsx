@@ -4,7 +4,7 @@
 
 import Link from "next/link";
 import { useEffect, type ReactNode } from "react";
-import { CircleCheck, CircleDashed, CircleX, Pause, Square, Trash2, TriangleAlert } from "lucide-react";
+import { CircleCheck, CircleDashed, CircleX, Monitor, Pause, Square, Trash2, TriangleAlert } from "lucide-react";
 import type { CampaignSummary, Health } from "@/lib/campaigns/metrics";
 import { visitPlanProgress, type Campaign, type CampaignStatus, type CtrSetup } from "@/lib/campaigns/types";
 import { Notice } from "@/components/ui/primitives";
@@ -12,6 +12,47 @@ import { Notice } from "@/components/ui/primitives";
 export interface CampaignItem {
   campaign: Campaign;
   summary: CampaignSummary;
+}
+
+/** The computer the page is open on (the APIs' `computer`); null on Vercel. */
+export interface ThisComputer {
+  id: string;
+  name: string;
+}
+
+/** Whether the campaign runs on the computer the page is open on. */
+export const runsOnThisPc = (c: Pick<Campaign, "computerId">, me: ThisComputer | null | undefined) => !!me && c.computerId === me.id;
+
+/**
+ * Which computer runs the campaign, at a glance: this PC (accent, filled), another PC (its name), or
+ * none yet. A finished or stopped campaign doesn't run anywhere any more: the PC it ran on, dimmed.
+ */
+export function ComputerBadge({ campaign: c, me, size = "sm" }: { campaign: Campaign; me: ThisComputer | null | undefined; size?: "sm" | "md" }) {
+  const here = runsOnThisPc(c, me);
+  const ended = !isOpen(c.status);
+  const text = size === "md" ? "text-xs px-2.5 py-1" : "text-[11px] px-2 py-0.5";
+  if (!c.computerId)
+    return (
+      <span className={`inline-flex items-center gap-1.5 rounded-full border border-dashed border-line-strong text-subtle ${text}`} title="No computer has taken this campaign yet: the first one with the app running takes it within a minute">
+        <Monitor className="size-3" aria-hidden /> No PC yet
+      </span>
+    );
+  if (here)
+    return (
+      <span
+        className={`inline-flex items-center gap-1.5 rounded-full bg-accent font-semibold text-white ${ended ? "opacity-60" : ""} ${text}`}
+        title={`${ended ? "Ran" : "Runs"} on this computer (${c.computerName ?? me?.name})`}
+      >
+        <Monitor className="size-3" aria-hidden /> This PC
+        <span className="font-mono font-normal opacity-80">{c.computerName ?? me?.name}</span>
+      </span>
+    );
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-full border border-line-strong text-muted ${ended ? "opacity-60" : ""} ${text}`} title={`${ended ? "Ran" : "Runs"} on another computer: ${c.computerName ?? "unknown"}`}>
+      <Monitor className="size-3" aria-hidden />
+      <span className="font-mono">{c.computerName ?? "Another PC"}</span>
+    </span>
+  );
 }
 
 export function PageHeader({ section, title, intro, actions }: { section: string; title: ReactNode; intro?: ReactNode; actions?: ReactNode }) {
@@ -161,14 +202,20 @@ export function CampaignConfirm({ kind, campaign: c, onConfirm, onCancel }: { ki
   );
 }
 
-/** One row per campaign: what it tracks, where it is now, and whether it's on target. */
-export function CampaignTable({ items, actions }: { items: CampaignItem[]; actions?: (item: CampaignItem) => ReactNode }) {
+/**
+ * One row per campaign: what it tracks, which computer runs it, where it is now, and whether it's on
+ * target. Rows that run on the computer the page is open on (`me`) stand out: an accent stripe and tint.
+ */
+export function CampaignTable({ items, me, actions }: { items: CampaignItem[]; me?: ThisComputer | null; actions?: (item: CampaignItem) => ReactNode }) {
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[960px] text-left text-sm">
+      <table className="w-full min-w-[1080px] text-left text-sm">
         <thead className="border-b border-line font-mono text-[10px] tracking-[0.12em] text-subtle uppercase">
           <tr>
             <th className="px-4 py-2.5 font-medium">Keyword · site</th>
+            <th className="px-3 py-2.5 font-medium" title="The computer that runs the campaign's visits and ranking checks">
+              Computer
+            </th>
             <th className="px-3 py-2.5 text-right font-medium">Position</th>
             <th className="px-3 py-2.5 text-right font-medium">CTR (7 days)</th>
             <th className="px-3 py-2.5 text-right font-medium">Clicks (7 days)</th>
@@ -184,14 +231,18 @@ export function CampaignTable({ items, actions }: { items: CampaignItem[]; actio
           {items.map((item) => {
             const { campaign: c, summary: s } = item;
             const plan = visitPlanProgress(c, s.dayNumber);
+            const here = runsOnThisPc(c, me);
             return (
-              <tr key={c.id} className="align-top hover:bg-surface-2">
-                <td className="max-w-0 px-4 py-2.5">
+              <tr key={c.id} className={`align-top ${here ? "bg-accent/[0.07] hover:bg-accent/[0.12]" : "hover:bg-surface-2"}`}>
+                <td className={`max-w-0 px-4 py-2.5 ${here ? "shadow-[inset_3px_0_0_var(--color-accent)]" : ""}`}>
                   {/* The full keyword (often a phrase): wraps, never cut off. */}
                   <Link href={`/ctr/campaigns/${c.id}`} className="block font-medium break-words text-ink hover:underline">
                     {c.keyword}
                   </Link>
                   <div className="truncate font-mono text-[11px] text-link">{(c.pageUrl ?? c.siteUrl).replace(/^https?:\/\//, "")}</div>
+                </td>
+                <td className="px-3 py-2.5 whitespace-nowrap">
+                  <ComputerBadge campaign={c} me={me} />
                 </td>
                 <td className="px-3 py-2.5 text-right font-mono text-xs tabular-nums">
                   {s.position ?? <span className="text-subtle">–</span>}

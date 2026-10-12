@@ -1,24 +1,26 @@
 "use client";
 
-// Auto CTR: every saved campaign, with status filters and pause / resume / stop / delete.
+// Auto CTR: every saved campaign, with status filters (and "This PC": the ones this computer runs)
+// and pause / resume / stop / delete.
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { Pause, Play, Plus, Square, Trash2 } from "lucide-react";
+import { Monitor, Pause, Play, Plus, Square, Trash2 } from "lucide-react";
 import type { Campaign, CampaignStatus, CtrSetup } from "@/lib/campaigns/types";
 import { Notice, Panel, buttonClass } from "@/components/ui/primitives";
-import { CONFIRM, CampaignConfirm, CampaignTable, PageHeader, SetupNotice, api, isOpen, type CampaignItem } from "./ui";
+import { CONFIRM, CampaignConfirm, CampaignTable, PageHeader, SetupNotice, api, isOpen, runsOnThisPc, type CampaignItem, type ThisComputer } from "./ui";
 
 type Filter = "all" | CampaignStatus;
 
 export function CampaignList() {
-  const [data, setData] = useState<{ items: CampaignItem[]; setup: CtrSetup } | null>(null);
+  const [data, setData] = useState<{ items: CampaignItem[]; setup: CtrSetup; computer: ThisComputer | null } | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
+  const [onlyHere, setOnlyHere] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // The campaign and action waiting for "yes" in the popup.
   const [confirming, setConfirming] = useState<{ campaign: Campaign; action: keyof typeof CONFIRM } | null>(null);
 
-  const load = useCallback(() => api<{ items: CampaignItem[]; setup: CtrSetup }>("/api/ctr/campaigns").then(setData, (e: Error) => setError(e.message)), []);
+  const load = useCallback(() => api<{ items: CampaignItem[]; setup: CtrSetup; computer: ThisComputer | null }>("/api/ctr/campaigns").then(setData, (e: Error) => setError(e.message)), []);
   useEffect(() => {
     load();
   }, [load]);
@@ -38,7 +40,10 @@ export function CampaignList() {
     }
   }
 
-  const items = data?.items ?? [];
+  const me = data?.computer ?? null;
+  const all = data?.items ?? [];
+  const items = onlyHere ? all.filter((i) => runsOnThisPc(i.campaign, me)) : all;
+  const hereCount = all.filter((i) => runsOnThisPc(i.campaign, me)).length;
   const shown = filter === "all" ? items : items.filter((i) => i.campaign.status === filter);
   const count = (f: Filter) => (f === "all" ? items.length : items.filter((i) => i.campaign.status === f).length);
 
@@ -58,9 +63,34 @@ export function CampaignList() {
       {error && <Notice tone="error">{error}</Notice>}
 
       <Panel
-        title={`Campaigns · ${shown.length}`}
+        title={
+          me ? (
+            <>
+              Campaigns · {shown.length}
+              <span className="ml-2 font-normal text-subtle">
+                this PC: <span className="font-mono text-ink">{me.name}</span>
+              </span>
+            </>
+          ) : (
+            `Campaigns · ${shown.length}`
+          )
+        }
         actions={
-          <div className="flex gap-1.5" role="group" aria-label="Show">
+          <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Show">
+            {me && (
+              <>
+                <button
+                  type="button"
+                  aria-pressed={onlyHere}
+                  onClick={() => setOnlyHere((v) => !v)}
+                  title={`Only the campaigns this computer (${me.name}) runs`}
+                  className={`inline-flex items-center gap-1 rounded-md border px-2.5 py-1 text-xs transition ${onlyHere ? "border-accent bg-accent text-white" : "border-accent/50 text-ink hover:bg-accent/15"}`}
+                >
+                  <Monitor className="size-3" aria-hidden /> This PC <span className={`font-mono text-[10px] ${onlyHere ? "text-white/80" : "text-subtle"}`}>{hereCount}</span>
+                </button>
+                <span className="mx-1 h-4 w-px bg-line-strong" aria-hidden />
+              </>
+            )}
             {(["all", "active", "paused", "finished", "stopped"] as const).map((f) => (
               <button
                 key={f}
@@ -81,6 +111,7 @@ export function CampaignList() {
         ) : shown.length ? (
           <CampaignTable
             items={shown}
+            me={me}
             actions={({ campaign: c }) => (
               <span className="inline-flex gap-1">
                 {c.status === "active" && (

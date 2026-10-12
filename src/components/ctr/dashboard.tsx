@@ -7,14 +7,14 @@ import { useEffect, useState } from "react";
 import { Plus } from "lucide-react";
 import type { CtrSetup } from "@/lib/campaigns/types";
 import { Notice, Panel, StatTile, buttonClass } from "@/components/ui/primitives";
-import { CampaignTable, PageHeader, SetupNotice, api, type CampaignItem } from "./ui";
+import { CampaignTable, PageHeader, SetupNotice, api, type CampaignItem, type ThisComputer } from "./ui";
 
 export function CtrDashboard() {
-  const [data, setData] = useState<{ items: CampaignItem[]; setup: CtrSetup } | null>(null);
+  const [data, setData] = useState<{ items: CampaignItem[]; setup: CtrSetup; computer: ThisComputer | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api<{ items: CampaignItem[]; setup: CtrSetup }>("/api/ctr/campaigns").then(setData, (e: Error) => setError(e.message));
+    api<{ items: CampaignItem[]; setup: CtrSetup; computer: ThisComputer | null }>("/api/ctr/campaigns").then(setData, (e: Error) => setError(e.message));
   }, []);
 
   const items = data?.items ?? [];
@@ -54,7 +54,7 @@ export function CtrDashboard() {
         {!data ? (
           <div className="px-4 py-10 text-center text-sm text-muted">Loading…</div>
         ) : active.length ? (
-          <CampaignTable items={active} />
+          <CampaignTable items={active} me={data.computer} />
         ) : (
           <div className="px-4 py-10 text-center text-sm text-muted">
             No active campaigns.{" "}

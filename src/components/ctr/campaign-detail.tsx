@@ -14,7 +14,7 @@ import { todayInVietnam } from "@/lib/campaigns/site";
 import { plannedVisits, visitPlanProgress, type Campaign, type CampaignDay } from "@/lib/campaigns/types";
 import { Notice, Panel, StatTile, buttonClass } from "@/components/ui/primitives";
 import { VisitRunView, useVisitRun } from "@/components/visit/visit-run";
-import { CONFIRM, CampaignConfirm, isOpen, HealthBadge, PageHeader, Progress, StatusBadge, api } from "./ui";
+import { CONFIRM, CampaignConfirm, isOpen, HealthBadge, PageHeader, Progress, StatusBadge, api, ComputerBadge, type ThisComputer } from "./ui";
 
 const HEARTBEAT_MS = 5 * 60_000;
 
@@ -64,6 +64,8 @@ interface Detail {
   /** This computer runs it; it could (the app runs on a computer, not on Vercel). */
   here?: boolean;
   canRunHere?: boolean;
+  /** The computer the page is open on; null on Vercel. */
+  computer?: ThisComputer | null;
 }
 
 export function CampaignDetail({ id }: { id: number }) {
@@ -131,7 +133,7 @@ export function CampaignDetail({ id }: { id: number }) {
   if (error && !data) return <Shell><Notice tone="error">{error}</Notice></Shell>;
   if (!data) return <Shell><div className="py-16 text-center text-sm text-muted">Loading…</div></Shell>;
 
-  const { campaign: c, days, here = false, canRunHere = false } = data;
+  const { campaign: c, days, here = false, canRunHere = false, computer = null } = data;
   const s = summarize(c, days, todayInVietnam());
   const runsOn = here ? "this computer" : (c.computerName ?? "no computer yet");
 
@@ -151,6 +153,7 @@ export function CampaignDetail({ id }: { id: number }) {
         }
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            <ComputerBadge campaign={c} me={computer} size="md" />
             <StatusBadge status={c.status} />
             {isOpen(c.status) && here && (
               <button

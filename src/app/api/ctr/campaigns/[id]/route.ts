@@ -24,7 +24,8 @@ export async function GET(_request: Request, { params }: Ctx) {
     const campaign = await getCampaign(id);
     if (!campaign) return Response.json({ error: "Campaign not found." }, { status: 404 });
     const [days, notes] = await Promise.all([listDays(id), listNotes(id)]);
-    return Response.json({ campaign, days, notes, here: await runsHere(campaign), canRunHere: canRunVisits() });
+    const computer = canRunVisits() ? await thisComputer().catch(() => null) : null;
+    return Response.json({ campaign, days, notes, here: await runsHere(campaign), canRunHere: canRunVisits(), computer });
   } catch (err) {
     return errorResponse(err);
   }
