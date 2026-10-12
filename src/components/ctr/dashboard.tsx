@@ -115,7 +115,7 @@ export function CtrDashboard() {
         </div>
         <label className="flex items-center gap-2 text-xs text-muted">
           Site
-          <select value={site} onChange={(e) => setSite(e.target.value)} className="rounded-lg border border-line bg-surface-solid px-2.5 py-1.5 text-xs text-ink">
+          <select value={site} onChange={(e) => setSite(e.target.value)} className="rounded-lg border border-line bg-surface-solid px-2.5 py-1.5 text-xs text-ink [&_option]:bg-surface-solid [&_option]:text-ink">
             <option value="all">All sites ({sites.length})</option>
             {sites.map((s) => (
               <option key={s} value={s}>

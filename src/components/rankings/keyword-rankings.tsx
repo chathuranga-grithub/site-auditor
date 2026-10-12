@@ -134,7 +134,7 @@ export function KeywordRankings() {
               value={country}
               onChange={(e) => setCountry(e.target.value)}
               disabled={busy}
-              className="h-10 w-full rounded-lg border border-transparent bg-canvas/60 px-3 text-sm text-ink outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/20 disabled:opacity-60"
+              className="h-10 w-full rounded-lg border border-transparent bg-canvas/60 px-3 text-sm text-ink outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/20 disabled:opacity-60 [&_option]:bg-surface-solid [&_option]:text-ink"
             >
               <optgroup label="Popular">
                 {popular.map((c) => (

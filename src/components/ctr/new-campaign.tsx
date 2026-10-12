@@ -205,7 +205,7 @@ export function NewCampaign({ editing }: { editing?: Campaign } = {}) {
                   />
                 ) : (
                   <select className={input} disabled>
-                    <option>Loading the computers…</option>
+                    <option className="bg-surface-solid text-ink">Loading the computers…</option>
                   </select>
                 )}
               </Field>

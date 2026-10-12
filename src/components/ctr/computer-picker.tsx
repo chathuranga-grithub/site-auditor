@@ -72,11 +72,23 @@ export function ComputerSelect({
   ariaLabel?: string;
 }) {
   const options = sortedComputers(data).filter((c) => c.id !== exclude);
+  // The open list is drawn by Windows with the box's background: the boxes here are see-through, so
+  // the list came out white with light text. Its items get the app's solid colors.
+  const option = "bg-surface-solid text-ink";
   return (
     <select className={className} value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled} aria-label={ariaLabel}>
-      {placeholder != null && <option value="">{placeholder}</option>}
+      {placeholder != null && (
+        <option value="" className={option}>
+          {placeholder}
+        </option>
+      )}
       {options.map((c) => (
-        <option key={c.id} value={c.id} title={[c.hostname && `Windows name: ${c.hostname}`, c.appVersion && `app ${c.appVersion}`].filter(Boolean).join(" · ") || undefined}>
+        <option
+          key={c.id}
+          value={c.id}
+          className={option}
+          title={[c.hostname && `Windows name: ${c.hostname}`, c.appVersion && `app ${c.appVersion}`].filter(Boolean).join(" · ") || undefined}
+        >
           {label(c, data.me)}
         </option>
       ))}
