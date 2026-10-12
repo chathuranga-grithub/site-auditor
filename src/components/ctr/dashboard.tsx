@@ -9,7 +9,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Activity, ArrowDownRight, ArrowUpRight, Check, CircleCheck, Files, Monitor, ShieldCheck, Smartphone, Timer, Trophy, type LucideIcon } from "lucide-react";
+import { Activity, ArrowDownRight, ArrowUpRight, Check, CircleCheck, Files, Loader2, Monitor, ShieldCheck, Smartphone, Timer, Trophy, type LucideIcon } from "lucide-react";
 import type { CampaignDay, CtrSetup } from "@/lib/campaigns/types";
 import { todayInVietnam } from "@/lib/campaigns/site";
 import { daysBetween } from "@/lib/campaigns/metrics";
@@ -647,7 +647,17 @@ function CampaignCard({ c, days, today, me, siteColor }: { c: Overview["campaign
 function DashboardSkeleton() {
   const block = "skeleton rounded-2xl border border-line";
   return (
-    <div className="space-y-5" aria-busy="true" aria-label="Loading the dashboard">
+    <div className="relative space-y-5" aria-busy="true" aria-label="Loading the dashboard">
+      {/* The loader, over the outline of what's coming. */}
+      <div className="pointer-events-none absolute inset-x-0 top-40 z-10 flex justify-center">
+        <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-[#0f1118]/85 px-5 py-3 shadow-[0_12px_40px_-12px_#8b5cf680] backdrop-blur-md">
+          <Loader2 className="size-5 animate-spin text-accent" aria-hidden />
+          <div>
+            <div className="text-sm font-medium text-ink">Loading the latest numbers…</div>
+            <div className="text-[11px] text-subtle">Campaigns, visits and charts</div>
+          </div>
+        </div>
+      </div>
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,3fr)]">
         <div className={`${block} h-[180px]`} />
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
