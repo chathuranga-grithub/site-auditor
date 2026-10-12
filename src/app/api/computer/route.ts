@@ -31,7 +31,7 @@ export async function PUT(request: Request) {
   try {
     const after = (await nameThisComputer(body.name, session.username))!;
     // Its campaigns (and their days) show the new name; the database may be offline: the name is kept here anyway.
-    const synced = await renameComputer(after.id, before.name, after.name).then(
+    const synced = await renameComputer(after.id, before.name, after.name, after.named ? after.name : null).then(
       () => true,
       () => false,
     );

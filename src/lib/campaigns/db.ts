@@ -123,6 +123,9 @@ const SCHEMA = [
   // What its campaigns are doing, with each minute's "I'm on" (only with Realtime updates on for that
   // computer, src/lib/campaigns/live-snapshot.ts): overwritten each time, never kept. Added later.
   `ALTER TABLE ctr_computers ADD COLUMN IF NOT EXISTS live JSONB`,
+  // The name given to it in Settings (null: none, its Windows name), added later. Kept apart from `name`, which
+  // each check-in writes (apps before 1.0.8 wrote a stale one there): every page shows this, else `name`.
+  `ALTER TABLE ctr_computers ADD COLUMN IF NOT EXISTS label TEXT`,
   // Each campaign's change history (created, edited, status, moved: who, when, from what to what), added later.
   `CREATE TABLE IF NOT EXISTS ctr_campaign_changes (
     id SERIAL PRIMARY KEY,
@@ -170,6 +173,14 @@ const isoDay = (v: unknown) =>
     : String(v).slice(0, 10);
 const iso = (v: unknown) => (v instanceof Date ? v.toISOString() : String(v));
 
+// A computer's name as every page shows it: the one given in Settings (label), else the one it checks
+// in with. Read with each campaign and day (k: its computer), so a name saved in Settings shows at once
+// everywhere, whatever is saved with them, and whichever version of the app the computer runs.
+const PC_NAME = `coalesce(k.label, k.name)`;
+const DAYS_WITH_PC = `ctr_days d LEFT JOIN ctr_campaigns c ON c.id = d.campaign_id LEFT JOIN ctr_computers k ON k.id = c.computer_id`;
+/** A day's last visit, made on its campaign's computer under its Windows or check-in name: under its name as it is now. */
+const LAST_PC = `CASE WHEN k.id IS NOT NULL AND d.last_computer IN (k.hostname, k.name, k.label) THEN ${PC_NAME} ELSE d.last_computer END`;
+
 function toCampaign(r: Record<string, unknown>): Campaign {
   return {
     id: Number(r.id),
@@ -185,7 +196,8 @@ function toCampaign(r: Record<string, unknown>): Campaign {
     maxDwellSec: Number(r.max_dwell_sec),
     mobilePct: Number(r.mobile_pct),
     computerId: (r.computer_id as string | null) ?? null,
-    computerName: (r.computer_name as string | null) ?? null,
+    // Its computer's name as it is now (listCampaigns, getCampaign), else the one saved with it.
+    computerName: ((r.pc_name ?? r.computer_name) as string | null) ?? null,
     startDate: isoDay(r.start_date),
     endDate: isoDay(r.end_date),
     targetCtr: Number(r.target_ctr),
@@ -230,7 +242,8 @@ function toDay(r: Record<string, unknown>): CampaignDay {
     visitPositionAvg: Number(r.visit_position_count ?? 0) > 0 ? Math.round((Number(r.visit_position_sum) / Number(r.visit_position_count)) * 10) / 10 : null,
     visitPositionBest: num(r.visit_position_best),
     lastVisitAt: r.last_visit_at ? new Date(r.last_visit_at as string).toISOString() : null,
-    lastComputer: (r.last_computer as string | null) ?? null,
+    // Made under its computer's Windows name or check-in name: shown under its name as it is now.
+    lastComputer: ((r.last_pc ?? r.last_computer) as string | null) ?? null,
     places: (typeof r.places === "string" ? JSON.parse(r.places) : r.places) ?? {},
     notes,
   };
@@ -289,12 +302,12 @@ export async function createCampaign(input: NewCampaign, today: string, computer
 
 export async function listCampaigns(): Promise<Campaign[]> {
   const q = await db();
-  return (await q(`SELECT * FROM ctr_campaigns ORDER BY created_at DESC, id DESC`)).map(toCampaign);
+  return (await q(`SELECT c.*, ${PC_NAME} AS pc_name FROM ctr_campaigns c LEFT JOIN ctr_computers k ON k.id = c.computer_id ORDER BY c.created_at DESC, c.id DESC`)).map(toCampaign);
 }
 
 export async function getCampaign(id: number): Promise<Campaign | null> {
   const q = await db();
-  const rows = await q(`SELECT * FROM ctr_campaigns WHERE id = $1`, [id]);
+  const rows = await q(`SELECT c.*, ${PC_NAME} AS pc_name FROM ctr_campaigns c LEFT JOIN ctr_computers k ON k.id = c.computer_id WHERE c.id = $1`, [id]);
   return rows[0] ? toCampaign(rows[0]) : null;
 }
 
@@ -447,7 +460,7 @@ export async function listComputers(): Promise<KnownComputer[]> {
        SELECT computer_id, max(computer_name) AS name, count(*) FILTER (WHERE status IN ('active', 'paused')) AS campaigns
        FROM ctr_campaigns WHERE computer_id IS NOT NULL GROUP BY computer_id
      )
-     SELECT coalesce(k.id, o.computer_id) AS id, coalesce(k.name, o.name, 'Unnamed PC') AS name, k.hostname, k.app_version, k.last_seen,
+     SELECT coalesce(k.id, o.computer_id) AS id, coalesce(k.label, k.name, o.name, 'Unnamed PC') AS name, k.hostname, k.app_version, k.last_seen,
        coalesce(k.last_seen > now() - make_interval(secs => $1), false) AS online, coalesce(o.campaigns, 0) AS campaigns
      FROM ctr_computers k FULL JOIN open o ON o.computer_id = k.id
      ORDER BY online DESC, lower(coalesce(k.name, o.name, ''))`,
@@ -470,15 +483,16 @@ export async function getComputer(id: string): Promise<KnownComputer | null> {
 }
 
 /**
- * A computer got a new name (Settings): its campaigns, and their days' "last visit" made on it
- * (under its old name), show the new one. Two writes, only when the name changes.
+ * A computer got a new name (Settings; `label` null: back to its Windows name): it's kept as the name
+ * every page shows (label), and its campaigns and their days' "last visit" made on it (under its old
+ * name) take it too.
  */
-export async function renameComputer(computerId: string, oldName: string, newName: string): Promise<void> {
-  if (oldName === newName) return;
+export async function renameComputer(computerId: string, oldName: string, newName: string, label: string | null): Promise<void> {
   const q = await db();
+  await q(`UPDATE ctr_computers SET name = $2, label = $3 WHERE id = $1`, [computerId, newName, label]);
+  if (oldName === newName) return;
   await q(`UPDATE ctr_days SET last_computer = $3 WHERE last_computer = $2 AND campaign_id IN (SELECT id FROM ctr_campaigns WHERE computer_id = $1)`, [computerId, oldName, newName]);
   await q(`UPDATE ctr_campaigns SET computer_name = $2 WHERE computer_id = $1`, [computerId, newName]);
-  await q(`UPDATE ctr_computers SET name = $2 WHERE id = $1`, [computerId, newName]);
 }
 
 export async function deleteCampaign(id: number): Promise<void> {
@@ -587,7 +601,7 @@ export async function listDaysFor(campaignIds: number[]): Promise<Map<number, Ca
   const byCampaign = new Map<number, CampaignDay[]>(campaignIds.map((id) => [id, []]));
   if (!campaignIds.length) return byCampaign;
   const q = await db();
-  for (const d of (await q(`SELECT * FROM ctr_days WHERE campaign_id = ANY($1::int[]) ORDER BY campaign_id, day`, [campaignIds])).map(toDay)) {
+  for (const d of (await q(`SELECT d.*, ${LAST_PC} AS last_pc FROM ${DAYS_WITH_PC} WHERE d.campaign_id = ANY($1::int[]) ORDER BY d.campaign_id, d.day`, [campaignIds])).map(toDay)) {
     byCampaign.get(d.campaignId)?.push(d);
   }
   return byCampaign;
@@ -595,13 +609,13 @@ export async function listDaysFor(campaignIds: number[]): Promise<Map<number, Ca
 
 export async function listDays(campaignId: number): Promise<CampaignDay[]> {
   const q = await db();
-  return (await q(`SELECT * FROM ctr_days WHERE campaign_id = $1 ORDER BY day`, [campaignId])).map(toDay);
+  return (await q(`SELECT d.*, ${LAST_PC} AS last_pc FROM ${DAYS_WITH_PC} WHERE d.campaign_id = $1 ORDER BY d.day`, [campaignId])).map(toDay);
 }
 
 /** Latest day for every campaign, for the dashboard. */
 export async function latestDays(): Promise<CampaignDay[]> {
   const q = await db();
-  return (await q(`SELECT DISTINCT ON (campaign_id) * FROM ctr_days ORDER BY campaign_id, day DESC`)).map(toDay);
+  return (await q(`SELECT DISTINCT ON (d.campaign_id) d.*, ${LAST_PC} AS last_pc FROM ${DAYS_WITH_PC} ORDER BY d.campaign_id, d.day DESC`)).map(toDay);
 }
 
 export async function addNote(campaignId: number, day: string, text: string): Promise<CampaignNote> {
