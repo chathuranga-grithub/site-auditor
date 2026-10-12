@@ -14,7 +14,8 @@ const args = process.argv.slice(2);
 const run = (cmd, env = {}) => execSync(cmd, { cwd: root, stdio: "inherit", env: { ...process.env, ...env } });
 
 // 1. The server.
-rmSync(path.join(root, ".next"), { recursive: true, force: true });
+// Only the last desktop server: not all of .next, which also holds a running `npm run dev` (.next/dev).
+rmSync(standalone, { recursive: true, force: true });
 run("npx next build", { DESKTOP_BUILD: "1" });
 
 // 2. What standalone output leaves to a CDN: served by the app's own server here.
