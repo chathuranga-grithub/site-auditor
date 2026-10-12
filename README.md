@@ -1,4 +1,4 @@
-# SEO Auditor
+# SEO Toolkit
 
 Internal tool for engineers and SEO specialists, with two tools: **Site Audit** and **Keyword Rankings** (see below).
 
@@ -128,15 +128,15 @@ Other scripts: `npm run build` (production build and type-check), `npm run lint`
 
 Campaign visits need the real Google Chrome on a computer, so they can't run on Vercel. The desktop app installs the whole tool on a Windows PC: `desktop/` is the Electron app, which runs the app's own server (Next.js standalone output) and shows it in a window.
 
-- **Install:** run `Site-Auditor-Setup-<version>.exe`. No admin rights are needed, and Google Chrome must already be installed.
-- **First start:** a setup screen asks for the database link (`DATABASE_URL`) and the secret key (`AUTH_SECRET`), the same on every computer. The Google service account key is optional. They're kept in `%APPDATA%\Site Auditor\config.json`, encrypted by Windows, never in the installer.
-- **Running:** closing the window keeps the app in the tray, so campaigns keep running. It starts with Windows (a tray option). The tray menu has Settings, the log folder (`%APPDATA%\Site Auditor\logs\server.log`, with the `[visit …]` lines), Restart the server, Check for updates and Quit.
+- **Install:** run `SEO-Toolkit-Setup-<version>.exe`. No admin rights are needed, and Google Chrome must already be installed.
+- **First start:** a setup screen asks for the database link (`DATABASE_URL`) and the secret key (`AUTH_SECRET`), the same on every computer. The Google service account key is optional. They're kept in `%APPDATA%\SEO Toolkit\config.json`, encrypted by Windows, never in the installer.
+- **Running:** closing the window keeps the app in the tray, so campaigns keep running. It starts with Windows (a tray option). The tray menu has Settings, the log folder (`%APPDATA%\SEO Toolkit\logs\server.log`, with the `[visit …]` lines), Restart the server, Check for updates and Quit.
 - **Updates:** installed apps check this repository's GitHub releases every 6 hours and when they start.
 
 To build:
 
 ```bash
-npm run desktop:build      # dist-desktop\Site-Auditor-Setup-<version>.exe
+npm run desktop:build      # dist-desktop\SEO-Toolkit-Setup-<version>.exe
 npm run desktop:start      # try the app without installing (after a build)
 ```
 

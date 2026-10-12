@@ -1,4 +1,4 @@
-// SEO Auditor mark: rising ranking bars and a magnifying glass on the brand gradient.
+// SEO Toolkit mark: rising ranking bars and a magnifying glass on the brand gradient.
 // Same drawing as the favicon (src/app/icon.svg).
 
 import { useId } from "react";

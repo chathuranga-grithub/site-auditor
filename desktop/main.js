@@ -1,4 +1,4 @@
-// Site Auditor for Windows (Electron). Runs the app's own server (Next.js standalone, built by
+// SEO Toolkit for Windows (Electron). Runs the app's own server (Next.js standalone, built by
 // `npm run desktop:build`) on this computer and shows it in a window. Campaign visits need the real
 // Chrome on this computer in the logged-in user's session (a Windows service can't show its windows),
 // so the app stays in the tray when its window is closed, and starts when Windows starts.
@@ -18,6 +18,9 @@ const DEFAULT_PORT = 3210;
 const ICON = path.join(__dirname, "icon.png");
 /** The server's files: in the installed app, under resources\server; while developing, the last build. */
 const SERVER_DIR = app.isPackaged ? path.join(process.resourcesPath, "server", "standalone") : path.join(__dirname, "..", ".next", "standalone");
+// The app was called Site Auditor: its setup, secrets and logs stay in that folder (%APPDATA%\Site Auditor),
+// which Electron would otherwise name after the app.
+app.setPath("userData", path.join(app.getPath("appData"), "Site Auditor"));
 const CONFIG_FILE = () => path.join(app.getPath("userData"), "config.json");
 const LOG_DIR = () => path.join(app.getPath("userData"), "logs");
 /** Started from Windows' startup list: straight to the tray, no window. */
@@ -124,11 +127,11 @@ async function startServer() {
   const port = await freePort(config.port);
   if (port !== config.port) writeConfig({ ...config, port });
   const log = openLog();
-  log.write(`\n=== Site Auditor ${app.getVersion()} · ${new Date().toISOString()} · port ${port} ===\n`);
+  log.write(`\n=== SEO Toolkit ${app.getVersion()} · ${new Date().toISOString()} · port ${port} ===\n`);
   server = utilityProcess.fork(path.join(SERVER_DIR, "server.js"), [], {
     cwd: SERVER_DIR,
     stdio: "pipe",
-    serviceName: "Site Auditor server",
+    serviceName: "SEO Toolkit server",
     env: {
       ...process.env,
       NODE_ENV: "production",
@@ -147,7 +150,7 @@ async function startServer() {
     server = null;
     if (quitting) return;
     dialog
-      .showMessageBox({ type: "error", title: "Site Auditor", message: "The app's server stopped.", detail: `See the log for why:\n${path.join(LOG_DIR(), "server.log")}`, buttons: ["Restart", "Open log folder", "Quit"] })
+      .showMessageBox({ type: "error", title: "SEO Toolkit", message: "The app's server stopped.", detail: `See the log for why:\n${path.join(LOG_DIR(), "server.log")}`, buttons: ["Restart", "Open log folder", "Quit"] })
       .then(({ response }) => {
         if (response === 0) restartFromMenu();
         else if (response === 1) shell.openPath(LOG_DIR());
@@ -174,7 +177,7 @@ async function restartServer() {
 }
 
 /** restartServer from a menu or a dialog: a failure is shown, not thrown. */
-const restartFromMenu = () => restartServer().catch((err) => dialog.showErrorBox("Site Auditor", `${err.message || err}\n\nSee the log in ${LOG_DIR()}`));
+const restartFromMenu = () => restartServer().catch((err) => dialog.showErrorBox("SEO Toolkit", `${err.message || err}\n\nSee the log in ${LOG_DIR()}`));
 
 // ---------------------------------------------------------------------------------------------
 // Windows
@@ -186,7 +189,7 @@ function showMain() {
     win.focus();
     return;
   }
-  win = new BrowserWindow({ width: 1400, height: 900, minWidth: 900, minHeight: 600, title: "Site Auditor", icon: ICON, autoHideMenuBar: true, show: false });
+  win = new BrowserWindow({ width: 1400, height: 900, minWidth: 900, minHeight: 600, title: "SEO Toolkit", icon: ICON, autoHideMenuBar: true, show: false });
   win.loadURL(serverUrl);
   win.once("ready-to-show", () => win.show());
   // Links to other sites open in the normal browser, not in the app.
@@ -207,7 +210,7 @@ function showMain() {
     win.hide();
     if (!toldAboutTray) {
       toldAboutTray = true;
-      tray?.displayBalloon({ iconType: "info", title: "Site Auditor is still running", content: "Campaigns keep running. Open it again or quit from this icon." });
+      tray?.displayBalloon({ iconType: "info", title: "SEO Toolkit is still running", content: "Campaigns keep running. Open it again or quit from this icon." });
     }
   });
   win.on("closed", () => (win = null));
@@ -219,7 +222,7 @@ function showSetup() {
     width: 620,
     height: 600,
     resizable: false,
-    title: "Site Auditor setup",
+    title: "SEO Toolkit setup",
     icon: ICON,
     autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, "preload.js") },
@@ -279,10 +282,10 @@ function setStartAtLogin(on) {
 
 function buildTray() {
   tray = new Tray(nativeImage.createFromPath(ICON).resize({ width: 16, height: 16 }));
-  tray.setToolTip(`Site Auditor ${app.getVersion()}`);
+  tray.setToolTip(`SEO Toolkit ${app.getVersion()}`);
   const menu = () =>
     Menu.buildFromTemplate([
-      { label: "Open Site Auditor", click: showMain },
+      { label: "Open SEO Toolkit", click: showMain },
       { type: "separator" },
       { label: "Settings…", click: showSetup },
       { label: "Open log folder", click: () => shell.openPath(LOG_DIR()) },
@@ -315,7 +318,7 @@ function checkForUpdates(manual) {
       dialog
         .showMessageBox({
           type: "info",
-          title: "Site Auditor",
+          title: "SEO Toolkit",
           message: `Version ${info.version} is ready.`,
           detail: "Restart now to update? (Visits running on this computer stop and start again after the update.)",
           buttons: ["Restart now", "Later (when I quit)"],
@@ -329,9 +332,9 @@ function checkForUpdates(manual) {
   }
   updater.checkForUpdates().then(
     (r) => {
-      if (manual && !r?.isUpdateAvailable) dialog.showMessageBox({ type: "info", title: "Site Auditor", message: `You have the latest version (${app.getVersion()}).` });
+      if (manual && !r?.isUpdateAvailable) dialog.showMessageBox({ type: "info", title: "SEO Toolkit", message: `You have the latest version (${app.getVersion()}).` });
     },
-    (err) => manual && dialog.showErrorBox("Site Auditor", `Couldn't check for updates: ${err.message || err}`),
+    (err) => manual && dialog.showErrorBox("SEO Toolkit", `Couldn't check for updates: ${err.message || err}`),
   );
 }
 
@@ -359,7 +362,7 @@ if (!app.requestSingleInstanceLock()) {
     try {
       await startServer();
     } catch (err) {
-      dialog.showErrorBox("Site Auditor", `${err.message || err}\n\nSee the log in ${LOG_DIR()}`);
+      dialog.showErrorBox("SEO Toolkit", `${err.message || err}\n\nSee the log in ${LOG_DIR()}`);
     }
     if (!HIDDEN) showMain();
     checkForUpdates(false);

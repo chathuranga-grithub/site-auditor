@@ -28,7 +28,7 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
 
         <div className="mx-auto flex w-full max-w-sm flex-1 flex-col justify-center py-12">
           <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Welcome back</h1>
-          <p className="mt-2 text-sm text-muted">Sign in with your SEO Auditor account.</p>
+          <p className="mt-2 text-sm text-muted">Sign in with your SEO Toolkit account.</p>
           <LoginForm next={next} />
           <div className="mt-8 flex items-start gap-3 rounded-xl border border-line bg-surface px-4 py-3.5">
             <ShieldCheck className="mt-0.5 size-4 shrink-0 text-accent-2" aria-hidden />
@@ -53,7 +53,7 @@ function Brand() {
     <>
       <Logo className="glow size-8 rounded-lg" />
       <span className="text-base font-semibold tracking-tight">
-        SEO <span className="text-gradient">Auditor</span>
+        SEO <span className="text-gradient">Toolkit</span>
       </span>
     </>
   );

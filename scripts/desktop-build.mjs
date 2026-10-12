@@ -1,5 +1,5 @@
 // Builds the Windows desktop app (desktop/): the app's server as Next.js standalone output, then the
-// installer (dist-desktop\Site Auditor Setup <version>.exe) with electron-builder.
+// installer (dist-desktop\SEO Toolkit Setup <version>.exe) with electron-builder.
 // Run: npm run desktop:build            (installer only)
 //      npm run desktop:build -- --server (the server only, e.g. to try `npm run desktop:start`)
 //      npm run desktop:release           (also publishes it as a GitHub release: needs GH_TOKEN)

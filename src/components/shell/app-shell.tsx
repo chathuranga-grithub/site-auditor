@@ -145,7 +145,7 @@ function Brand({ compact = false }: { compact?: boolean }) {
       <Logo className={`glow rounded-lg ${compact ? "size-7" : "size-8"}`} />
       <span className="leading-tight">
         <span className="block text-[15px] font-semibold tracking-tight">
-          SEO <span className="text-gradient">Auditor</span>
+          SEO <span className="text-gradient">Toolkit</span>
         </span>
         {!compact && <span className="block text-[11px] text-subtle">Internal SEO toolkit</span>}
       </span>
@@ -230,15 +230,15 @@ function Nav({ user, onNavigate }: { user: ShellUser | null; onNavigate?: () => 
   );
 }
 
-/** The app version, at the foot of the menu: "Site Auditor  v1.0.4". */
+/** The app version, at the foot of the menu: "SEO Toolkit  v1.0.4". */
 function AboutLine({ about }: { about: ShellAbout }) {
   if (!about.version) return null;
   return (
     <div
       className="flex items-center justify-between px-4 pb-3 text-[11px] text-subtle"
-      title={`Site Auditor ${about.version}${about.installed ? "" : " (development)"}`}
+      title={`SEO Toolkit ${about.version}${about.installed ? "" : " (development)"}`}
     >
-      <span>Site Auditor</span>
+      <span>SEO Toolkit</span>
       <span className="inline-flex items-center gap-1.5 font-mono">
         v{about.version}
         {!about.installed && <span className="rounded border border-line px-1 py-px text-[9px] tracking-wider uppercase">Dev</span>}

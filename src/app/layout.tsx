@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: { default: "SEO Auditor", template: "%s · SEO Auditor" },
+  title: { default: "SEO Toolkit", template: "%s · SEO Toolkit" },
   description: "Internal SEO and site health tools.",
 };
 

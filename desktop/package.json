@@ -1,8 +1,8 @@
 {
   "name": "site-auditor-desktop",
-  "productName": "Site Auditor",
-  "version": "1.0.5",
-  "description": "Site Auditor for Windows: campaigns, visits and checks run on this computer.",
+  "productName": "SEO Toolkit",
+  "version": "1.0.6",
+  "description": "SEO Toolkit for Windows: campaigns, visits and checks run on this computer.",
   "author": "Grithub",
   "private": true,
   "main": "main.js",

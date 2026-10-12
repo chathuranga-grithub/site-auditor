@@ -1,6 +1,6 @@
 # The Windows installer for the desktop app (desktop/). Built by scripts/desktop-build.mjs.
 appId: ae.grithub.siteauditor
-productName: Site Auditor
+productName: SEO Toolkit
 copyright: Grithub
 directories:
   # The app window's own small package (main.js, the setup screen, the auto-updater).
@@ -24,8 +24,8 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: Site Auditor
-  artifactName: Site-Auditor-Setup-${version}.${ext}
+  shortcutName: SEO Toolkit
+  artifactName: SEO-Toolkit-Setup-${version}.${ext}
   # Settings and logs stay on an uninstall (a reinstall picks them up again).
   deleteAppDataOnUninstall: false
 # Updates: installed apps check this repository's releases (latest.yml).
