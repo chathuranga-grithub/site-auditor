@@ -134,6 +134,8 @@ async function startServer() {
       NODE_ENV: "production",
       PORT: String(port),
       HOSTNAME: "127.0.0.1",
+      // Shown on the Settings page (About this app).
+      APP_VERSION: app.getVersion(),
       DATABASE_URL: config.databaseUrl,
       AUTH_SECRET: config.authSecret,
     },
@@ -277,7 +279,7 @@ function setStartAtLogin(on) {
 
 function buildTray() {
   tray = new Tray(nativeImage.createFromPath(ICON).resize({ width: 16, height: 16 }));
-  tray.setToolTip("Site Auditor");
+  tray.setToolTip(`Site Auditor ${app.getVersion()}`);
   const menu = () =>
     Menu.buildFromTemplate([
       { label: "Open Site Auditor", click: showMain },
