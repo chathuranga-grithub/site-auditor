@@ -18,7 +18,13 @@ export interface ShellUser {
   tools: ToolId[] | null;
 }
 
-export function AppShell({ children, user }: { children: ReactNode; user: ShellUser | null }) {
+/** The app version, at the bottom of the menu (src/app/layout.tsx). */
+export interface ShellAbout {
+  version: string | null;
+  installed: boolean;
+}
+
+export function AppShell({ children, user, about }: { children: ReactNode; user: ShellUser | null; about: ShellAbout }) {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
   // The login page has its own full-screen layout.
@@ -31,6 +37,7 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
           <Brand />
           <Nav user={user} />
           <UserBox user={user} />
+          <AboutLine about={about} />
         </div>
       </aside>
 
@@ -56,6 +63,7 @@ export function AppShell({ children, user }: { children: ReactNode; user: ShellU
             </div>
             <Nav user={user} onNavigate={() => setOpen(false)} />
             <UserBox user={user} />
+            <AboutLine about={about} />
           </aside>
         </div>
       )}
@@ -219,5 +227,22 @@ function Nav({ user, onNavigate }: { user: ShellUser | null; onNavigate?: () => 
         </div>
       ))}
     </nav>
+  );
+}
+
+/** The app version, at the foot of the menu: "Site Auditor  v1.0.4". */
+function AboutLine({ about }: { about: ShellAbout }) {
+  if (!about.version) return null;
+  return (
+    <div
+      className="flex items-center justify-between px-4 pb-3 text-[11px] text-subtle"
+      title={`Site Auditor ${about.version}${about.installed ? "" : " (development)"}`}
+    >
+      <span>Site Auditor</span>
+      <span className="inline-flex items-center gap-1.5 font-mono">
+        v{about.version}
+        {!about.installed && <span className="rounded border border-line px-1 py-px text-[9px] tracking-wider uppercase">Dev</span>}
+      </span>
+    </div>
   );
 }

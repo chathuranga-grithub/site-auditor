@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
 import { cookies } from "next/headers";
-import { AppWindow, Info, KeyRound, UserRound, Users } from "lucide-react";
+import { AppWindow, Info, KeyRound, Monitor, UserRound, Users } from "lucide-react";
 import { SESSION_COOKIE, readSessionToken } from "@/lib/auth/session";
 import { Panel } from "@/components/ui/primitives";
 import { ProxyApiField } from "@/components/ui/proxy-api-field";
 import { ChromeProfileField } from "@/components/ui/chrome-profile-field";
-import { readFile } from "node:fs/promises";
-import path from "node:path";
+import { ComputerNameField } from "@/components/ui/computer-name-field";
+import { appVersion } from "@/lib/app-version";
 import { thisComputer } from "@/lib/this-computer";
 
 export const metadata: Metadata = { title: "Settings" };
@@ -14,10 +14,7 @@ export const metadata: Metadata = { title: "Settings" };
 // Admins only (src/proxy.ts sends everyone else back to their tool).
 export default async function SettingsPage() {
   const session = await readSessionToken((await cookies()).get(SESSION_COOKIE)?.value);
-  // The desktop app passes its version to the server it starts (desktop/main.js); with npm run dev,
-  // the version the code is at (desktop/package.json, which the installer is built with).
-  const installed = process.env.APP_VERSION ?? null;
-  const version = installed ?? (await codeVersion());
+  const { version, installed } = await appVersion();
   const computer = await thisComputer().catch(() => null);
   return (
     <div className="mx-auto w-full max-w-4xl space-y-5 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
@@ -32,7 +29,7 @@ export default async function SettingsPage() {
           {[
             ["Version", version ? (installed ? version : `${version} (development)`) : "—"],
             ["Running as", installed ? "Desktop app (Windows)" : process.env.VERCEL ? "Website (Vercel)" : "Development (npm run dev)"],
-            ["This computer", computer?.name ?? "—"],
+            ["This computer", computer ? (computer.named ? `${computer.name} (${computer.hostname})` : computer.name) : "—"],
           ].map(([k, v]) => (
             <div key={k} className="rounded-xl border border-line bg-surface px-3 py-2">
               <dt className="font-mono text-[10px] tracking-wider text-subtle uppercase">{k}</dt>
@@ -40,6 +37,14 @@ export default async function SettingsPage() {
             </div>
           ))}
         </dl>
+      </Panel>
+
+      <Panel title={<Title icon={<Monitor className="size-3.5" />} text="This computer" />} bodyClassName="space-y-3 p-4 sm:p-5">
+        <p className="text-sm text-muted">
+          A name for <b className="text-ink">this computer</b>, shown on the campaign pages, the dashboard and the This PC badges instead of
+          the Windows name (e.g. <span className="font-mono">LAPTOP-5J9TO10G</span>), so everyone can tell the computers apart. Each computer saves its own.
+        </p>
+        <ComputerNameField />
       </Panel>
 
       <Panel title={<Title icon={<KeyRound className="size-3.5" />} text="Proxy" />} bodyClassName="space-y-3 p-4 sm:p-5">
@@ -80,11 +85,3 @@ function Title({ icon, text }: { icon: React.ReactNode; text: string }) {
   );
 }
 
-/** The desktop app version the code is at (desktop/package.json); null when it can't be read. */
-async function codeVersion(): Promise<string | null> {
-  try {
-    return (JSON.parse(await readFile(path.join(process.cwd(), "desktop", "package.json"), "utf8")) as { version?: string }).version ?? null;
-  } catch {
-    return null;
-  }
-}

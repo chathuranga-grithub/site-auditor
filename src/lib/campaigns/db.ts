@@ -270,6 +270,17 @@ export async function moveCampaign(id: number, computer: Computer): Promise<Camp
   return rows[0] ? toCampaign(rows[0]) : null;
 }
 
+/**
+ * A computer got a new name (Settings): its campaigns, and their days' "last visit" made on it
+ * (under its old name), show the new one. Two writes, only when the name changes.
+ */
+export async function renameComputer(computerId: string, oldName: string, newName: string): Promise<void> {
+  if (oldName === newName) return;
+  const q = await db();
+  await q(`UPDATE ctr_days SET last_computer = $3 WHERE last_computer = $2 AND campaign_id IN (SELECT id FROM ctr_campaigns WHERE computer_id = $1)`, [computerId, oldName, newName]);
+  await q(`UPDATE ctr_campaigns SET computer_name = $2 WHERE computer_id = $1`, [computerId, newName]);
+}
+
 export async function deleteCampaign(id: number): Promise<void> {
   const q = await db();
   await q(`DELETE FROM ctr_campaigns WHERE id = $1`, [id]);
