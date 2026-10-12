@@ -24,11 +24,14 @@ const NAME = "computer_name";
 /** A name given in Settings: at most this long. */
 export const MAX_COMPUTER_NAME = 40;
 
-let me: Promise<Computer> | null = null;
+// On globalThis, not in this module: the server loads this module more than once (the routes, and the
+// scheduler started from instrumentation, each get their own copy), and a name saved in Settings must
+// reach all of them at once. Kept per module, the scheduler went on checking in with the old name.
+const g = globalThis as typeof globalThis & { __thisComputer?: Promise<Computer> | null };
 
 export async function thisComputer(): Promise<Computer | null> {
   if (process.env.VERCEL) return null;
-  me ??= (async () => {
+  g.__thisComputer ??= (async () => {
     let id = (await readLocalSetting(ID))?.value;
     if (!id) {
       id = randomUUID();
@@ -38,10 +41,10 @@ export async function thisComputer(): Promise<Computer | null> {
     const hostname = os.hostname();
     return { id, name: given || hostname, hostname, named: !!given };
   })().catch((err) => {
-    me = null;
+    g.__thisComputer = null;
     throw err;
   });
-  return me;
+  return g.__thisComputer;
 }
 
 /** Gives this computer a name (empty: back to the Windows computer name). Returns it as it is now. */
@@ -49,7 +52,7 @@ export async function nameThisComputer(name: string, by: string | null): Promise
   const clean = name.replace(/\s+/g, " ").trim().slice(0, MAX_COMPUTER_NAME);
   if (clean) await writeLocalSetting(NAME, clean, by);
   else await deleteLocalSetting(NAME);
-  me = null;
+  g.__thisComputer = null;
   return thisComputer();
 }
 

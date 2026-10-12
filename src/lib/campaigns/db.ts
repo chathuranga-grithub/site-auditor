@@ -391,12 +391,28 @@ export async function listChanges(campaignId: number): Promise<CampaignChange[]>
 /**
  * This computer is on (every minute): its name, Windows name and app version, and the time. `live`:
  * what its campaigns are doing now (Realtime updates on), or null (off: nothing kept).
+ * Its name, as set on it, is the one shown everywhere: its campaigns, and their days' "last visit" made
+ * on it (under the name it had before, its Windows name, or the name its campaign had), take it too
+ * when they differ. One statement: when nothing differs, nothing else is written.
  */
 export async function reportComputer(computer: Computer, appVersion: string | null, live: LiveSnapshot | null = null): Promise<void> {
   const q = await db();
+  // Every part sees the database as it was: `old` is its row before, `c0` its campaigns before.
   await q(
-    `INSERT INTO ctr_computers (id, name, hostname, app_version, last_seen, live) VALUES ($1, $2, $3, $4, now(), $5::jsonb)
-     ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, hostname = EXCLUDED.hostname, app_version = EXCLUDED.app_version, last_seen = now(), live = EXCLUDED.live`,
+    `WITH old AS (SELECT name FROM ctr_computers WHERE id = $1),
+     k AS (
+       INSERT INTO ctr_computers (id, name, hostname, app_version, last_seen, live) VALUES ($1, $2, $3, $4, now(), $5::jsonb)
+       ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, hostname = EXCLUDED.hostname, app_version = EXCLUDED.app_version, last_seen = now(), live = EXCLUDED.live
+       RETURNING id
+     ),
+     days AS (
+       UPDATE ctr_days d SET last_computer = $2
+       FROM ctr_campaigns c0
+       WHERE d.campaign_id = c0.id AND c0.computer_id = $1 AND d.last_computer IS DISTINCT FROM $2
+         AND (d.last_computer = c0.computer_name OR d.last_computer = $3 OR d.last_computer = (SELECT name FROM old))
+       RETURNING 1
+     )
+     UPDATE ctr_campaigns SET computer_name = $2 WHERE computer_id = $1 AND computer_name IS DISTINCT FROM $2`,
     [computer.id, computer.name, computer.hostname, appVersion, live ? JSON.stringify(live) : null],
   );
 }
