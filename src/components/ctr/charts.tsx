@@ -212,9 +212,8 @@ export function ColumnChart({
   height?: number;
   format?: (n: number) => string;
 }) {
-  const id = useId().replace(/:/g, "");
   const reduced = useReducedMotion();
-  // The day under the pointer: its bars light up (brighter, glowing), the other days fade back.
+  // The day under the pointer stays solid; the other days dim.
   const [hover, setHover] = useState<number | null>(null);
   const data = days.map((d, i) => ({ day: d, ...Object.fromEntries(stacks.map((s, k) => [`s${k}`, s.values[i] ?? 0])), planned: reference?.values[i] ?? null }));
   return (
@@ -223,28 +222,15 @@ export function ColumnChart({
         <ComposedChart
           data={data}
           margin={{ top: 8, right: 8, bottom: 0, left: 0 }}
-          barCategoryGap="24%"
+          barCategoryGap="32%"
           onMouseMove={(s) => setHover(s?.activeTooltipIndex != null ? Number(s.activeTooltipIndex) : null)}
           onMouseLeave={() => setHover(null)}
         >
-          <defs>
-            {stacks.map((s, k) => (
-              <linearGradient key={k} id={`${id}-b${k}`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={s.color} stopOpacity={1} />
-                <stop offset="100%" stopColor={s.color} stopOpacity={0.35} />
-              </linearGradient>
-            ))}
-            {stacks.map((s, k) => (
-              <filter key={k} id={`${id}-glow${k}`} x="-60%" y="-20%" width="220%" height="140%">
-                <feDropShadow dx="0" dy="0" stdDeviation="6" floodColor={s.color} floodOpacity="0.85" />
-              </filter>
-            ))}
-          </defs>
           <CartesianGrid vertical={false} stroke={GRID} />
-          <XAxis dataKey="day" tickFormatter={shortDay} tick={TICK} tickLine={false} axisLine={{ stroke: GRID }} minTickGap={24} />
+          <XAxis dataKey="day" tickFormatter={shortDay} tick={TICK} tickLine={false} axisLine={{ stroke: "#ffffff26" }} minTickGap={24} />
           <YAxis {...axisProps(format)} />
           <Tooltip
-            cursor={{ fill: "#ffffff0a", radius: 8 }}
+            cursor={{ fill: "#ffffff08" }}
             content={({ active, payload, label }) =>
               active && payload?.length ? (
                 <Tip
@@ -263,35 +249,32 @@ export function ColumnChart({
               key={k}
               dataKey={`s${k}`}
               stackId="a"
-              fill={`url(#${id}-b${k})`}
-              maxBarSize={28}
-              radius={k === stacks.length - 1 ? [6, 6, 0, 0] : [0, 0, 0, 0]}
+              fill={s.color}
+              // Crisp: square ends with a hint of rounding on top, and a surface gap between segments.
+              radius={k === stacks.length - 1 ? [2, 2, 0, 0] : [0, 0, 0, 0]}
+              stroke="#0f1118"
+              strokeWidth={k < stacks.length - 1 ? 2 : 0}
+              maxBarSize={40}
               isAnimationActive={!reduced}
-              animationDuration={900}
-              animationBegin={k * 150}
+              animationDuration={600}
               animationEasing="ease-out"
             >
               {data.map((_, i) => (
-                <Cell
-                  key={i}
-                  fillOpacity={hover == null || hover === i ? 1 : 0.35}
-                  filter={hover === i ? `url(#${id}-glow${k})` : undefined}
-                  style={{ transition: "fill-opacity 250ms ease, filter 250ms ease" }}
-                />
+                <Cell key={i} fillOpacity={hover == null || hover === i ? 1 : 0.4} style={{ transition: "fill-opacity 200ms ease" }} />
               ))}
             </Bar>
           ))}
           {reference && (
             <Line
               dataKey="planned"
-              type="monotone"
+              type="linear"
               stroke={REFERENCE}
-              strokeWidth={2}
-              strokeOpacity={0.7}
-              dot={false}
+              strokeWidth={1.5}
+              strokeOpacity={0.8}
+              dot={{ r: 2, fill: REFERENCE, strokeWidth: 0 }}
               activeDot={{ r: 4, fill: REFERENCE, stroke: "#0f1118", strokeWidth: 2 }}
               isAnimationActive={!reduced}
-              animationDuration={1200}
+              animationDuration={600}
             />
           )}
         </ComposedChart>

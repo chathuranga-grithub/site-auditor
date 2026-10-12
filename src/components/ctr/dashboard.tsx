@@ -239,7 +239,7 @@ export function CtrDashboard() {
             subtitle="Visits that counted, on a phone and on a desktop, against the visit plan"
             legend={[
               { label: "Phone", color: SERIES[0], kind: "bar" },
-              { label: "Desktop", color: SERIES[1], kind: "bar" },
+              { label: "Desktop", color: SERIES[2], kind: "bar" },
               { label: "Planned", color: "#9aa0b4", kind: "reference" },
             ]}
             table={{
@@ -274,7 +274,7 @@ export function CtrDashboard() {
               height={280}
               stacks={[
                 { label: "phone", color: SERIES[0], values: o.perDay.map((d) => d.mobile) },
-                { label: "desktop", color: SERIES[1], values: o.perDay.map((d) => d.visits - d.mobile) },
+                { label: "desktop", color: SERIES[2], values: o.perDay.map((d) => d.visits - d.mobile) },
               ]}
               reference={{ label: "planned", values: o.perDay.map((d) => d.planned) }}
             />
@@ -303,7 +303,7 @@ export function CtrDashboard() {
                 rows: days.map((d, i) => [d, pct(perDayRates[i].successPct), o.perDay[i].visits, o.perDay[i].failed]),
               }}
             >
-              <LineChart days={days} min={0} max={100} format={(n) => `${n}%`} series={[{ label: "worked", color: SERIES[2], values: perDayRates.map((x) => x.successPct) }]} />
+              <LineChart days={days} min={0} max={100} format={(n) => `${n}%`} series={[{ label: "worked", color: SERIES[0], values: perDayRates.map((x) => x.successPct) }]} />
             </ChartCard>
 
             <ChartCard

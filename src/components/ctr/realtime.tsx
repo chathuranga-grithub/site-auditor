@@ -143,24 +143,15 @@ export function RealtimePanel({ run }: { run: VisitRun }) {
               <BarChart
                 data={perMinute}
                 margin={{ top: 6, right: 4, bottom: 0, left: 0 }}
-                barCategoryGap="18%"
+                barCategoryGap="22%"
                 onMouseMove={(s) => setHover(s?.activeTooltipIndex != null ? Number(s.activeTooltipIndex) : null)}
                 onMouseLeave={() => setHover(null)}
               >
-                <defs>
-                  <linearGradient id="rt-bar" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={SERIES[0]} stopOpacity={1} />
-                    <stop offset="100%" stopColor={SERIES[0]} stopOpacity={0.35} />
-                  </linearGradient>
-                  <filter id="rt-glow" x="-80%" y="-20%" width="260%" height="140%">
-                    <feDropShadow dx="0" dy="0" stdDeviation="5" floodColor={SERIES[0]} floodOpacity="0.9" />
-                  </filter>
-                </defs>
                 <CartesianGrid vertical={false} stroke={GRID} />
-                <XAxis dataKey="ago" tick={TICK} tickLine={false} axisLine={{ stroke: GRID }} interval={0} tickFormatter={(v: number) => (v === 0 ? "now" : v % 5 === 0 ? `-${v} min` : "")} />
+                <XAxis dataKey="ago" tick={TICK} tickLine={false} axisLine={{ stroke: "#ffffff26" }} interval={0} tickFormatter={(v: number) => (v === 0 ? "now" : v % 5 === 0 ? `-${v} min` : "")} />
                 <YAxis tick={TICK} tickLine={false} axisLine={false} width={28} allowDecimals={false} />
                 <Tooltip
-                  cursor={{ fill: "#ffffff0a", radius: 6 }}
+                  cursor={{ fill: "#ffffff08" }}
                   content={({ active: on, payload }) => {
                     const r = on && payload?.length ? (payload[0].payload as (typeof perMinute)[number]) : null;
                     if (!r) return null;
@@ -170,7 +161,7 @@ export function RealtimePanel({ run }: { run: VisitRun }) {
                         {[
                           [r.visits, "visits", SERIES[0]],
                           [r.phone, "on a phone", SERIES[0]],
-                          [r.desktop, "on a desktop", SERIES[1]],
+                          [r.desktop, "on a desktop", SERIES[2]],
                           [r.pages, "page views", "#9aa0b4"],
                           [r.failed, "didn't count", "#646a80"],
                         ].map(([v, label, color]) => (
@@ -184,15 +175,9 @@ export function RealtimePanel({ run }: { run: VisitRun }) {
                     );
                   }}
                 />
-                <Bar dataKey="visits" fill="url(#rt-bar)" radius={[5, 5, 0, 0]} maxBarSize={22} minPointSize={2} isAnimationActive={!reduced} animationDuration={700} animationEasing="ease-out">
+                <Bar dataKey="visits" fill={SERIES[0]} radius={[2, 2, 0, 0]} maxBarSize={24} minPointSize={2} isAnimationActive={!reduced} animationDuration={500} animationEasing="ease-out">
                   {perMinute.map((r, i) => (
-                    <Cell
-                      key={r.ago}
-                      fill={r.visits ? "url(#rt-bar)" : "#ffffff14"}
-                      fillOpacity={hover == null || hover === i ? 1 : 0.4}
-                      filter={hover === i && r.visits ? "url(#rt-glow)" : undefined}
-                      style={{ transition: "fill-opacity 250ms ease, filter 250ms ease" }}
-                    />
+                    <Cell key={r.ago} fill={r.visits ? SERIES[0] : "#ffffff14"} fillOpacity={hover == null || hover === i ? 1 : 0.4} style={{ transition: "fill-opacity 200ms ease" }} />
                   ))}
                 </Bar>
               </BarChart>
