@@ -77,38 +77,44 @@ export function CountUp({ value, format = (n: number) => Math.round(n).toLocaleS
   const reduced = useReducedMotion();
   // Counts once it's on screen (a number further down starts when it's scrolled to).
   const [ref, seen] = useInView<HTMLSpanElement>(0.1);
-  const [shown, setShown] = useState(0);
   // It counts up once; later changes (e.g. a live number updating) show the new value straight away.
   const counted = useRef(false);
   // Where the count is now: a value that changes mid-count (numbers arriving in a burst) carries on
   // from here towards the new one, never back to 0 (which made it blink).
   const at = useRef(0);
+  const fmt = useRef(format);
+  useEffect(() => {
+    fmt.current = format;
+  });
+  // Each frame writes the number's text directly (no React re-render per frame: with dozens of
+  // numbers counting at once, re-rendering 60 times a second made the animations lag).
   useEffect(() => {
     if (reduced || !seen) return;
-    let raf = 0;
+    const el = ref.current;
+    if (!el) return;
     if (counted.current) {
-      raf = requestAnimationFrame(() => {
-        at.current = value;
-        setShown(value);
-      });
-      return () => cancelAnimationFrame(raf);
+      at.current = value;
+      el.textContent = fmt.current(value);
+      return;
     }
+    let raf = 0;
     const from = at.current;
     const start = performance.now();
     const tick = (t: number) => {
       // A frame can be timed just before the start: never before `from`.
       const k = Math.min(1, Math.max(0, (t - start) / duration));
       at.current = from + (value - from) * (1 - (1 - k) ** 3);
-      setShown(at.current);
+      el.textContent = fmt.current(at.current);
       if (k < 1) raf = requestAnimationFrame(tick);
       else counted.current = true;
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [value, reduced, seen, duration]);
+  }, [value, reduced, seen, duration, ref]);
   return (
     <span ref={ref} className="tabular-nums">
-      {format(reduced ? value : shown)}
+      {/* What React renders stays the same (the start), so it never overwrites the count. */}
+      {format(reduced ? value : 0)}
     </span>
   );
 }
@@ -271,7 +277,6 @@ export function ColumnChart({
   height?: number;
   format?: (n: number) => string;
 }) {
-  const reduced = useReducedMotion();
   // The day under the pointer stays solid; the other days dim.
   const [hover, setHover] = useState<number | null>(null);
   const data = days.map((d, i) => ({ day: d, ...Object.fromEntries(stacks.map((s, k) => [`s${k}`, s.values[i] ?? 0])), planned: reference?.values[i] ?? null }));
@@ -334,8 +339,7 @@ export function ColumnChart({
               strokeOpacity={0.8}
               dot={{ r: 2, fill: REFERENCE, strokeWidth: 0 }}
               activeDot={{ r: 4, fill: REFERENCE, stroke: "#0f1118", strokeWidth: 2 }}
-              isAnimationActive={!reduced}
-              animationDuration={600}
+              isAnimationActive={false}
             />
           )}
         </ComposedChart>
@@ -377,14 +381,13 @@ export function LineChart({
   max?: number;
 }) {
   const id = useId().replace(/:/g, "");
-  const reduced = useReducedMotion();
   const data = days.map((d, i) => ({ day: d, ...Object.fromEntries(series.map((s, k) => [`s${k}`, s.values[i]])) }));
   const lo = min ?? (invert ? 1 : 0);
   const show = (v: number) => (invert ? `#${format(v)}` : format(v));
   // One wash only, under a single series: several overlapping fills would muddy each other.
   const wash = series.length === 1;
   return (
-    <div style={{ height }}>
+    <div className="chart-reveal" style={{ height }}>
       <ResponsiveContainer width="100%" height="100%">
         <AreaChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
           <defs>
@@ -423,10 +426,7 @@ export function LineChart({
               connectNulls={false}
               dot={false}
               activeDot={{ r: 5, fill: s.color, stroke: "#0f1118", strokeWidth: 2 }}
-              isAnimationActive={!reduced}
-              animationDuration={1100}
-              animationBegin={k * 150}
-              animationEasing="ease-out"
+              isAnimationActive={false}
             />
           ))}
         </AreaChart>
@@ -443,7 +443,7 @@ export function Sparkline({ values, width = 96, height = 28, color = SERIES[0] }
   if (values.filter((v) => v != null).length < 2) return <span className="inline-block" style={{ width, height }} aria-hidden />;
   const data = values.map((v, i) => ({ i, v }));
   return (
-    <div ref={ref} style={{ width, height }} aria-hidden>
+    <div ref={ref} className="chart-reveal" style={{ width, height }} aria-hidden>
       <AreaChart key={seen || reduced ? "in" : "out"} style={{ opacity: seen || reduced ? 1 : 0 }} width={width} height={height} data={data} margin={{ top: 3, right: 3, bottom: 1, left: 1 }}>
         <defs>
           <linearGradient id={`${id}-s`} x1="0" y1="0" x2="0" y2="1">
@@ -452,7 +452,7 @@ export function Sparkline({ values, width = 96, height = 28, color = SERIES[0] }
           </linearGradient>
         </defs>
         <YAxis hide domain={["dataMin", "dataMax"]} />
-        <Area dataKey="v" type="monotone" stroke={color} strokeWidth={1.5} fill={`url(#${id}-s)`} dot={false} connectNulls isAnimationActive={!reduced} animationDuration={900} />
+        <Area dataKey="v" type="monotone" stroke={color} strokeWidth={1.5} fill={`url(#${id}-s)`} dot={false} connectNulls isAnimationActive={false} />
       </AreaChart>
     </div>
   );
