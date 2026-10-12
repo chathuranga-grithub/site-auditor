@@ -7,7 +7,7 @@
 // started. Nothing in it animates: it changes all the time, so its numbers and bars are shown as
 // they are (the dashboard's charts animate; this one stays still).
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Globe, Loader2, MousePointerClick, Search, ShieldCheck, Timer, type LucideIcon } from "lucide-react";
 import type { VisitRun } from "@/components/visit/visit-run";
@@ -44,13 +44,29 @@ function tally(names: string[]) {
 }
 
 export function RealtimePanel({ run }: { run: VisitRun }) {
-  // The clock the minutes are counted from: moves on every few seconds, so the bars slide left.
+  // The clock the minutes are counted from: checked every few seconds.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 5000);
     return () => clearInterval(t);
   }, []);
   const [hover, setHover] = useState<number | null>(null);
+
+  // Like Google Analytics' realtime chart: when a new minute starts, the bars slide one step to the
+  // left (from where they were) and the new minute comes in on the right. The only movement here,
+  // once a minute; the axis stays put.
+  const minute = Math.floor(now / 60_000);
+  const chartBox = useRef<HTMLDivElement>(null);
+  const lastMinute = useRef(minute);
+  useEffect(() => {
+    if (minute === lastMinute.current) return;
+    lastMinute.current = minute;
+    const box = chartBox.current;
+    const bars = box?.querySelector<SVGGElement>(".recharts-bar-rectangles");
+    if (!box || !bars) return;
+    const step = (box.clientWidth - 32) / MINUTES; // the plot's width (less the y-axis) per minute
+    bars.animate([{ transform: `translateX(${step}px)` }, { transform: "translateX(0)" }], { duration: 700, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)" });
+  }, [minute]);
 
   const recent = useMemo(() => run.visits.filter((v) => now - v.at < MINUTES * 60_000 && !v.report.cancelled), [run.visits, now]);
   const counted = recent.filter((v) => !v.report.stopReason);
@@ -138,7 +154,7 @@ export function RealtimePanel({ run }: { run: VisitRun }) {
 
         <div>
           <div className="mb-1 font-mono text-[10px] tracking-[0.16em] text-muted uppercase">Visits per minute</div>
-          <div style={{ height: 170 }}>
+          <div ref={chartBox} className="overflow-hidden" style={{ height: 170 }}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
                 data={perMinute}
