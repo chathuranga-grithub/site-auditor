@@ -440,7 +440,7 @@ export async function readLiveSnapshot(
 ): Promise<{ name: string; lastSeen: string; sharing: boolean; at: string | null; campaign: LiveCampaign | null } | null> {
   const q = await db();
   const rows = await q(
-    `SELECT name, last_seen, live IS NOT NULL AS sharing, live ->> 'at' AS at, live -> 'campaigns' -> $2::text AS campaign FROM ctr_computers WHERE id = $1`,
+    `SELECT coalesce(label, name) AS name, last_seen, live IS NOT NULL AS sharing, live ->> 'at' AS at, live -> 'campaigns' -> $2::text AS campaign FROM ctr_computers WHERE id = $1`,
     [computerId, String(campaignId)],
   );
   const r = rows[0];
