@@ -24,6 +24,7 @@ import { deviceLabel, pickDevice } from "../device-profiles";
 import { runsCampaignsHere } from "../runner-lock";
 import { thisComputer } from "../this-computer";
 import { recordVisits, visitsDoneOn, type VisitDayDelta } from "./db";
+import { failReasonOf } from "./fail-reasons";
 import { todayInVietnam } from "./site";
 import { daysBetween } from "./metrics";
 import { mobileVisits, plannedVisits, type Campaign } from "./types";
@@ -55,7 +56,7 @@ interface LiveVisit {
    * What happened since the last visit that counted (failed tries, CAPTCHAs): kept here and saved with
    * the next one that counts (recordVisits), so these details cost no extra writes.
    */
-  pending: Pick<VisitDayDelta, "failed" | "captchasMet" | "captchasSolved">;
+  pending: Pick<VisitDayDelta, "failed" | "reasons" | "captchasMet" | "captchasSolved">;
   /** Visits to run at the same time now: the campaign's concurrency, changed while it runs by an edit. */
   want: number;
   /** While its lanes run: starts the lanes `want` calls for, and logs a line in its console. */
@@ -63,7 +64,15 @@ interface LiveVisit {
   say?: (e: VisitEvent) => void;
 }
 
-const noPending = (): LiveVisit["pending"] => ({ failed: 0, captchasMet: 0, captchasSolved: 0 });
+const noPending = (): LiveVisit["pending"] => ({ failed: 0, reasons: {}, captchasMet: 0, captchasSolved: 0 });
+
+/** A try that didn't count, and why (what the visit said when it stopped), for the day's numbers. */
+function tryFailed(v: LiveVisit, message: string) {
+  const reason = failReasonOf(message);
+  v.pending.failed++;
+  v.pending.reasons ??= {}; // a visit started before a code reload in `next dev`
+  v.pending.reasons[reason] = (v.pending.reasons[reason] ?? 0) + 1;
+}
 
 // On globalThis, so a code reload in `next dev` doesn't lose visits that are running.
 const g = globalThis as typeof globalThis & { __campaignVisits?: Map<number, LiveVisit> };
@@ -355,7 +364,7 @@ async function run(c: VisitCampaign, v: LiveVisit) {
               send,
             );
             send({ type: "stage", stage: "done" });
-          } else if (!signal.aborted) v.pending.failed++;
+          } else if (!signal.aborted) tryFailed(v, report.stopReason ?? "");
           send({ type: "done", report });
           if (signal.aborted) send({ type: "step", message: "Stopped." });
           else if (report.stopReason) {
@@ -368,7 +377,7 @@ async function run(c: VisitCampaign, v: LiveVisit) {
           if (signal.aborted) throw err;
           // The browser is already closed; its IP counts as used, so the next try gets a new one.
           if (err instanceof GoogleBlockedError) {
-            v.pending.failed++;
+            tryFailed(v, err.message);
             send({ type: "step", message: `${err.message}: closed this browser; trying again with a new proxy IP and a new browser (try ${++tries})…` });
             continue;
           }
@@ -386,7 +395,7 @@ async function run(c: VisitCampaign, v: LiveVisit) {
           }
           // Anything else (Chrome didn't start, the proxy failed…): the run doesn't give up, it waits a bit
           // and starts again in a new browser with a new IP. Shown as a step: the lane carries on.
-          v.pending.failed++;
+          tryFailed(v, err instanceof Error ? err.message : String(err));
           send({ type: "step", message: `This visit failed (${err instanceof Error ? err.message : String(err)}); trying again in ${RETRY_AFTER_SEC}s in a new browser (a new proxy IP if the provider gives one, else its current one; try ${++tries})…` });
           retryAfter = true;
         } finally {

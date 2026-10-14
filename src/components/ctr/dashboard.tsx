@@ -2,20 +2,21 @@
 
 // Auto CTR dashboard: the overview, in the spirit of Google Analytics. One row of filters (period, this
 // week by default; site; computer, all by default) scopes everything below: the headline tiles (each
-// against the period before), each campaign's results (target, finished, failed, CAPTCHAs, devices, what
-// looks wrong), the visits per
+// against the period before), the visits per
 // day against the plan, Google position by site, how the visits went (worked, CAPTCHAs, time on
 // site), visits by computer, visitor locations (on a map of Vietnam), a table per site (campaigns of the same site together), every active
-// campaign with its own charts, and the results of the finished and stopped ones. Numbers come from
+// campaign with its own charts, each campaign's results for the period (target, finished, failed and why,
+// CAPTCHAs, devices, what looks wrong) and why tries failed, and the results of the finished and stopped ones. Numbers come from
 // the campaigns' daily rows (GET /api/ctr/campaigns): no extra database reads.
 
 import Link from "next/link";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Activity, ArrowDownRight, ArrowUpRight, Check, CircleCheck, Files, Monitor, ShieldCheck, Smartphone, Timer, TriangleAlert, Trophy, type LucideIcon } from "lucide-react";
+import { Activity, ArrowDownRight, ArrowUpRight, Check, CircleCheck, Eye, FileDown, Files, Loader2, Monitor, ShieldCheck, Smartphone, Timer, TriangleAlert, Trophy, type LucideIcon } from "lucide-react";
+import { reportUrl, type ReportFilters } from "@/lib/campaigns/report-filters";
 import type { CampaignDay, CtrSetup } from "@/lib/campaigns/types";
 import { todayInVietnam } from "@/lib/campaigns/site";
 import { daysBetween } from "@/lib/campaigns/metrics";
-import { buildOverview, periodDays, plannedOn, rates, siteOf, type Overview, type OverviewItem, type Period, type Totals } from "@/lib/campaigns/overview";
+import { buildOverview, campaignIssues, hasActivity, periodDays, plannedOn, rates, reasonList, siteOf, type Overview, type OverviewItem, type Period, type Totals } from "@/lib/campaigns/overview";
 import { Notice } from "@/components/ui/primitives";
 import { Loader } from "@/components/ui/loader";
 import { BarList, ChartCard, ColumnChart, CountUp, LineChart, DESKTOP, PHONE, SERIES, Sparkline, compact, shortDay } from "./charts";
@@ -110,53 +111,68 @@ export function CtrDashboard() {
       <SetupNotice setup={data?.setup ?? null} />
       {error && <Notice tone="error">{error}</Notice>}
 
-      {/* Filters: one row, above everything they scope. */}
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="flex flex-wrap rounded-lg border border-line bg-surface p-0.5" role="group" aria-label="Period">
-          {PERIODS.map((x) => (
-            <button
-              key={x.value}
-              type="button"
-              aria-pressed={period === x.value}
-              onClick={() => setPeriod(x.value)}
-              className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs transition ${period === x.value ? "bg-surface-2 font-semibold text-ink" : "text-muted hover:text-ink"}`}
-            >
-              {period === x.value && <Check className="size-3" strokeWidth={3} aria-hidden />}
-              {x.label}
-            </button>
-          ))}
+      {/* Filters, above everything they scope: the period (its dates beside it), then the computer and
+          the site, and the report of what they show. On a phone each takes the full width; the period
+          scrolls sideways rather than wrapping. */}
+      <div className="glass space-y-3 rounded-2xl p-3">
+        <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+          <div className="-mx-1 min-w-0 overflow-x-auto px-1 pb-0.5 lg:pb-0">
+            <div className="inline-flex rounded-lg border border-line bg-surface p-0.5 whitespace-nowrap" role="group" aria-label="Period">
+              {PERIODS.map((x) => (
+                <button
+                  key={x.value}
+                  type="button"
+                  aria-pressed={period === x.value}
+                  onClick={() => setPeriod(x.value)}
+                  className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs transition ${period === x.value ? "bg-accent font-semibold text-white shadow-[0_0_12px_#8b5cf666]" : "text-muted hover:bg-surface-2 hover:text-ink"}`}
+                >
+                  {period === x.value && <Check className="size-3" strokeWidth={3} aria-hidden />}
+                  {x.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <span className="shrink-0 font-mono text-[11px] text-subtle">
+            {days.length > 1 ? `${shortDay(days[0])} – ${shortDay(days[days.length - 1])}` : shortDay(days[0])} · Vietnam dates
+          </span>
         </div>
-        <label className="flex items-center gap-2 text-xs text-muted">
-          <Monitor className="size-3.5" aria-hidden />
-          Computer
-          <select
-            value={pc}
-            onChange={(e) => setPc(e.target.value)}
-            className={`rounded-lg border bg-surface-solid px-2.5 py-1.5 text-xs text-ink [&_option]:bg-surface-solid [&_option]:text-ink ${pc === ALL_PCS ? "border-line" : "border-accent"}`}
-          >
-            <option value={ALL_PCS}>All computers ({computers.length})</option>
-            {computers.map((x) => (
-              <option key={x.id} value={x.id}>
-                {x.name}
-                {x.id === me?.id ? " (this PC)" : ""} · {x.count} campaign{x.count === 1 ? "" : "s"}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex items-center gap-2 text-xs text-muted">
-          Site
-          <select value={site} onChange={(e) => setSite(e.target.value)} className="rounded-lg border border-line bg-surface-solid px-2.5 py-1.5 text-xs text-ink [&_option]:bg-surface-solid [&_option]:text-ink">
-            <option value="all">All sites ({sites.length})</option>
-            {sites.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-        </label>
-        <span className="ml-auto font-mono text-[11px] text-subtle">
-          {days.length > 1 ? `${shortDay(days[0])} – ${shortDay(days[days.length - 1])}` : shortDay(days[0])} · Vietnam dates
-        </span>
+        <div className="flex flex-col gap-2 border-t border-line pt-3 xl:flex-row xl:items-center">
+          <div className="grid min-w-0 flex-1 gap-2 sm:grid-cols-2 xl:flex xl:flex-none">
+            <label className="flex min-w-0 items-center gap-2 text-xs text-muted">
+              <Monitor className="size-3.5 shrink-0" aria-hidden />
+              <span className="shrink-0">Computer</span>
+              <select
+                value={pc}
+                onChange={(e) => setPc(e.target.value)}
+                className={`w-full min-w-0 rounded-lg border bg-surface-solid px-2.5 py-1.5 text-xs text-ink xl:w-auto xl:max-w-64 [&_option]:bg-surface-solid [&_option]:text-ink ${pc === ALL_PCS ? "border-line" : "border-accent"}`}
+              >
+                <option value={ALL_PCS}>All computers ({computers.length})</option>
+                {computers.map((x) => (
+                  <option key={x.id} value={x.id}>
+                    {x.name}
+                    {x.id === me?.id ? " (this PC)" : ""} · {x.count} campaign{x.count === 1 ? "" : "s"}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex min-w-0 items-center gap-2 text-xs text-muted">
+              <span className="shrink-0">Site</span>
+              <select
+                value={site}
+                onChange={(e) => setSite(e.target.value)}
+                className={`w-full min-w-0 rounded-lg border bg-surface-solid px-2.5 py-1.5 text-xs text-ink xl:w-auto xl:max-w-64 [&_option]:bg-surface-solid [&_option]:text-ink ${site === "all" ? "border-line" : "border-accent"}`}
+              >
+                <option value="all">All sites ({sites.length})</option>
+                {sites.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <ReportButtons filters={{ period, site, pc }} disabled={!data || !all.length} />
+        </div>
       </div>
 
       {!data ? (
@@ -258,9 +274,6 @@ export function CtrDashboard() {
               <Kpi icon={Monitor} label="Computers" value={<CountUp value={o.computers.length} />} detail="that made visits in this range" />
             </div>
           </div>
-
-          {/* Each campaign's numbers for the period: target, finished, failed, CAPTCHAs, devices, and what looks wrong. */}
-          <CampaignResults campaigns={o.campaigns} days={days} today={today} me={me} />
 
           {/* Visits per day against the plan. */}
           <ChartCard
@@ -477,6 +490,12 @@ export function CtrDashboard() {
             )}
           </section>
 
+          {/* Each campaign's numbers for the period: target, finished, failed, CAPTCHAs, devices, and what looks wrong. */}
+          <CampaignResults campaigns={o.campaigns} days={days} today={today} me={me} />
+
+          {/* Why tries failed: each kind, for every campaign in the filters. */}
+          <FailReasons total={o.total} />
+
           {/* Finished and stopped: what each one achieved over its whole run. */}
           <section className="glass min-w-0 overflow-hidden rounded-xl">
             <div className="border-b border-line px-4 py-3">
@@ -621,30 +640,86 @@ function Kpi({
   );
 }
 
+/**
+ * The report of what the filters show: "PDF report" downloads it (made by the app, src/app/api/ctr/report);
+ * where the app can't make one (the website), the report page opens to save it from the browser.
+ * "Preview" opens the report page.
+ */
+function ReportButtons({ filters, disabled }: { filters: ReportFilters; disabled: boolean }) {
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+  const download = async () => {
+    setBusy(true);
+    setFailed(null);
+    try {
+      const res = await fetch(reportUrl(filters, true));
+      if (res.status === 501) return void window.open(reportUrl(filters), "_blank");
+      if (!res.ok) throw new Error(((await res.json().catch(() => null)) as { error?: string } | null)?.error ?? `The PDF couldn't be made (${res.status}).`);
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(await res.blob());
+      a.download = res.headers.get("content-disposition")?.match(/filename="([^"]+)"/)?.[1] ?? "auto-ctr-report.pdf";
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+    } catch (err) {
+      setFailed(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="flex flex-col gap-1 xl:ml-auto xl:items-end">
+      <div className="grid grid-cols-2 gap-2 sm:flex sm:justify-end">
+        <a
+          href={reportUrl(filters)}
+          target="_blank"
+          rel="noreferrer"
+          className={`inline-flex items-center justify-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-xs text-muted transition hover:bg-surface-2 hover:text-ink ${disabled ? "pointer-events-none opacity-50" : ""}`}
+        >
+          <Eye className="size-3.5" aria-hidden /> Preview
+        </a>
+        <button
+          type="button"
+          onClick={download}
+          disabled={disabled || busy}
+          title="Download the report of what the filters show, as a PDF"
+          className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-accent bg-accent px-3 py-1.5 text-xs font-medium whitespace-nowrap text-white shadow-[0_0_16px_#8b5cf666] transition hover:brightness-110 disabled:opacity-60"
+        >
+          {busy ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : <FileDown className="size-3.5" aria-hidden />}
+          {busy ? "Making the PDF…" : "PDF report"}
+        </button>
+      </div>
+      {failed && <p className="text-[11px] text-status-critical">{failed}</p>}
+    </div>
+  );
+}
+
+/** Why the period's tries failed, by kind, most first, with what each kind means. */
+function FailReasons({ total }: { total: Totals }) {
+  const reasons = reasonList(total);
+  const share = (n: number) => `${Math.round((n / Math.max(1, total.failed)) * 100)}%`;
+  return (
+    <ChartCard
+      title="Why tries failed"
+      subtitle={`${total.failed.toLocaleString()} tries didn't count in this period, by reason (saved from app 1.0.17)`}
+      empty={!total.failed ? "No failed tries in this period." : false}
+      table={{ head: ["Reason", "Tries", "Of failed", "What it means"], rows: reasons.map((x) => [x.label, x.n, share(x.n), x.detail]) }}
+    >
+      <div className="grid gap-x-8 gap-y-3 md:grid-cols-2">
+        <BarList rows={reasons.map((x) => ({ label: x.label, value: x.n, detail: share(x.n) }))} />
+        <dl className="space-y-2 text-xs">
+          {reasons.map((x) => (
+            <div key={x.key}>
+              <dt className="font-medium text-ink">{x.label}</dt>
+              <dd className="text-subtle">{x.detail}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+    </ChartCard>
+  );
+}
+
 type CampaignRow = Overview["campaigns"][number];
-
-/** Visits a campaign should have finished by now in the period: its target, today's only for the part of the day gone (Vietnam time). */
-function expectedSoFar(c: CampaignRow, days: string[], today: string): number {
-  const now = new Date(Date.now() + 7 * 3600_000);
-  const dayGone = (now.getUTCHours() * 3600 + now.getUTCMinutes() * 60) / 86_400;
-  return days.reduce((sum, d, i) => sum + (d === today ? c.perDay[i].planned * dayGone : d < today ? c.perDay[i].planned : 0), 0);
-}
-
-/** What looks wrong with a campaign's period, in plain words, worst first (none: on track). */
-function issuesOf(c: CampaignRow, expected: number): { text: string; bad: boolean }[] {
-  const t = c.total;
-  const status = c.item.campaign.status;
-  const tries = t.visits + t.failed;
-  const unsolved = t.captchasMet - t.captchasSolved;
-  const out: { text: string; bad: boolean }[] = [];
-  if (status === "paused") out.push({ text: "Paused", bad: false });
-  if (isOpen(status) && status !== "paused" && expected >= 1 && !tries) out.push({ text: "No visits or tries yet", bad: true });
-  if (t.failed >= 5 && t.failed > t.visits) out.push({ text: `Most tries fail (${t.failed} of ${tries})`, bad: true });
-  if (unsolved >= 3) out.push({ text: `${unsolved} CAPTCHAs not solved`, bad: true });
-  else if (t.captchasMet >= 5 && t.captchasMet / tries >= 0.3) out.push({ text: `CAPTCHA on ${Math.round((t.captchasMet / tries) * 100)}% of tries`, bad: true });
-  if (status === "active" && expected >= 5 && tries && t.visits < expected * 0.8) out.push({ text: `Behind: ${Math.round((t.visits / expected) * 100)}% of expected so far`, bad: true });
-  return out;
-}
 
 type SortKey = "campaign" | "target" | "finished" | "failed" | "captchas" | "worked";
 
@@ -655,12 +730,7 @@ type SortKey = "campaign" | "target" | "finished" | "failed" | "captchas" | "wor
  */
 function CampaignResults({ campaigns, days, today, me }: { campaigns: CampaignRow[]; days: string[]; today: string; me: ThisComputer | null }) {
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: "target", desc: true });
-  const rows = campaigns
-    .filter((c) => c.total.planned || c.total.visits || c.total.failed || c.total.captchasMet)
-    .map((c) => {
-      const expected = expectedSoFar(c, days, today);
-      return { c, expected, issues: issuesOf(c, expected), worked: rates(c.total).successPct };
-    });
+  const rows = campaigns.filter(hasActivity).map((c) => ({ c, issues: campaignIssues(c, days, today), worked: rates(c.total).successPct }));
   const value = (x: (typeof rows)[number]): number | string => {
     const t = x.c.total;
     switch (sort.key) {
@@ -770,6 +840,17 @@ function CampaignResults({ campaigns, days, today, me }: { campaigns: CampaignRo
                     <td className="px-3 py-2">
                       <div className={`font-mono text-sm tabular-nums ${t.failed && t.failed >= t.visits ? "font-semibold text-status-critical" : ""}`}>{t.failed.toLocaleString()}</div>
                       <div className="text-[10px] text-subtle">of {tries.toLocaleString()} tries</div>
+                      {t.failed > 0 && (
+                        <ul className="mt-1 space-y-px text-[10px] text-muted">
+                          {reasonList(t)
+                            .slice(0, 3)
+                            .map((x) => (
+                              <li key={x.key} title={x.detail} className="whitespace-nowrap">
+                                {x.label} <span className="font-mono text-ink">{x.n}</span>
+                              </li>
+                            ))}
+                        </ul>
+                      )}
                     </td>
                     <td className="px-3 py-2">
                       <div className="font-mono text-sm tabular-nums">{t.captchasMet.toLocaleString()}</div>
@@ -777,7 +858,7 @@ function CampaignResults({ campaigns, days, today, me }: { campaigns: CampaignRo
                         {t.captchasMet ? (
                           <>
                             {t.captchasSolved} solved · <span className={unsolved ? "font-semibold text-status-critical" : ""}>{unsolved} not</span>
-                            {tries ? ` · on ${Math.round((t.captchasMet / tries) * 100)}% of tries` : ""}
+                            {tries ? ` · ${(t.captchasMet / tries).toFixed(1)} per try` : ""}
                           </>
                         ) : (
                           "none"

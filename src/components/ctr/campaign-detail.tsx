@@ -10,6 +10,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { ArrowLeft, Loader2, Monitor, Pause, Pencil, Play, RefreshCw, Square, Trash2 } from "lucide-react";
+import { failReasonList } from "@/lib/campaigns/fail-reasons";
 import { daysBetween, summarize } from "@/lib/campaigns/metrics";
 import { todayInVietnam } from "@/lib/campaigns/site";
 import { plannedVisits, visitPlanProgress, type Campaign, type CampaignChange, type CampaignDay } from "@/lib/campaigns/types";
@@ -498,6 +499,7 @@ function VisitDaysTable({ campaign: c, days }: { campaign: Campaign; days: Campa
     ["Visits", "done / planned"],
     ["Phone / desktop", "visits done"],
     ["Worked", "visits that counted, of every try"],
+    ["Why tries failed", "from app 1.0.17"],
     ["CAPTCHAs", "solved / met"],
     ["Position", "daily check · in visits: average (best)"],
     ["Time on site", "average per visit"],
@@ -547,6 +549,19 @@ function VisitDaysTable({ campaign: c, days }: { campaign: Campaign; days: Campa
                       <span className={rate >= 50 ? "text-status-good" : "text-status-warning"}>{rate}%</span>
                       <span className="block text-[10px] text-subtle">{d.visitTriesFailed} failed</span>
                     </>
+                  ) : (
+                    dash
+                  )}
+                </td>
+                <td className="px-3 py-2 font-sans text-[11px]">
+                  {d.visitTriesFailed ? (
+                    <ul className="space-y-px">
+                      {failReasonList(d.failReasons, d.visitTriesFailed).map((x) => (
+                        <li key={x.key} title={x.detail} className={`whitespace-nowrap ${x.key === "unknown" ? "text-subtle" : "text-muted"}`}>
+                          {x.label} <span className="font-mono text-ink">{x.n}</span>
+                        </li>
+                      ))}
+                    </ul>
                   ) : (
                     dash
                   )}

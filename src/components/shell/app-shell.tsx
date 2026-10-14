@@ -27,8 +27,8 @@ export interface ShellAbout {
 export function AppShell({ children, user, about }: { children: ReactNode; user: ShellUser | null; about: ShellAbout }) {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
-  // The login page has its own full-screen layout.
-  if (pathname === "/login") return <>{children}</>;
+  // The login page and the Auto CTR report (A4 pages, to print or save as a PDF) have their own full-screen layout.
+  if (pathname === "/login" || pathname === "/ctr/report") return <>{children}</>;
 
   return (
     <div className="flex min-h-screen">

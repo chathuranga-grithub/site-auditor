@@ -237,6 +237,8 @@ export interface CampaignDay {
   lastComputer: string | null;
   /** Where the day's visits came from: their proxy IPs' cities ("Hanoi, Vietnam"), with how many and where it is. */
   places: Record<string, DayPlace>;
+  /** Why the day's tries didn't count, by kind ("captcha", "proxy"… src/lib/campaigns/fail-reasons.ts); from app 1.0.17. */
+  failReasons: Partial<Record<string, number>>;
   /** What couldn't be read that day, per source, in plain words. */
   notes: DayNotes;
 }
@@ -270,6 +272,7 @@ export type DayFields = Partial<
     | "lastVisitAt"
     | "lastComputer"
     | "places"
+    | "failReasons"
   >
 >;
 

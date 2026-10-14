@@ -4,6 +4,7 @@
 // and campaign. Visit details (failed tries, CAPTCHAs, time on site, pages, position in visits) are
 // counted from desktop app 1.0.2; days before that only have the visits done and the daily check.
 
+import { addReasons, failReasonList, type FailReason } from "./fail-reasons";
 import { daysBetween } from "./metrics";
 import { stripWwwHost } from "./site";
 import { plannedVisits, type Campaign, type CampaignDay } from "./types";
@@ -19,6 +20,8 @@ export interface Totals {
   mobile: number;
   planned: number;
   failed: number;
+  /** Why the failed tries didn't count, by kind (from app 1.0.17: earlier ones have none). */
+  reasons: Partial<Record<FailReason, number>>;
   captchasMet: number;
   captchasSolved: number;
   /** Seconds on the site and pages read, and the visits they're for (those with details). */
@@ -39,6 +42,7 @@ const empty = (): Totals => ({
   mobile: 0,
   planned: 0,
   failed: 0,
+  reasons: {},
   captchasMet: 0,
   captchasSolved: 0,
   seconds: 0,
@@ -64,6 +68,7 @@ function add(t: Totals, d: CampaignDay | undefined, planned: number) {
   t.visits += d.visitsDone;
   t.mobile += d.mobileVisitsDone;
   t.failed += d.visitTriesFailed;
+  addReasons(t.reasons, d.failReasons);
   t.captchasMet += d.captchasMet;
   t.captchasSolved += d.captchasSolved;
   if (d.visitSeconds > 0) {
@@ -93,6 +98,41 @@ export function rates(t: Totals) {
     position: t.positionCount ? Math.round((t.positionSum / t.positionCount) * 10) / 10 : null,
     mobilePct: t.visits ? Math.round((t.mobile / t.visits) * 100) : null,
   };
+}
+
+/** Why the tries failed, most first (failReasonList). */
+export const reasonList = (t: Totals) => failReasonList(t.reasons, t.failed);
+
+type CampaignRow = Overview["campaigns"][number];
+
+/** A campaign with something in the period: a target, visits, tries or CAPTCHAs. */
+export const hasActivity = (c: CampaignRow) => !!(c.total.planned || c.total.visits || c.total.failed || c.total.captchasMet);
+
+/** Visits a campaign should have finished by now in the period: its target, today's only for the part of the day gone (Vietnam time). */
+export function expectedSoFar(c: CampaignRow, days: string[], today: string, now = Date.now()): number {
+  const vn = new Date(now + 7 * 3600_000);
+  const dayGone = (vn.getUTCHours() * 3600 + vn.getUTCMinutes() * 60) / 86_400;
+  return days.reduce((sum, d, i) => sum + (d === today ? c.perDay[i].planned * dayGone : d < today ? c.perDay[i].planned : 0), 0);
+}
+
+/** What looks wrong with a campaign's period, in plain words, worst first (none: on track; `bad` false: just so). */
+export function campaignIssues(c: CampaignRow, days: string[], today: string): { text: string; bad: boolean }[] {
+  const expected = expectedSoFar(c, days, today);
+  const t = c.total;
+  const status = c.item.campaign.status;
+  const tries = t.visits + t.failed;
+  const unsolved = t.captchasMet - t.captchasSolved;
+  const out: { text: string; bad: boolean }[] = [];
+  if (status === "paused") out.push({ text: "Paused", bad: false });
+  if (status === "active" && expected >= 1 && !tries) out.push({ text: "No visits or tries yet", bad: true });
+  if (t.failed >= 5 && t.failed > t.visits) {
+    const top = reasonList(t).find((r) => r.key !== "unknown");
+    out.push({ text: `Most tries fail (${t.failed} of ${tries})${top ? `, mostly: ${top.label}` : ""}`, bad: true });
+  }
+  if (unsolved >= 3) out.push({ text: `${unsolved} CAPTCHAs not solved`, bad: true });
+  else if (t.captchasMet >= 5 && t.captchasMet / tries >= 0.3) out.push({ text: `${(t.captchasMet / tries).toFixed(1)} CAPTCHAs per try`, bad: true });
+  if (status === "active" && expected >= 5 && tries && t.visits < expected * 0.8) out.push({ text: `Behind: ${Math.round((t.visits / expected) * 100)}% of expected so far`, bad: true });
+  return out;
 }
 
 /** The days of a range ending today: `n` days, or from the first campaign's start ("all"). */

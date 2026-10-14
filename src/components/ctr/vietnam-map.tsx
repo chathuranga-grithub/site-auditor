@@ -28,8 +28,11 @@ export interface MapPlace {
   visits: number;
 }
 
-/** The map, with a dot per place. Places outside the map (not in Vietnam) aren't drawn. */
-export function VietnamMap({ places, className = "" }: { places: MapPlace[]; className?: string }) {
+/**
+ * The map, with a dot per place. Places outside the map (not in Vietnam) aren't drawn. `light`: for
+ * white paper (the report): a light grey country and violet dots.
+ */
+export function VietnamMap({ places, className = "", light = false }: { places: MapPlace[]; className?: string; light?: boolean }) {
   const [hover, setHover] = useState<string | null>(null);
   const most = Math.max(1, ...places.map((p) => p.visits));
   const shown = places
@@ -41,14 +44,18 @@ export function VietnamMap({ places, className = "" }: { places: MapPlace[]; cla
   return (
     <div className={`relative ${className}`}>
       <svg viewBox={`0 0 ${W} ${H}`} className="h-full w-auto" role="img" aria-label={`Map of Vietnam: visits from ${shown.length} place${shown.length === 1 ? "" : "s"}`}>
-        <path d={VIETNAM} className="fill-surface-2 stroke-line-strong" strokeWidth={0.6} strokeLinejoin="round" />
+        {light ? (
+          <path d={VIETNAM} fill="#eef2f7" stroke="#94a3b8" strokeWidth={0.6} strokeLinejoin="round" />
+        ) : (
+          <path d={VIETNAM} className="fill-surface-2 stroke-line-strong" strokeWidth={0.6} strokeLinejoin="round" />
+        )}
         {shown.map((p) => {
           const r = 3 + 6 * Math.sqrt(p.visits / most);
           const on = hover === p.key;
           return (
             <g key={p.key} onMouseEnter={() => setHover(p.key)} onMouseLeave={() => setHover(null)} className="cursor-default">
-              <circle cx={p.x} cy={p.y} r={r} className="fill-accent" fillOpacity={on ? 0.5 : 0.28} />
-              <circle cx={p.x} cy={p.y} r={1.6} className="fill-accent" />
+              <circle cx={p.x} cy={p.y} r={r} className={light ? undefined : "fill-accent"} fill={light ? "#7c3aed" : undefined} fillOpacity={on ? 0.5 : light ? 0.22 : 0.28} stroke={light ? "#7c3aed" : undefined} strokeOpacity={0.5} strokeWidth={light ? 0.4 : 0} />
+              <circle cx={p.x} cy={p.y} r={1.6} className={light ? undefined : "fill-accent"} fill={light ? "#6d28d9" : undefined} />
               <title>{`${p.label}: ${p.visits} visit${p.visits === 1 ? "" : "s"}`}</title>
             </g>
           );

@@ -82,6 +82,30 @@ body {
   font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
 }
 
+/* The Auto CTR report (src/components/ctr/report.tsx): light, white paper, its colors printed as shown, A4. */
+:root:has(.report-root) {
+  color-scheme: light;
+  background: #e2e8f0;
+}
+body:has(.report-root) {
+  background: #e2e8f0;
+  color: #1e293b;
+}
+.report-root,
+.report-root * {
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+@media print {
+  @page {
+    size: A4;
+  }
+  :root:has(.report-root),
+  body:has(.report-root) {
+    background: #fff;
+  }
+}
+
 /* Frosted panel used for cards, tables and bars. */
 @utility glass {
   background-color: var(--color-surface);
