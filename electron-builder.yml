@@ -16,7 +16,9 @@ extraResources:
       - "standalone/**/*"
 win:
   target: nsis
-  icon: desktop/icon.png
+  # Already a Windows icon (made from desktop/icon.png): turning the PNG into one at each build ran out
+  # of memory on a busy PC. Made again from icon.png if the icon changes.
+  icon: desktop/icon.ico
 nsis:
   oneClick: false
   # Per user (no admin needed): the app runs in that user's session, with their Chrome.
