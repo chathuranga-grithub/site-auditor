@@ -100,6 +100,11 @@ export interface VisitOptions {
    */
   searchFirst?: { keyword: string; country: string; neverSkip?: boolean; only?: boolean };
   /**
+   * This visit's turn to search Google (src/lib/google-turn.ts), taken by the caller before the proxy:
+   * the first search uses it and gives it back (a search after the browser is opened again takes a new one).
+   */
+  googleTurn?: () => void;
+  /**
    * Claims the confirmed proxy IP before any page opens; null = another visit running now has it
    * (then ProxyIpInUseError is thrown). Returns the release, called when the visit ends.
    */
@@ -129,7 +134,9 @@ interface Target {
   note?: string;
 }
 
-export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = false, searchFirst, claimIp, profileDir, dwellSec, readPages = false, device = "desktop", deviceProfile, signal, send }: VisitOptions): Promise<VisitReport> {
+export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = false, searchFirst, googleTurn, claimIp, profileDir, dwellSec, readPages = false, device = "desktop", deviceProfile, signal, send }: VisitOptions): Promise<VisitReport> {
+  // The turn taken for this visit: used by its first search only.
+  let heldTurn = googleTurn;
   const report: VisitReport = {
     url,
     startedAt: new Date().toISOString(),
@@ -240,7 +247,9 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
       const restored = await restoreGoogleCookies(context, exit.ip);
       if (restored) send({ type: "step", message: `Google's cookies from an earlier visit on this IP put back (${restored}).` });
       try {
-        fromGoogle = await searchGoogleFirst(main, searchFirst, url, send, signal);
+        const turn = heldTurn;
+        heldTurn = undefined;
+        fromGoogle = await searchGoogleFirst(main, searchFirst, url, send, signal, turn);
         // Got through to the results: Google's cookies kept for the next visit on this IP.
         await saveGoogleCookies(context, exit.ip);
         break;
@@ -651,6 +660,8 @@ async function searchGoogleFirst(
   siteUrl: string,
   send: VisitOptions["send"],
   signal: AbortSignal,
+  /** Its turn to search Google, already taken (VisitOptions.googleTurn); none: taken here. */
+  held?: () => void,
 ): Promise<{ link: string | null; page: number; position: number | null; seen?: boolean } | null> {
   if (country.toUpperCase() !== BROWSER_SEARCH_COUNTRY) {
     send({ type: "step", message: "Only Vietnam can be searched (the proxy is in Vietnam), so the Google search was skipped; opening the site directly." });
@@ -663,12 +674,17 @@ async function searchGoogleFirst(
   // One Google search at a time across all the app's browsers (src/lib/google-turn.ts); at most a few
   // minutes' wait (then this try ends and the run starts again with a new IP).
   let waited = false;
-  const release = await takeGoogleTurn(signal, () => {
-    waited = true;
-    send({ type: "wait", seconds: null, reason: "its turn to search Google (one browser at a time)" });
-    send({ type: "step", message: "Waiting for the other browser to finish its Google search (one at a time, so Google doesn't see them together; 3 minutes at most)…" });
-  });
+  const release =
+    held ??
+    (await takeGoogleTurn(signal, () => {
+      waited = true;
+      send({ type: "wait", seconds: null, reason: "its turn to search Google (one browser at a time)" });
+      send({ type: "step", message: "Waiting for the other browser to finish its Google search (one at a time, so Google doesn't see them together; 3 minutes at most)…" });
+    }));
   if (waited) send({ type: "waited" });
+  // Search only: the pages looked through, and where the site was first seen on them (when there's one).
+  let pagesSeen = 0;
+  let seenAt: { link: string | null; page: number; position: number | null } | null = null;
   try {
     send({ type: "stage", stage: "search" });
     send({ type: "step", message: `Searching Google for “${keyword}” (as in Vietnam: gl=${params.gl}, hl=${params.hl})…` });
@@ -715,20 +731,29 @@ async function searchGoogleFirst(
       await scrollPage(tab, MOBILE_SCROLL).catch(() => null);
       const on = n === 1 ? "Google's first page" : `Google's page ${n}`;
       const first = found.links[0];
-      // Search only: the first results page is the run; the site (when there is one) noted, not clicked.
+      // Search only: Google's first SEARCH_PAGES pages are looked through, like a person ("Next"); the site
+      // (when there is one) noted where it's first seen, never clicked.
       if (only) {
         if (!found.organic && !first && !isResultsPage(tab.url())) {
+          if (pagesSeen) {
+            // A later page didn't come: the pages seen are the search (back to them for the rest of the time).
+            await tab.goBack({ timeout: 15_000 }).catch(() => null);
+            break;
+          }
           throw new GoogleBlockedError(`Google didn't show results for “${keyword}” (page: ${tab.url().slice(0, 120)}${await saveShot(tab)})`);
         }
+        pagesSeen = n;
+        if (first && !seenAt) seenAt = { link: first.href, page: n, position: first.position ? (n - 1) * 10 + first.position : null };
+        const next = n < SEARCH_PAGES ? `; going on to page ${n + 1}…` : ".";
         send({
           type: "step",
           message: !siteUrl
-            ? `Google's results for “${keyword}” are shown${found.organic ? ` (${found.organic} results)` : ""}.`
+            ? `${on.charAt(0).toUpperCase()}${on.slice(1)} of results for “${keyword}” looked through${found.organic ? ` (${found.organic} results)` : ""}${next}`
             : first
-              ? `The site is ${first.position ? `#${first.position} ` : ""}on ${on} for “${keyword}” (not clicked: search only).`
-              : `The site isn't on ${on} for “${keyword}” (search only: nothing is clicked anyway).`,
+              ? `The site is ${first.position ? `#${first.position} ` : ""}on ${on} for “${keyword}” (not clicked: search only)${next}`
+              : `The site isn't on ${on} for “${keyword}”${next}`,
         });
-        return { link: first?.href ?? null, page: n, position: first?.position ?? null, seen: true };
+        continue;
       }
       if (first) {
         const others = found.links.length > 1 ? ` (${found.links.length} links to it there)` : "";
@@ -740,9 +765,18 @@ async function searchGoogleFirst(
       const why = found.organic ? `The site isn't on ${on}` : `Couldn't read any results on ${on} (page: ${tab.url().slice(0, 120)} · ${found.titles} titles${found.error ? ` · ${found.error}` : ""}${await saveShot(tab)})`;
       send({ type: "step", message: `${why} for “${keyword}”${n < SEARCH_PAGES ? `; going on to page ${n + 1}…` : "."}` });
     }
+    // Search only: the pages looked through are the search (nothing clicked).
+    if (only && pagesSeen) return { ...(seenAt ?? { link: null, page: pagesSeen, position: null }), seen: true };
     if (!neverSkip) send({ type: "step", message: `The site isn't on Google's first ${SEARCH_PAGES} pages; opening it directly…` });
     return null;
   } catch (err) {
+    // Search only, and a later page didn't come (a CAPTCHA, no "Next"…): the pages already seen count.
+    if (only && pagesSeen && !signal.aborted) {
+      send({ type: "step", message: `Couldn't go on past Google's page ${pagesSeen} (${friendly(err)}); the ${pagesSeen === 1 ? "page" : `${pagesSeen} pages`} looked through count.` });
+      // Back to the results already seen (not a CAPTCHA page) for the rest of the time on Google.
+      if (!isResultsPage(tab.url())) await tab.goBack({ timeout: 15_000 }).catch(() => null);
+      return { ...(seenAt ?? { link: null, page: pagesSeen, position: null }), seen: true };
+    }
     if (err instanceof GoogleBlockedError) throw err;
     // Never skipped: the visit starts again in a new browser with a new IP.
     if (neverSkip && !signal.aborted) throw new GoogleBlockedError(`The Google search didn't work (${friendly(err)})`);

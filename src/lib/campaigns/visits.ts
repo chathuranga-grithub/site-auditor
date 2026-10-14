@@ -21,6 +21,7 @@ import { GoogleBlockedError } from "../serp-browser";
 import type { ExitInfo, VisitDevice, VisitEvent } from "../visit-types";
 import { isConnectionError, untilDbReachable } from "../db-retry";
 import { deviceLabel, pickDevice } from "../device-profiles";
+import { TurnWaitError, takeGoogleTurn } from "../google-turn";
 import { runsCampaignsHere } from "../runner-lock";
 import { thisComputer } from "../this-computer";
 import { recordVisits, visitsDoneOn, type VisitDayDelta } from "./db";
@@ -282,16 +283,39 @@ async function run(c: VisitCampaign, v: LiveVisit) {
       let tries = 1;
       let retryAfter = false;
       for (;;) {
+        // Its turn to search Google first (one browser at a time on this computer), and only then a
+        // proxy link: a visit waiting in that queue never sits on a link the others could use.
+        let turnWaited = false;
+        let turn: () => void;
+        try {
+          turn = await takeGoogleTurn(signal, () => {
+            turnWaited = true;
+            send({ type: "wait", seconds: null, reason: "its turn to search Google (one browser at a time)" });
+            send({ type: "step", message: "Waiting for the other browser to finish its Google search (one at a time, so Google doesn't see them together; 3 minutes at most)…" });
+          });
+        } catch (err) {
+          if (signal.aborted || !(err instanceof TurnWaitError)) throw err;
+          // Waited the most: ask again (not a failed visit).
+          send({ type: "step", message: `${err.message}; asking again…` });
+          continue;
+        }
+        if (turnWaited) send({ type: "waited" });
         let waited = false;
-        const lease = await leaseProxyApi(signal, (seconds) => {
-          waited = true;
-          if (seconds === null) {
-            send({ type: "wait", seconds: null, reason: "a free proxy link (the others are in use by other visits)" });
-            return send({ type: "step", message: "Every proxy link is in use by another visit; waiting for one to be free…" });
-          }
-          send({ type: "wait", seconds, reason: "a new proxy IP from the provider" });
-          send({ type: "step", message: `Waiting for a new proxy IP (the provider gives one in ${seconds}s); the previous IP isn't reused…` });
-        });
+        let lease: Awaited<ReturnType<typeof leaseProxyApi>>;
+        try {
+          lease = await leaseProxyApi(signal, (seconds) => {
+            waited = true;
+            if (seconds === null) {
+              send({ type: "wait", seconds: null, reason: "a free proxy link (the others are in use by other visits)" });
+              return send({ type: "step", message: "Every proxy link is in use by another visit; waiting for one to be free…" });
+            }
+            send({ type: "wait", seconds, reason: "a new proxy IP from the provider" });
+            send({ type: "step", message: `Waiting for a new proxy IP (the provider gives one in ${seconds}s)…` });
+          });
+        } catch (err) {
+          turn();
+          throw err;
+        }
         if (waited) send({ type: "waited" });
         // Its own Chrome profile folder, when one is set: never the same as another browser open now.
         const profile = await leaseChromeProfile("visit");
@@ -304,6 +328,8 @@ async function run(c: VisitCampaign, v: LiveVisit) {
           const report = await runVisitTest({
             url: c.siteUrl,
             proxyApiUrl: lease.apiUrl,
+            // Its turn to search Google, already taken above: the search uses it (and gives it back).
+            googleTurn: turn,
             // The whole visit on a phone or on a desktop; no second check of every page on a phone.
             device,
             deviceProfile: model,
@@ -380,6 +406,8 @@ async function run(c: VisitCampaign, v: LiveVisit) {
           send({ type: "step", message: `This visit failed (${err instanceof Error ? err.message : String(err)}); trying again in ${RETRY_AFTER_SEC}s in a new browser (a new proxy IP if the provider gives one, else its current one; try ${++tries})…` });
           retryAfter = true;
         } finally {
+          // Given back once its search is done (or when the browser failed before it): never kept.
+          turn();
           profile?.release();
           lease.release();
         }
