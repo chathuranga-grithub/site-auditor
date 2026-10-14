@@ -30,6 +30,7 @@ import {
   MAX_DAY1_VISITS,
   MAX_DURATION_DAYS,
   MAX_DWELL_SEC,
+  SEARCH_ONLY_RESULTS_SEC,
   expectedCtr,
   mobileVisits,
   plannedVisits,
@@ -274,15 +275,21 @@ export function NewCampaign({ editing }: { editing?: Campaign } = {}) {
               <Field label={`Mobile Traffic · ${form.mobilePct}%`} hint={`Desktop ${100 - Number(form.mobilePct)}%`}>
                 <input className="h-9 w-full cursor-pointer accent-accent" type="range" min={0} max={100} step={5} value={form.mobilePct} onChange={set("mobilePct")} />
               </Field>
-              <Field label={searchOnly ? "Min Time on Results (s)" : "Min Dwell Time (s)"} hint={searchOnly ? `1 – ${MAX_DWELL_SEC}s on Google's results per search` : `1 – ${MAX_DWELL_SEC}s on the site per visit`}>
-                <input className={input} type="number" min={1} max={MAX_DWELL_SEC} step={1} value={form.minDwellSec} onChange={set("minDwellSec")} required />
-              </Field>
-              <Field
-                label={searchOnly ? "Max Time on Results (s)" : "Max Dwell Time (s)"}
-                hint={Number(form.maxDwellSec) < Number(form.minDwellSec) ? "Must be at least the min" : searchOnly ? "Each search: random, min to max" : "Each visit: random, min to max"}
-              >
-                <input className={input} type="number" min={Number(form.minDwellSec) || 1} max={MAX_DWELL_SEC} step={1} value={form.maxDwellSec} onChange={set("maxDwellSec")} required />
-              </Field>
+              {searchOnly ? (
+                // Search only: a set time on Google's results (no site visit, so no dwell time to choose).
+                <Field label="Time on Google's results" hint="Each search, then the browser closes" className="sm:col-span-2">
+                  <div className={`${input} flex items-center text-muted`}>{SEARCH_ONLY_RESULTS_SEC} seconds</div>
+                </Field>
+              ) : (
+                <>
+                  <Field label="Min Dwell Time (s)" hint={`1 – ${MAX_DWELL_SEC}s on the site per visit`}>
+                    <input className={input} type="number" min={1} max={MAX_DWELL_SEC} step={1} value={form.minDwellSec} onChange={set("minDwellSec")} required />
+                  </Field>
+                  <Field label="Max Dwell Time (s)" hint={Number(form.maxDwellSec) < Number(form.minDwellSec) ? "Must be at least the min" : "Each visit: random, min to max"}>
+                    <input className={input} type="number" min={Number(form.minDwellSec) || 1} max={MAX_DWELL_SEC} step={1} value={form.maxDwellSec} onChange={set("maxDwellSec")} required />
+                  </Field>
+                </>
+              )}
             </div>
           </Section>
 
@@ -470,6 +477,7 @@ function visitPlanRows(form: Record<string, string>): [string, ReactNode][] {
 
 /** "30 – 120s" (or "60s" when min = max); a note while the fields are invalid. */
 function dwellRange(form: Record<string, string>): ReactNode {
+  if (form.mode === "search") return `${SEARCH_ONLY_RESULTS_SEC}s on Google's results`;
   const min = Number(form.minDwellSec);
   const max = Number(form.maxDwellSec);
   const ok = (n: number) => Number.isInteger(n) && n >= 1 && n <= MAX_DWELL_SEC;

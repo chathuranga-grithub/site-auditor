@@ -55,6 +55,9 @@ export type CampaignStatus = "active" | "paused" | "finished" | "stopped";
  */
 export type CampaignMode = "visit" | "search";
 
+/** Search only: how long Google's results stay open once looked through, before the browser closes (its dwell time is for site visits). */
+export const SEARCH_ONLY_RESULTS_SEC = 10;
+
 export interface Campaign {
   id: number;
   mode: CampaignMode;

@@ -31,6 +31,8 @@ interface Pool {
   busy: Set<string>;
   /** Campaign visits using each link now (pickProxyApi: links aren't reserved for them). */
   using?: Map<string, number>;
+  /** When each link was last handed to a visit (ms): the next goes to the one that waited longest. */
+  lastPicked?: Map<string, number>;
   /** Link → time (ms) its provider gives a new IP again. */
   restUntil: Map<string, number>;
   /** Proxy IPs in use by visits running now. */
@@ -122,11 +124,14 @@ export async function leaseProxyApi(signal: AbortSignal, onWait?: (seconds: numb
  * A proxy link for a campaign visit, at once: never reserved, so a visit never waits for another to
  * finish with one. The visit gets its IP from it straight away (a new one, or while the provider makes
  * us wait, the current one: getUnvisitedProxy), several visits using the same link or IP at once.
- * The link used by the fewest visits now (ties at random). Only when every link rests (no new IP, and
- * its current one blocked by Google) does it wait, until the first one can give an IP (onWait: seconds).
+ * The link used by the fewest visits now, and of those the one that searched longest ago: searches
+ * rotate over every IP rather than several going out on one IP while others rest (fewer CAPTCHAs).
+ * Only when every link rests (no new IP, and its current one blocked by Google) does it wait, until the
+ * first one can give an IP (onWait: seconds).
  */
 export async function pickProxyApi(signal: AbortSignal, onWait?: (seconds: number) => void): Promise<ProxyLease> {
   const using = (pool.using ??= new Map());
+  const lastPicked = (pool.lastPicked ??= new Map());
   let told = false;
   for (;;) {
     if (signal.aborted) throw new Error("Stopped.");
@@ -137,8 +142,11 @@ export async function pickProxyApi(signal: AbortSignal, onWait?: (seconds: numbe
     if (usable.length) {
       const fewest = Math.min(...usable.map((l) => using.get(l) ?? 0));
       const least = usable.filter((l) => (using.get(l) ?? 0) === fewest);
-      const apiUrl = least[Math.floor(Math.random() * least.length)];
+      const longestAgo = Math.min(...least.map((l) => lastPicked.get(l) ?? 0));
+      const pick = least.filter((l) => (lastPicked.get(l) ?? 0) === longestAgo);
+      const apiUrl = pick[Math.floor(Math.random() * pick.length)];
       using.set(apiUrl, (using.get(apiUrl) ?? 0) + 1);
+      lastPicked.set(apiUrl, now);
       let released = false;
       return {
         apiUrl,

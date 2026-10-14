@@ -10,6 +10,7 @@ import { addExtra } from "playwright-extra";
 import { stealthOn, stealthPlugin } from "./stealth";
 import { actAsDevice, deviceLabel, deviceUserAgent, type DeviceProfile } from "./device-profiles";
 import { burnProxy, getProxyOrReuse, getUnvisitedProxy } from "./proxy-api";
+import { SEARCH_ONLY_RESULTS_SEC } from "./campaigns/types";
 import { NO_WEBRTC_ARGS, NO_WEBRTC_SCRIPT } from "./no-webrtc";
 import { fetchJsonInPage, lookupExit, ownPublicIp } from "./proxy-ip";
 import { ProxyIpInUseError } from "./proxy-pool";
@@ -298,8 +299,8 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
       report.searchOnly = true;
       if (fromGoogle.position != null) report.google = { page: fromGoogle.page, position: fromGoogle.position };
       const from = Date.now();
-      // Never closed straight away: at least 5–10s (random) on the results, longer if Time on Results is.
-      const stay = Math.max(dwellSec ?? 0, MIN_RESULTS_SEC + Math.floor(Math.random() * (MAX_MIN_RESULTS_SEC - MIN_RESULTS_SEC + 1)));
+      // Then SEARCH_ONLY_RESULTS_SEC on the results (the campaign's dwell time is for site visits), and closed.
+      const stay = SEARCH_ONLY_RESULTS_SEC;
       send({ type: "step", message: `Looking through Google's results for ${stay}s (search only: nothing is clicked)…` });
       await browseResults(main, stay, signal);
       report.onSiteSec = Math.round((Date.now() - from) / 1000);
@@ -899,9 +900,6 @@ async function solveCaptcha(tab: Page, send: VisitOptions["send"], signal: Abort
  */
 const TEMP_OPEN_DIRECTLY_ON_CAPTCHA = false;
 
-/** Search only: the results page stays open at least this long (random, from the first to the second) before the browser closes. */
-const MIN_RESULTS_SEC = 5;
-const MAX_MIN_RESULTS_SEC = 10;
 
 /** How many of Google's results pages the site is looked for on before it's "not on Google". */
 const SEARCH_PAGES = 3;

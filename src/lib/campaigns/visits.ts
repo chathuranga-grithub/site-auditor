@@ -33,6 +33,10 @@ export type LoggedVisitEvent = VisitEvent & { at: number; lane?: number };
 
 /** A link that gave an IP another visit is using rests this long before it's tried again. */
 const SAME_IP_REST_SEC = 60;
+/** Each visit starts this long after the last (random), so they don't reach Google in the same second. */
+const START_SPREAD_MIN_MS = 1_000;
+const START_SPREAD_MAX_MS = 5_000;
+
 /** How long a visit that failed waits before it's tried again (new browser, new IP). */
 const RETRY_AFTER_SEC = 30;
 
@@ -282,6 +286,13 @@ async function run(c: VisitCampaign, v: LiveVisit) {
       let tries = 1;
       let retryAfter = false;
       for (;;) {
+        // A random 1–5s first, so visits starting together don't all reach Google in the same second
+        // (searches all at once look automated: more CAPTCHAs). A short spacing, not a queue.
+        await new Promise<void>((resolve) => {
+          const t = setTimeout(resolve, START_SPREAD_MIN_MS + Math.random() * (START_SPREAD_MAX_MS - START_SPREAD_MIN_MS));
+          signal.addEventListener("abort", () => (clearTimeout(t), resolve()), { once: true });
+        });
+        if (signal.aborted) throw new Error("Stopped.");
         // A proxy link at once (never reserved: no waiting for another visit to finish with one), then
         // its IP (a new one, or the current one while the provider makes us wait), then the search.
         let waited = false;
