@@ -2,8 +2,9 @@
 // (or at home), in the "I'm on" it writes every minute (scheduler.ts → reportComputer): no extra writes,
 // and overwritten each time (never kept). Only with Realtime updates on for this computer (Settings →
 // This computer; each computer has its own, off unless turned on): off, nothing is added.
-// Per campaign: its latest console lines and the visits that finished in the last 30 minutes, their
-// reports trimmed to what the pages show (a few KB), so the console and realtime panel can be shown.
+// Per campaign: each lane's latest console lines (so every visit running side by side shows, a waiting
+// one too) and the visits that finished in the last 30 minutes, their reports trimmed to what the pages
+// show (a few KB), so the console and realtime panel can be shown.
 
 import { readLocalSetting, writeLocalSetting } from "../local-settings";
 import type { VisitPage, VisitReport } from "../visit-types";
@@ -11,8 +12,8 @@ import type { LiveCampaign, LiveSnapshot } from "./types";
 import { campaignVisitNow, type LoggedVisitEvent } from "./visits";
 
 const SETTING = "realtime_updates";
-/** The latest console lines kept (besides the finished visits). */
-const LINES = 40;
+/** The latest console lines kept of each lane, and of the whole visit (besides the finished visits). */
+const LANE_LINES = 10;
 /** Finished visits kept: those of the last 30 minutes (the realtime panel's), at most this many. */
 const VISITS_MS = 30 * 60_000;
 const MAX_VISITS = 20;
@@ -67,7 +68,20 @@ export function liveSnapshot(campaignIds: number[]): LiveSnapshot {
     const v = campaignVisitNow(id);
     if (!v) continue;
     const done = v.events.filter((e) => e.type === "done" && now - e.at <= VISITS_MS).slice(-MAX_VISITS);
-    const recent = v.events.filter((e) => e.type !== "done").slice(-LINES);
+    // Every lane's latest lines (not only the campaign's latest, which the busiest lanes fill), so a page
+    // elsewhere shows each lane running side by side and what it's doing, a waiting one too; and the
+    // latest lines about the whole visit (no lane).
+    const recent: LoggedVisitEvent[] = [];
+    const perLane = new Map<number, number>();
+    for (let i = v.events.length - 1; i >= 0; i--) {
+      const e = v.events[i];
+      if (e.type === "done") continue;
+      const lane = e.lane ?? 0;
+      const n = perLane.get(lane) ?? 0;
+      if (n >= LANE_LINES) continue;
+      perLane.set(lane, n + 1);
+      recent.push(e);
+    }
     const lines = [...done, ...recent]
       .sort((a, b) => a.at - b.at)
       .map((e) => (e.type === "done" ? { ...e, report: trimReport(e.report) } : e)) as (LoggedVisitEvent & Record<string, unknown>)[];
