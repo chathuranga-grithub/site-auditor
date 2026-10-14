@@ -52,13 +52,18 @@ export async function pickComputer(computerId: unknown): Promise<{ id: string; n
 
 /** Checks the form input; returns the campaign or an error message. `proxyApis`: links saved in Settings. */
 export function parseNewCampaign(body: Record<string, unknown>, proxyApis: number): NewCampaign | string {
-  const site = typeof body.siteUrl === "string" ? parseSiteUrl(body.siteUrl) : null;
-  if (!site || !site.hostname.includes(".") || isBlockedHost(site.hostname)) return "Enter the website URL, e.g. https://example.vn";
+  // Search only: the website is optional (given, where it ranks is noted; it's never clicked).
+  const mode = body.mode === "search" ? "search" : "visit";
+  const siteText = typeof body.siteUrl === "string" ? body.siteUrl.trim() : "";
+  const site = siteText ? parseSiteUrl(siteText) : null;
+  if (siteText || mode === "visit") {
+    if (!site || !site.hostname.includes(".") || isBlockedHost(site.hostname)) return "Enter the website URL, e.g. https://example.vn";
+  }
   const keyword = typeof body.keyword === "string" ? body.keyword.trim() : "";
   if (!keyword || keyword.length > 200) return "Enter the keyword to track.";
 
   let pageUrl: string | null = null;
-  if (typeof body.pageUrl === "string" && body.pageUrl.trim()) {
+  if (site && typeof body.pageUrl === "string" && body.pageUrl.trim()) {
     const page = parseSiteUrl(body.pageUrl);
     if (!page || page.hostname.replace(/^www\./, "") !== site.hostname.replace(/^www\./, "")) return "The page URL must be on the same website.";
     pageUrl = page.toString();
@@ -103,7 +108,8 @@ export function parseNewCampaign(body: Record<string, unknown>, proxyApis: numbe
   if (ga4Property && !/^\d+$/.test(ga4Property)) return "GA4 property ID is numbers only (Admin → Property details).";
 
   return {
-    siteUrl: site.origin,
+    mode,
+    siteUrl: site?.origin ?? "",
     keyword,
     pageUrl,
     durationDays,

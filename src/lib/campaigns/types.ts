@@ -48,8 +48,17 @@ export function visitPlanProgress(c: Pick<Campaign, "day1Visits" | "dailyIncreas
 /** finished: reached its end date. stopped: ended early by hand. Neither can be started again. */
 export type CampaignStatus = "active" | "paused" | "finished" | "stopped";
 
+/**
+ * visit: each run searches Google for the keyword, clicks the site's result and stays on the site.
+ * search: each run only searches Google and looks through the results (no click, no site visit); the
+ * website is optional (given: where it ranks is noted, never clicked).
+ */
+export type CampaignMode = "visit" | "search";
+
 export interface Campaign {
   id: number;
+  mode: CampaignMode;
+  /** The site ("" for a search-only campaign without one). */
   siteUrl: string;
   keyword: string;
   /** The page expected to rank for the keyword; empty = any page of the site. */
@@ -96,6 +105,7 @@ export function endDateOf(startDate: string, durationDays: number): string {
 
 /** The settings an edit can change (the start date stays: each day's numbers hang on it). */
 export const EDITABLE_FIELDS = [
+  "mode",
   "siteUrl",
   "keyword",
   "pageUrl",
@@ -111,6 +121,7 @@ export type EditableField = (typeof EDITABLE_FIELDS)[number];
 
 /** How each tracked field is named in the change history. */
 export const FIELD_LABELS: Record<string, string> = {
+  mode: "Type",
   siteUrl: "Website",
   keyword: "Keyword",
   pageUrl: "Page",
@@ -269,6 +280,8 @@ export interface CampaignNote {
 
 /** Input for a new campaign (from the form). */
 export interface NewCampaign {
+  mode: CampaignMode;
+  /** "" for a search-only campaign without a site. */
   siteUrl: string;
   keyword: string;
   pageUrl?: string | null;

@@ -50,7 +50,10 @@ export async function collectCampaign(c: Campaign, today: string): Promise<Colle
   let rankingUrl: string | null = null;
 
   // 1. Google position today
-  if (!configuredProviders().length) {
+  if (!c.siteUrl) {
+    // Search only, with no website: there's no site to look for (noted as checked, so not tried again today).
+    await upsertDay(c.id, today, { notes: { serp: "" } });
+  } else if (!configuredProviders().length) {
     // On Vercel: no browser. The computer running the app checks it (no note, so it still will today).
     problems.push("Google position: only checked when the app runs on a computer.");
   } else {

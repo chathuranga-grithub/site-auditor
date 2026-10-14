@@ -52,7 +52,7 @@ const visitConcurrency = ((g as typeof g & { __visitConcurrency?: Map<number, nu
  * What a campaign's visits use: when it changes (an edit), the visit running here starts again with it.
  * Not its concurrency: that changes while the visit runs (setVisitConcurrency), nothing cut short.
  */
-const settingsOf = (c: Campaign) => JSON.stringify([c.siteUrl, c.keyword, c.pageUrl, c.day1Visits, c.dailyIncreasePct, c.minDwellSec, c.maxDwellSec, c.mobilePct]);
+const settingsOf = (c: Campaign) => JSON.stringify([c.mode, c.siteUrl, c.keyword, c.pageUrl, c.day1Visits, c.dailyIncreasePct, c.minDwellSec, c.maxDwellSec, c.mobilePct]);
 
 /**
  * The campaign was edited on this computer: if it runs here, its visit starts again with the new

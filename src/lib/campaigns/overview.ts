@@ -113,7 +113,10 @@ const nextDay = (day: string) => {
 };
 
 /** The site a campaign is for, as shown and grouped: its host without www. */
-export const siteOf = (c: Campaign) => stripWwwHost(c.siteUrl) || c.siteUrl;
+export const siteOf = (c: Campaign) => (c.siteUrl ? stripWwwHost(c.siteUrl) || c.siteUrl : NO_SITE);
+
+/** How a search-only campaign without a website shows where a site would (and is grouped on the dashboard). */
+export const NO_SITE = "Search only (no website)";
 
 export interface Overview {
   days: string[];

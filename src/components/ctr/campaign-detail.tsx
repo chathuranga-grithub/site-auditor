@@ -17,7 +17,7 @@ import { Notice, Panel, StatTile, buttonClass } from "@/components/ui/primitives
 import { Loader } from "@/components/ui/loader";
 import { VisitRunView, useVisitRun } from "@/components/visit/visit-run";
 import { RealtimePanel } from "./realtime";
-import { CONFIRM, CampaignConfirm, isOpen, HealthBadge, PageHeader, Progress, StatusBadge, api, changeText, ComputerBadge, GOOGLE_CONNECTOR, type ThisComputer } from "./ui";
+import { CONFIRM, CampaignConfirm, isOpen, HealthBadge, ModeBadge, PageHeader, Progress, StatusBadge, api, changeText, ComputerBadge, GOOGLE_CONNECTOR, type ThisComputer } from "./ui";
 import { ComputerSelect, useComputers } from "./computer-picker";
 
 const HEARTBEAT_MS = 5 * 60_000;
@@ -162,15 +162,20 @@ export function CampaignDetail({ id }: { id: number }) {
             {c.keyword}
             <span className="inline-flex items-center gap-2 text-base font-normal tracking-normal">
               <ComputerBadge campaign={c} me={computer} size="md" />
+              {c.mode === "search" && <ModeBadge size="md" />}
               <StatusBadge status={c.status} />
             </span>
           </span>
         }
         intro={
           <span className="font-mono text-xs">
-            <a href={c.pageUrl ?? c.siteUrl} target="_blank" rel="noopener noreferrer" className="text-link hover:underline">
-              {(c.pageUrl ?? c.siteUrl).replace(/^https?:\/\//, "")}
-            </a>{" "}
+            {c.pageUrl ?? c.siteUrl ? (
+              <a href={c.pageUrl ?? c.siteUrl} target="_blank" rel="noopener noreferrer" className="text-link hover:underline">
+                {(c.pageUrl ?? c.siteUrl).replace(/^https?:\/\//, "")}
+              </a>
+            ) : (
+              <span className="text-subtle">No website (search only)</span>
+            )}{" "}
             · {c.startDate} → {c.endDate}
             {isOpen(c.status) && <> · runs on {runsOn}</>}
           </span>

@@ -74,6 +74,8 @@ const SCHEMA = [
   // none until a computer takes them.
   `ALTER TABLE ctr_campaigns ADD COLUMN IF NOT EXISTS computer_id TEXT`,
   `ALTER TABLE ctr_campaigns ADD COLUMN IF NOT EXISTS computer_name TEXT`,
+  // Its type (types.ts CampaignMode), added later: older campaigns visit the site.
+  `ALTER TABLE ctr_campaigns ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'visit'`,
   `CREATE TABLE IF NOT EXISTS ctr_days (
     campaign_id INT NOT NULL REFERENCES ctr_campaigns(id) ON DELETE CASCADE,
     day DATE NOT NULL,
@@ -184,7 +186,8 @@ const LAST_PC = `CASE WHEN k.id IS NOT NULL AND d.last_computer IN (k.hostname, 
 function toCampaign(r: Record<string, unknown>): Campaign {
   return {
     id: Number(r.id),
-    siteUrl: String(r.site_url),
+    mode: r.mode === "search" ? "search" : "visit",
+    siteUrl: String(r.site_url ?? ""),
     keyword: String(r.keyword),
     pageUrl: (r.page_url as string | null) ?? null,
     country: String(r.country),
@@ -267,11 +270,11 @@ export async function createCampaign(input: NewCampaign, today: string, computer
     withHistory(
       `INSERT INTO ctr_campaigns (site_url, keyword, page_url, duration_days, start_date, end_date, target_ctr, target_position,
          weekly_growth_pct, target_engagement_sec, gsc_property, ga4_property, day1_visits, daily_increase_pct, concurrency,
-         min_dwell_sec, max_dwell_sec, mobile_pct, computer_id, computer_name)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING *`,
+         min_dwell_sec, max_dwell_sec, mobile_pct, computer_id, computer_name, mode)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING *`,
       "created",
       `jsonb_build_array(jsonb_build_object('field', 'computer', 'from', NULL, 'to', c.computer_name))`,
-      20,
+      21,
     ),
     [
       input.siteUrl,
@@ -294,6 +297,7 @@ export async function createCampaign(input: NewCampaign, today: string, computer
       input.mobilePct,
       computer?.id ?? null,
       computer?.name ?? null,
+      input.mode,
       by,
     ],
   );
@@ -357,6 +361,7 @@ export async function moveCampaign(id: number, computer: RunsOn, by: string | nu
 }
 
 const EDIT_COLUMNS: Record<EditableField | "endDate" | "status", string> = {
+  mode: "mode",
   siteUrl: "site_url",
   keyword: "keyword",
   pageUrl: "page_url",

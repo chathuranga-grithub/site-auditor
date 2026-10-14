@@ -95,8 +95,10 @@ export interface VisitOptions {
    * neverSkip: Google not showing results (the browser closed on its CAPTCHA, its consent page, the search
    * failing) ends the visit with GoogleBlockedError (the caller tries again in a new browser with a
    * new IP), instead of opening the site without the search.
+   * only: search only. Google's first results page is looked through for the dwell time and the run
+   * ends there: nothing is clicked, no site is opened (url may be "": no site; given, where it ranks is noted).
    */
-  searchFirst?: { keyword: string; country: string; neverSkip?: boolean };
+  searchFirst?: { keyword: string; country: string; neverSkip?: boolean; only?: boolean };
   /**
    * Claims the confirmed proxy IP before any page opens; null = another visit running now has it
    * (then ProxyIpInUseError is thrown). Returns the release, called when the visit ends.
@@ -181,7 +183,8 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
     let phone: BrowserContext | null;
     // The visit's one tab: profile check, IP check, Google, then the site, all in it.
     let main: Page;
-    let fromGoogle: { link: string | null; page: number; position: number | null } | null = null;
+    // seen: search only, Google's results were shown (the run is that).
+    let fromGoogle: { link: string | null; page: number; position: number | null; seen?: boolean } | null = null;
     let claimedIp: string | null = null;
     // TEMPORARY (testing): set when the site is opened directly after an unsolved CAPTCHA (see below).
     let openedDirectly = false;
@@ -270,6 +273,25 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
       }
     }
     if (stopped()) return finish(report);
+    // Search only: the results are looked through for the dwell time, and that's the run. Nothing is
+    // clicked, no site is opened.
+    if (searchFirst?.only) {
+      if (!fromGoogle?.seen) {
+        report.stopReason = "Google's results weren't shown, so this search didn't count.";
+        return finish(report);
+      }
+      report.searchOnly = true;
+      if (fromGoogle.position != null) report.google = { page: fromGoogle.page, position: fromGoogle.position };
+      const from = Date.now();
+      if (dwellSec) {
+        send({ type: "step", message: `Looking through Google's results for ${dwellSec}s (search only: nothing is clicked)…` });
+        await browseResults(main, dwellSec, signal);
+      }
+      report.onSiteSec = Math.round((Date.now() - from) / 1000);
+      if (stopped()) return finish(report);
+      send({ type: "step", message: "Search done (search only: no click, no site visit)." });
+      return finish(report);
+    }
     // Reached only through Google (neverSkip): the site not in its results means no visit this time
     // (not counted; the run tries again), never the site opened directly.
     if (searchFirst?.neverSkip && !fromGoogle && !openedDirectly) {
@@ -625,11 +647,11 @@ function exitProblem(exit: ExitInfo | null, ownIp: string | null): string | null
  */
 async function searchGoogleFirst(
   tab: Page,
-  { keyword, country, neverSkip }: NonNullable<VisitOptions["searchFirst"]>,
+  { keyword, country, neverSkip, only }: NonNullable<VisitOptions["searchFirst"]>,
   siteUrl: string,
   send: VisitOptions["send"],
   signal: AbortSignal,
-): Promise<{ link: string | null; page: number; position: number | null } | null> {
+): Promise<{ link: string | null; page: number; position: number | null; seen?: boolean } | null> {
   if (country.toUpperCase() !== BROWSER_SEARCH_COUNTRY) {
     send({ type: "step", message: "Only Vietnam can be searched (the proxy is in Vietnam), so the Google search was skipped; opening the site directly." });
     return null;
@@ -645,7 +667,8 @@ async function searchGoogleFirst(
   if (waited) send({ type: "waited" });
   send({ type: "stage", stage: "search" });
   send({ type: "step", message: `Searching Google for “${keyword}” (as in Vietnam: gl=${params.gl}, hl=${params.hl})…` });
-  const host = new URL(siteUrl).hostname.replace(/^www\./, "").toLowerCase();
+  // Search only without a site: none to look for ("" matches no result).
+  const host = siteUrl ? new URL(siteUrl).hostname.replace(/^www\./, "").toLowerCase() : "";
   try {
     // The site looked for on Google's first SEARCH_PAGES pages, going on with "Next" like a person.
     for (let n = 1; n <= SEARCH_PAGES; n++) {
@@ -690,6 +713,21 @@ async function searchGoogleFirst(
       await scrollPage(tab, MOBILE_SCROLL).catch(() => null);
       const on = n === 1 ? "Google's first page" : `Google's page ${n}`;
       const first = found.links[0];
+      // Search only: the first results page is the run; the site (when there is one) noted, not clicked.
+      if (only) {
+        if (!found.organic && !first && !isResultsPage(tab.url())) {
+          throw new GoogleBlockedError(`Google didn't show results for “${keyword}” (page: ${tab.url().slice(0, 120)}${await saveShot(tab)})`);
+        }
+        send({
+          type: "step",
+          message: !siteUrl
+            ? `Google's results for “${keyword}” are shown${found.organic ? ` (${found.organic} results)` : ""}.`
+            : first
+              ? `The site is ${first.position ? `#${first.position} ` : ""}on ${on} for “${keyword}” (not clicked: search only).`
+              : `The site isn't on ${on} for “${keyword}” (search only: nothing is clicked anyway).`,
+        });
+        return { link: first?.href ?? null, page: n, position: first?.position ?? null, seen: true };
+      }
       if (first) {
         const others = found.links.length > 1 ? ` (${found.links.length} links to it there)` : "";
         send({ type: "step", message: `The site is ${first.position ? `#${first.position} ` : ""}on ${on} for “${keyword}”${others}.` });
@@ -1155,6 +1193,25 @@ async function readPage(page: Page, until: number | null, maxSec = READ_MAX_SEC)
     scrolls++;
   }
   return { sec: Math.round((Date.now() - started) / 1000), scrolls };
+}
+
+/**
+ * Search only: stays on Google's results for `sec` seconds like a person reading them: a pause of a
+ * few seconds (random), a small scroll up or down, again. Ends early when the run is stopped.
+ */
+async function browseResults(tab: Page, sec: number, signal: AbortSignal): Promise<void> {
+  const end = Date.now() + sec * 1000;
+  while (!signal.aborted && Date.now() < end) {
+    const pause = Math.min(end - Date.now(), 2000 + Math.random() * 4000);
+    await new Promise<void>((resolve) => {
+      const t = setTimeout(resolve, pause);
+      signal.addEventListener("abort", () => (clearTimeout(t), resolve()), { once: true });
+    });
+    if (signal.aborted || Date.now() >= end) break;
+    // Mostly down, sometimes back up a little.
+    const dy = Math.random() < 0.7 ? 150 + Math.random() * 450 : -(100 + Math.random() * 250);
+    await tab.mouse.wheel(0, dy).catch(() => {});
+  }
 }
 
 async function scrollPage(page: Page, { stepWaitMs, maxSteps, settleMs }: typeof PAGE_SCROLL): Promise<ScrollResult> {

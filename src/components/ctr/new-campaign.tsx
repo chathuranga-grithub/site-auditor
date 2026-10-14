@@ -36,6 +36,7 @@ import {
   plannedVisitsTotal,
   endDateOf,
   type Campaign,
+  type CampaignMode,
   type CtrSetup,
   type FieldChange,
 } from "@/lib/campaigns/types";
@@ -93,6 +94,7 @@ function BackButton({ campaignId }: { campaignId: number }) {
 /** The form's fields for a campaign being edited (its settings), or a new one (the defaults). */
 function initialForm(c?: Campaign) {
   return {
+    mode: (c?.mode ?? "visit") as CampaignMode,
     siteUrl: c?.siteUrl ?? "",
     keyword: c?.keyword ?? "",
     durationDays: String(c?.durationDays ?? DEFAULT_DURATION_DAYS),
@@ -113,7 +115,7 @@ function initialForm(c?: Campaign) {
 }
 
 /** The fields the form sends (new campaign, or edit). */
-const SENT = ["siteUrl", "keyword", "durationDays", "day1Visits", "dailyIncreasePct", "concurrency", "minDwellSec", "maxDwellSec", "mobilePct"] as const;
+const SENT = ["mode", "siteUrl", "keyword", "durationDays", "day1Visits", "dailyIncreasePct", "concurrency", "minDwellSec", "maxDwellSec", "mobilePct"] as const;
 
 export function NewCampaign({ editing }: { editing?: Campaign } = {}) {
   const router = useRouter();
@@ -141,6 +143,8 @@ export function NewCampaign({ editing }: { editing?: Campaign } = {}) {
   }, [editing]);
 
   const set = (k: keyof typeof form) => (e: { target: { value: string } }) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  // Search only: Google is searched and its results looked through; no click, no site visit.
+  const searchOnly = form.mode === "search";
   const typical = expectedCtr(Number(form.targetPosition) || null);
   // Each visit at the same time uses its own proxy API link (Settings). None saved yet: 1. Editing: what it has stays allowed.
   const maxConcurrency = Math.max(1, setup?.proxyApis ?? 1, editing?.concurrency ?? 1);
@@ -187,9 +191,35 @@ export function NewCampaign({ editing }: { editing?: Campaign } = {}) {
       <form onSubmit={submit} className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(0,1fr)_19rem]">
         <div className="glass divide-y divide-line rounded-xl">
           <Section icon={<Globe className="size-4" />} title="Target" text="The site and the keyword to follow in Google Vietnam, and the PC that runs it.">
+            <div className="mb-3 flex flex-wrap items-center gap-3">
+              <span className="text-xs font-medium text-muted">Type</span>
+              <div className="flex rounded-lg border border-line bg-canvas/60 p-0.5" role="radiogroup" aria-label="Campaign type">
+                {(
+                  [
+                    ["visit", "Visit the site", "Search Google, click the site's result, stay on the site"],
+                    ["search", "Search only", "Search Google and look through the results: no click, no site visit"],
+                  ] as const
+                ).map(([value, label, title]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    role="radio"
+                    aria-checked={form.mode === value}
+                    title={title}
+                    onClick={() => setForm((f) => ({ ...f, mode: value }))}
+                    className={`rounded-md px-3 py-1 text-xs transition ${form.mode === value ? "bg-accent font-semibold text-white" : "text-muted hover:text-ink"}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <span className="text-[11px] text-subtle">
+                {searchOnly ? "Searches the keyword on Google and looks through the results. Nothing is clicked; no site is visited." : "Searches the keyword on Google, clicks the site's result and stays on the site."}
+              </span>
+            </div>
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              <Field label="Website URL">
-                <input className={input} value={form.siteUrl} onChange={set("siteUrl")} placeholder="https://example.vn" required />
+              <Field label={searchOnly ? "Website URL (optional)" : "Website URL"} hint={searchOnly ? "If given, where it ranks is noted (never clicked)" : undefined}>
+                <input className={input} value={form.siteUrl} onChange={set("siteUrl")} placeholder={searchOnly ? "Not needed for search only" : "https://example.vn"} required={!searchOnly} />
               </Field>
               <Field label="Keyword">
                 <input className={input} value={form.keyword} onChange={set("keyword")} placeholder="thiết kế website" required />
@@ -244,10 +274,13 @@ export function NewCampaign({ editing }: { editing?: Campaign } = {}) {
               <Field label={`Mobile Traffic · ${form.mobilePct}%`} hint={`Desktop ${100 - Number(form.mobilePct)}%`}>
                 <input className="h-9 w-full cursor-pointer accent-accent" type="range" min={0} max={100} step={5} value={form.mobilePct} onChange={set("mobilePct")} />
               </Field>
-              <Field label="Min Dwell Time (s)" hint={`1 – ${MAX_DWELL_SEC}s on the site per visit`}>
+              <Field label={searchOnly ? "Min Time on Results (s)" : "Min Dwell Time (s)"} hint={searchOnly ? `1 – ${MAX_DWELL_SEC}s on Google's results per search` : `1 – ${MAX_DWELL_SEC}s on the site per visit`}>
                 <input className={input} type="number" min={1} max={MAX_DWELL_SEC} step={1} value={form.minDwellSec} onChange={set("minDwellSec")} required />
               </Field>
-              <Field label="Max Dwell Time (s)" hint={Number(form.maxDwellSec) < Number(form.minDwellSec) ? "Must be at least the min" : "Each visit: random, min to max"}>
+              <Field
+                label={searchOnly ? "Max Time on Results (s)" : "Max Dwell Time (s)"}
+                hint={Number(form.maxDwellSec) < Number(form.minDwellSec) ? "Must be at least the min" : searchOnly ? "Each search: random, min to max" : "Each visit: random, min to max"}
+              >
                 <input className={input} type="number" min={Number(form.minDwellSec) || 1} max={MAX_DWELL_SEC} step={1} value={form.maxDwellSec} onChange={set("maxDwellSec")} required />
               </Field>
             </div>
@@ -354,7 +387,8 @@ function Summary({
   const site = form.siteUrl.trim().replace(/^https?:\/\//, "").replace(/\/$/, "");
   const rows: [string, ReactNode][] = [
     ["Keyword", form.keyword.trim() || <span className="text-subtle">not set</span>],
-    ["Site", site || <span className="text-subtle">not set</span>],
+    ["Type", form.mode === "search" ? "Search only" : "Visit the site"],
+    ["Site", site || <span className="text-subtle">{form.mode === "search" ? "none (search only)" : "not set"}</span>],
     ["Runs on", runsOn ?? <span className="text-subtle">…</span>],
     ...visitPlanRows(form),
   ];
@@ -409,8 +443,10 @@ function Summary({
           {editing
             ? `Kept in the change history. ${remote ? `${runsOn} uses them within a minute.` : "Its visit starts again with them."}`
             : remote
-              ? `The visit through the proxy starts on ${runsOn} within a minute.`
-              : "The visit through the proxy starts right away."}
+              ? `The ${form.mode === "search" ? "searches start" : "visit through the proxy starts"} on ${runsOn} within a minute.`
+              : form.mode === "search"
+                ? "The searches start right away."
+                : "The visit through the proxy starts right away."}
         </p>
       </div>
     </aside>
@@ -438,7 +474,8 @@ function dwellRange(form: Record<string, string>): ReactNode {
   const max = Number(form.maxDwellSec);
   const ok = (n: number) => Number.isInteger(n) && n >= 1 && n <= MAX_DWELL_SEC;
   if (!ok(min) || !ok(max) || max < min) return <span className="text-subtle">check the dwell time</span>;
-  return min === max ? `${min}s per visit` : `${min} – ${max}s per visit`;
+  const per = form.mode === "search" ? "per search" : "per visit";
+  return min === max ? `${min}s ${per}` : `${min} – ${max}s ${per}`;
 }
 
 /** The visit plan from the form, or null while a field is invalid. */

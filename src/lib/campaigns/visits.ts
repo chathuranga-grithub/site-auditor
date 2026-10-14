@@ -74,6 +74,7 @@ export const canRunVisits = () => !process.env.VERCEL && runsCampaignsHere();
 type VisitCampaign = Pick<
   Campaign,
   | "id"
+  | "mode"
   | "siteUrl"
   | "keyword"
   | "country"
@@ -235,6 +236,8 @@ async function run(c: VisitCampaign, v: LiveVisit) {
   try {
     // Loaded only here: the browser library isn't available on Vercel.
     const { runVisitTest } = await import("../visit-runner");
+    // How its runs are named in its console.
+    const what = c.mode === "search" ? "searches" : "visits";
     // Visits already done today (before a restart, or a pause and resume) count toward the target.
     // The database not reachable: wait for it (guessing 0 would run today's visits again).
     let saidWaiting = false;
@@ -257,10 +260,10 @@ async function run(c: VisitCampaign, v: LiveVisit) {
     const deviceOf = (runNo: number) => devices[runNo - done.total - 1] ?? "desktop";
     if (done.total >= v.runs) {
       v.run = v.runs;
-      log({ type: "step", message: `All ${v.runs} of today's visits are done.` });
+      log({ type: "step", message: `All ${v.runs} of today's ${what} are done.` });
       return;
     }
-    if (done.total > 0) log({ type: "step", message: `${done.total} of today's ${v.runs} visits are already done; running the other ${left}.` });
+    if (done.total > 0) log({ type: "step", message: `${done.total} of today's ${v.runs} ${what} are already done; running the other ${left}.` });
     log({ type: "step", message: `Today: ${phonesLeft} visit${phonesLeft === 1 ? "" : "s"} on a phone and ${left - phonesLeft} on a desktop (${c.mobilePct}% mobile traffic).` });
     v.run = done.total;
     v.lanes = 0;
@@ -296,7 +299,7 @@ async function run(c: VisitCampaign, v: LiveVisit) {
           // A new random model each time (a try again is a new browser too): Android or iPhone, Windows or Mac.
           const model = pickDevice(device);
           if (v.runs > 1) send({ type: "run", n: runNo, of: v.runs, link: { number: lease.number, of: lease.of }, device, deviceName: deviceLabel(model) });
-          else send({ type: "step", message: `A visit on a ${deviceLabel(model)}.` });
+          else send({ type: "step", message: `A ${c.mode === "search" ? "search" : "visit"} on a ${deviceLabel(model)}.` });
           if (lease.of > 1) send({ type: "step", message: `Using proxy link #${lease.number} of ${lease.of}.` });
           const report = await runVisitTest({
             url: c.siteUrl,
@@ -309,7 +312,8 @@ async function run(c: VisitCampaign, v: LiveVisit) {
             // Searches Google and clicks the site's result: the only way a campaign visit reaches the site.
             // Google not showing results (CAPTCHA not solved, consent page, the search failing) starts the
             // run again in a new browser; the site not in the results means no visit (tried again).
-            searchFirst: { keyword: c.keyword, country: c.country, neverSkip: true },
+            // Search only: the search is the run (its results looked through for the dwell time, nothing clicked).
+            searchFirst: { keyword: c.keyword, country: c.country, neverSkip: true, only: c.mode === "search" },
             claimIp: claimProxyIp,
             profileDir: profile?.dir,
             dwellSec: dwellTime(c),
@@ -434,7 +438,7 @@ async function run(c: VisitCampaign, v: LiveVisit) {
     v.spawn = spawn;
     v.say = (e) => log(e);
     spawn();
-    if (running.size > 1) log({ type: "step", message: `Running ${running.size} visits at the same time, each through its own proxy link and IP.` });
+    if (running.size > 1) log({ type: "step", message: `Running ${running.size} ${what} at the same time, each through its own proxy link and IP.` });
     while (running.size) await Promise.all([...running.values()]);
     v.spawn = undefined;
     if (!signal.aborted && v.runs > 1) log({ type: "step", message: `All ${v.runs} runs finished.` });

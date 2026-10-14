@@ -146,6 +146,8 @@ export interface VisitReport {
   onSiteSec?: number;
   /** The site's result on Google that the visit clicked: its results page, and its place there (null: not known). */
   google?: { page: number; position: number | null };
+  /** A search-only run: Google's results looked through, nothing clicked, no site opened (onSiteSec: time on the results). */
+  searchOnly?: boolean;
 }
 
 /** How many internal pages the test found, and where. */

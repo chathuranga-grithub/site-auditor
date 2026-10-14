@@ -4,7 +4,7 @@
 
 import Link from "next/link";
 import { useEffect, type ReactNode } from "react";
-import { CircleCheck, CircleDashed, CircleX, Monitor, Pause, Square, Trash2, TriangleAlert } from "lucide-react";
+import { CircleCheck, CircleDashed, CircleX, Monitor, Pause, Search, Square, Trash2, TriangleAlert } from "lucide-react";
 import type { CampaignSummary, Health } from "@/lib/campaigns/metrics";
 import { FIELD_LABELS, visitPlanProgress, type Campaign, type CampaignStatus, type CtrSetup, type FieldChange } from "@/lib/campaigns/types";
 import { Notice } from "@/components/ui/primitives";
@@ -51,6 +51,18 @@ export function ComputerBadge({ campaign: c, me, size = "sm" }: { campaign: Camp
     <span className={`inline-flex items-center gap-1.5 rounded-full border border-line-strong text-muted ${ended ? "opacity-60" : ""} ${text}`} title={`${ended ? "Ran" : "Runs"} on another computer: ${c.computerName ?? "unknown"}`}>
       <Monitor className="size-3" aria-hidden />
       <span className="font-mono">{c.computerName ?? "Another PC"}</span>
+    </span>
+  );
+}
+
+/** A search-only campaign (it searches Google and looks through the results: no click, no site visit). */
+export function ModeBadge({ size = "sm" }: { size?: "sm" | "md" }) {
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center gap-1 rounded-full bg-series-1/15 font-medium text-series-1 ring-1 ring-series-1/40 ${size === "md" ? "px-2.5 py-1 text-xs" : "px-1.5 py-px text-[10px]"}`}
+      title="Search only: searches the keyword on Google and looks through the results. Nothing is clicked; no site is visited."
+    >
+      <Search className={size === "md" ? "size-3" : "size-2.5"} aria-hidden /> Search only
     </span>
   );
 }
@@ -239,7 +251,10 @@ export function CampaignTable({ items, me, actions }: { items: CampaignItem[]; m
                   <Link href={`/ctr/campaigns/${c.id}`} className="block font-medium break-words text-ink hover:underline">
                     {c.keyword}
                   </Link>
-                  <div className="truncate font-mono text-[11px] text-link">{(c.pageUrl ?? c.siteUrl).replace(/^https?:\/\//, "")}</div>
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    {c.mode === "search" && <ModeBadge />}
+                    {(c.pageUrl ?? c.siteUrl) && <span className="truncate font-mono text-[11px] text-link">{(c.pageUrl ?? c.siteUrl).replace(/^https?:\/\//, "")}</span>}
+                  </div>
                 </td>
                 <td className="px-3 py-2.5 whitespace-nowrap">
                   <ComputerBadge campaign={c} me={me} />
