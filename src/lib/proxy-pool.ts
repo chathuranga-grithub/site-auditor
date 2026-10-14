@@ -1,11 +1,15 @@
 // Server-only, local only: shares the proxy API links saved in Settings between everything that
-// runs at the same time (campaign visits, ranking checks). A link is held by one job at a time,
-// because asking its API for a new IP changes the IP under whoever is using it. Free links are
-// handed out at random. A link whose provider says "new IP in N seconds" rests until then. The
-// proxy IPs in use are tracked too, so two visits running at the same time never share one IP.
+// runs at the same time (campaign visits, ranking checks), on this computer and on the others. A link
+// is held by one job at a time, because asking its API for a new IP changes the IP under whoever is
+// using it: each is claimed in the database first (src/lib/proxy-leases.ts), so no two computers use
+// one at the same time either. Free links are handed out at random. A link whose provider says "new IP
+// in N seconds" rests until then, for every computer. The proxy IPs in use here are tracked too, so two
+// visits running at the same time never share one IP. With no database, links are shared here only.
 // In memory, on globalThis so a code reload in `next dev` keeps it.
 
+import { claimLink, linkKey, releaseLink, restLink } from "./proxy-leases";
 import { resolveProxyApis } from "./proxy-settings";
+import { thisComputer } from "./this-computer";
 
 /** Two links gave the same IP: this one is already used by another visit running now. */
 export class ProxyIpInUseError extends Error {
@@ -36,8 +40,8 @@ interface Pool {
 const g = globalThis as typeof globalThis & { __proxyPool?: Pool };
 const pool = (g.__proxyPool ??= { busy: new Set(), restUntil: new Map(), ips: new Set(), waiters: new Set() });
 
-/** Longest single wait before the links are read again (Settings may have changed). */
-const RECHECK_MS = 30_000;
+/** Longest single wait before the links are read again (Settings may have changed, another computer let one go). */
+const RECHECK_MS = 15_000;
 
 /**
  * A free proxy API link, picked at random; waits until one is free. `onWait` is told why it waits:
@@ -49,6 +53,41 @@ export async function leaseProxyApi(signal: AbortSignal, onWait?: (seconds: numb
     if (signal.aborted) throw new Error("Stopped.");
     const links = await resolveProxyApis();
     if (!links.length) throw new Error("No proxy API link is saved. Add it in Settings.");
+
+    // Claimed in the database: free on every computer.
+    const byKey = new Map(links.map((l) => [linkKey(l), l]));
+    const me = await thisComputer().catch(() => null);
+    const claim = await claimLink([...byKey.keys()], me?.id ?? null);
+    if (claim && "key" in claim) {
+      const apiUrl = byKey.get(claim.key)!;
+      pool.busy.add(apiUrl);
+      let released = false;
+      return {
+        apiUrl,
+        number: links.indexOf(apiUrl) + 1,
+        of: links.length,
+        release() {
+          if (released) return;
+          released = true;
+          pool.busy.delete(apiUrl);
+          void releaseLink(claim.key, claim.holder)
+            .catch((err: unknown) => console.warn("Couldn't let a proxy link go (it's free again within minutes):", err))
+            .finally(() => {
+              for (const wake of [...pool.waiters]) wake();
+            });
+        },
+      };
+    }
+    if (claim) {
+      // None free on any computer: all held, or the free ones resting.
+      const why = claim.restSec == null ? "busy" : "rest";
+      if (why !== told) onWait?.(claim.restSec == null ? null : claim.restSec);
+      told = why;
+      await nextChance(Math.min(claim.restSec == null ? RECHECK_MS : claim.restSec * 1000, RECHECK_MS), signal);
+      continue;
+    }
+
+    // No database: shared on this computer only.
     const now = Date.now();
     const notBusy = links.filter((l) => !pool.busy.has(l));
     const free = notBusy.filter((l) => (pool.restUntil.get(l) ?? 0) <= now);
@@ -80,6 +119,7 @@ export async function leaseProxyApi(signal: AbortSignal, onWait?: (seconds: numb
 /** The link's provider gives a new IP only after `seconds`: don't hand it out before then. */
 export function restProxyApi(apiUrl: string, seconds: number): void {
   pool.restUntil.set(apiUrl, Date.now() + seconds * 1000);
+  void restLink(linkKey(apiUrl), seconds).catch((err: unknown) => console.warn("Couldn't share a proxy link's rest:", err));
 }
 
 /** Claims a proxy IP for a visit; null if another visit running now already has it. Returns the release. */

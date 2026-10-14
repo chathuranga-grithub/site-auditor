@@ -52,6 +52,11 @@ interface LiveVisit {
    * the next one that counts (recordVisits), so these details cost no extra writes.
    */
   pending: Pick<VisitDayDelta, "failed" | "captchasMet" | "captchasSolved">;
+  /** Visits to run at the same time now: the campaign's concurrency, changed while it runs by an edit. */
+  want: number;
+  /** While its lanes run: starts the lanes `want` calls for, and logs a line in its console. */
+  spawn?: () => void;
+  say?: (e: VisitEvent) => void;
 }
 
 const noPending = (): LiveVisit["pending"] => ({ failed: 0, captchasMet: 0, captchasSolved: 0 });
@@ -132,9 +137,43 @@ export function startCampaignVisit(c: VisitCampaign): void {
   // After its last day (the end date): no more visits; the daily check marks it finished.
   if (todayInVietnam() > c.endDate) return;
   const runs = targetVisitsToday(c);
-  const v: LiveVisit = { startedAt: Date.now(), runs, run: 0, lanes: 0, events: [], running: true, controller: new AbortController(), listeners: new Set(), pending: noPending() };
+  const v: LiveVisit = {
+    startedAt: Date.now(),
+    runs,
+    run: 0,
+    lanes: 0,
+    events: [],
+    running: true,
+    controller: new AbortController(),
+    listeners: new Set(),
+    pending: noPending(),
+    want: Math.max(1, c.concurrency),
+  };
   visits.set(c.id, v);
   void run(c, v);
+}
+
+/**
+ * The campaign's concurrency changed (an edit): its visit running here runs that many at the same time
+ * from now on, without starting again. Raised: the extra ones start at once (each takes a free proxy
+ * link, shared with every computer). Lowered: the extra ones stop when their current visit is done, so
+ * none is cut short. False if no visit runs here now (the next one uses the campaign's concurrency).
+ */
+export function setVisitConcurrency(campaignId: number, concurrency: number): boolean {
+  const v = visits.get(campaignId);
+  if (!v?.running || !v.spawn) return false;
+  const want = Math.max(1, concurrency);
+  if (want === v.want) return true;
+  const raised = want > v.want;
+  v.want = want;
+  v.say?.({
+    type: "step",
+    message: raised
+      ? `Concurrency raised to ${want}: the extra visits start now, each through a free proxy link.`
+      : `Concurrency lowered to ${want}: the extra visits stop when their current one is done.`,
+  });
+  v.spawn();
+  return true;
 }
 
 export function stopCampaignVisit(campaignId: number): void {
@@ -224,8 +263,7 @@ async function run(c: VisitCampaign, v: LiveVisit) {
     if (done.total > 0) log({ type: "step", message: `${done.total} of today's ${v.runs} visits are already done; running the other ${left}.` });
     log({ type: "step", message: `Today: ${phonesLeft} visit${phonesLeft === 1 ? "" : "s"} on a phone and ${left - phonesLeft} on a desktop (${c.mobilePct}% mobile traffic).` });
     v.run = done.total;
-    v.lanes = Math.max(1, Math.min(c.concurrency, left));
-    if (v.lanes > 1) log({ type: "step", message: `Running ${v.lanes} visits at the same time, each through its own proxy link and IP.` });
+    v.lanes = 0;
 
     /** One visit run, through a free proxy link; takes another link while one makes it wait or repeats an IP. */
     const runOnce = async (runNo: number, laneSend: (e: VisitEvent) => void) => {
@@ -354,11 +392,18 @@ async function run(c: VisitCampaign, v: LiveVisit) {
       }
     };
 
-    /** One lane: takes the next run until today's are all started; each starts when the lane's last one has finished. */
+    /**
+     * One lane: takes the next run until today's are all started; each starts when the lane's last one
+     * has finished. A lane above the concurrency (lowered by an edit) stops once its visit is done.
+     */
     const lane = async (n: number) => {
       const send = (e: VisitEvent) => log(e, n);
       try {
         while (!signal.aborted && v.run < v.runs) {
+          if (n > v.want) {
+            send({ type: "step", message: `Concurrency is now ${v.want}: this one stops (its last visit is done).` });
+            return;
+          }
           // A visit still going after midnight on the last day stops: the campaign is over.
           if (todayInVietnam() > c.endDate) {
             send({ type: "step", message: "The campaign's last day is over, so no more visits." });
@@ -373,13 +418,32 @@ async function run(c: VisitCampaign, v: LiveVisit) {
       }
     };
 
-    await Promise.all(Array.from({ length: v.lanes }, (_, i) => lane(i + 1)));
+    // The lanes running now, by number. Concurrency raised by an edit while they run: the missing ones
+    // start at once (setVisitConcurrency); each takes a run as it starts, so never more than are left.
+    const running = new Map<number, Promise<void>>();
+    const spawn = () => {
+      for (let n = 1; n <= v.want; n++) {
+        if (running.has(n) || signal.aborted || v.run >= v.runs) continue;
+        v.lanes = Math.max(v.lanes, n);
+        running.set(
+          n,
+          lane(n).finally(() => running.delete(n)),
+        );
+      }
+    };
+    v.spawn = spawn;
+    v.say = (e) => log(e);
+    spawn();
+    if (running.size > 1) log({ type: "step", message: `Running ${running.size} visits at the same time, each through its own proxy link and IP.` });
+    while (running.size) await Promise.all([...running.values()]);
+    v.spawn = undefined;
     if (!signal.aborted && v.runs > 1) log({ type: "step", message: `All ${v.runs} runs finished.` });
   } catch (err) {
     if (signal.aborted) log({ type: "step", message: "Stopped." });
     else log({ type: "error", message: err instanceof Error ? err.message : String(err) });
   } finally {
     v.running = false;
+    v.spawn = undefined;
     for (const f of v.listeners) f(null);
     v.listeners.clear();
     // Tries that didn't count since the last visit that did: saved once now, so the day shows them.

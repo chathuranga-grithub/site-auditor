@@ -22,7 +22,7 @@ import { NotConfiguredError, claimCampaign, listCampaigns, listDays, reportCompu
 import { liveSnapshot, realtimeUpdates } from "./live-snapshot";
 import { todayInVietnam } from "./site";
 import type { Campaign } from "./types";
-import { campaignVisitStatus, forgetCampaignVisit, runningVisitIds, startCampaignVisit, stopCampaignVisit } from "./visits";
+import { campaignVisitStatus, forgetCampaignVisit, runningVisitIds, setVisitConcurrency, startCampaignVisit, stopCampaignVisit } from "./visits";
 
 /** How often to look for campaigns that are due. */
 const EVERY_MS = 15 * 60_000;
@@ -44,23 +44,29 @@ const g = globalThis as typeof globalThis & {
 };
 const failures = (g.__rankingFailures ??= new Map());
 const runnableHere = (g.__runnableHere ??= new Map<number, boolean>());
-/** Per campaign: what its visits use (site, keyword, plan, behavior), at the last sync. */
+/** Per campaign: what its visits use (site, keyword, plan, behavior), and its concurrency, at the last sync. */
 const visitSettings = ((g as typeof g & { __visitSettings?: Map<number, string> }).__visitSettings ??= new Map<number, string>());
+const visitConcurrency = ((g as typeof g & { __visitConcurrency?: Map<number, number> }).__visitConcurrency ??= new Map<number, number>());
 
-/** What a campaign's visits use: when it changes (an edit), the visit running here starts again with it. */
-const settingsOf = (c: Campaign) =>
-  JSON.stringify([c.siteUrl, c.keyword, c.pageUrl, c.day1Visits, c.dailyIncreasePct, c.concurrency, c.minDwellSec, c.maxDwellSec, c.mobilePct]);
+/**
+ * What a campaign's visits use: when it changes (an edit), the visit running here starts again with it.
+ * Not its concurrency: that changes while the visit runs (setVisitConcurrency), nothing cut short.
+ */
+const settingsOf = (c: Campaign) => JSON.stringify([c.siteUrl, c.keyword, c.pageUrl, c.day1Visits, c.dailyIncreasePct, c.minDwellSec, c.maxDwellSec, c.mobilePct]);
 
 /**
  * The campaign was edited on this computer: if it runs here, its visit starts again with the new
- * settings now (today's visits done so far still count), not at the next minute check.
+ * settings now (today's visits done so far still count), not at the next minute check; its new
+ * concurrency, the visit running takes as it is.
  */
 export function campaignEdited(before: Campaign, after: Campaign, here: boolean): void {
   visitSettings.set(after.id, settingsOf(after));
+  visitConcurrency.set(after.id, after.concurrency);
   if (!here || after.status !== "active") return;
   runnableHere.set(after.id, true);
   // Given days again after it finished, or its visits' settings changed.
   if (before.status !== "active" || settingsOf(before) !== settingsOf(after)) startCampaignVisit(after);
+  else if (before.concurrency !== after.concurrency) setVisitConcurrency(after.id, after.concurrency);
 }
 
 /** Whether this copy of the app ran this computer's campaigns at the last minute check. */
@@ -124,6 +130,8 @@ async function syncHere(first = false): Promise<void> {
       const settings = settingsOf(c);
       const edited = visitSettings.has(c.id) && visitSettings.get(c.id) !== settings;
       visitSettings.set(c.id, settings);
+      const concurrencyBefore = visitConcurrency.get(c.id);
+      visitConcurrency.set(c.id, c.concurrency);
       const v = campaignVisitStatus(c.id);
       if (!runnable) {
         // Paused, stopped or moved to another computer (maybe from another computer): end what runs here.
@@ -136,6 +144,8 @@ async function syncHere(first = false): Promise<void> {
       // No visit since the app started, or resumed (or moved here) from another computer, or edited
       // from another computer (it starts again with the new settings; today's visits done still count).
       if (!v || (was === false && !v.running) || edited) startCampaignVisit(c);
+      // Its concurrency changed from another computer: the visit running here takes it as it is.
+      else if (concurrencyBefore !== undefined && concurrencyBefore !== c.concurrency) setVisitConcurrency(c.id, c.concurrency);
       // New since the last minute, with no visit here before: started for this computer from another
       // one. Its first ranking check, right away (one started here had it when it was made).
       if (!first && was === undefined && !v && c.startDate === today) {
