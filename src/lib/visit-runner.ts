@@ -9,7 +9,7 @@ import { chromium as playwrightChromium, devices, type Browser, type BrowserCont
 import { addExtra } from "playwright-extra";
 import { stealthOn, stealthPlugin } from "./stealth";
 import { actAsDevice, deviceLabel, deviceUserAgent, type DeviceProfile } from "./device-profiles";
-import { MAX_VISITS_PER_IP, burnProxy, getProxyOrReuse, getUnvisitedProxy } from "./proxy-api";
+import { burnProxy, getProxyOrReuse, getUnvisitedProxy } from "./proxy-api";
 import { NO_WEBRTC_ARGS, NO_WEBRTC_SCRIPT } from "./no-webrtc";
 import { fetchJsonInPage, lookupExit, ownPublicIp } from "./proxy-ip";
 import { ProxyIpInUseError } from "./proxy-pool";
@@ -166,7 +166,7 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
     send({ type: "step", message: `Using the IP this proxy link gave just before (no visit has used it yet): ${proxy.address}.` });
   }
   if (proxy.reused) {
-    send({ type: "step", message: `The provider isn't giving a new IP yet, so its current IP (${proxy.address}) is used again${visitNo ? ` (visit ${visitNo} of ${MAX_VISITS_PER_IP} on it)` : ""}.` });
+    send({ type: "step", message: `The provider isn't giving a new IP yet, so its current IP (${proxy.address}) is used again${visitNo ? ` (visit ${visitNo} on it)` : ""}.` });
   }
 
   let close: (() => Promise<void>) | null = null;

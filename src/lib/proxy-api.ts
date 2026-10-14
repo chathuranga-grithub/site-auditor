@@ -73,10 +73,7 @@ export function burnProxy(apiUrl: string, address: string): void {
 /** How long a visit waits when the provider's new IP is one Google blocked (it then gives another). */
 const BLOCKED_IP_WAIT_SEC = 30;
 
-/** How many campaign visits may use one proxy IP (a new IP when the provider gives one, else the current one again). */
-export const MAX_VISITS_PER_IP = 3;
-
-// Campaign visits given each proxy address so far. In memory only, like lastProxy.
+// Campaign visits given each proxy address so far (shown in the console). In memory only, like lastProxy.
 const visitsPerIp = state.visitsPerIp;
 
 /** Counts a visit on that proxy address. */
@@ -89,8 +86,9 @@ function countVisitOn<T extends ProxyConfig>(config: T): T {
  * A proxy IP for a campaign visit: the link's latest one if it's still valid and unused (e.g. a
  * ranking check just got it, which made the provider's "new IP in N seconds" start), else a new one
  * from the API. While the provider makes us wait for a new one, the link's current IP (ShopLike's
- * getCurrentProxy, same token) is used again (current: true), up to MAX_VISITS_PER_IP visits on it
- * and unless Google kept blocking it; otherwise ProxyWaitError (wait for the new one), as before.
+ * getCurrentProxy, same token) is used again (current: true), however many visits it already made:
+ * a visit never waits for a new IP. Only an IP Google blocked isn't (a visit on it fails at once):
+ * then ProxyWaitError (wait for the new one).
  */
 export async function getUnvisitedProxy(apiUrl: string): Promise<ProxyConfig & { fromEarlier: boolean; current: boolean; visitNo: number }> {
   const last = lastProxy.get(apiUrl);
@@ -109,7 +107,7 @@ export async function getUnvisitedProxy(apiUrl: string): Promise<ProxyConfig & {
   } catch (err) {
     if (!(err instanceof ProxyWaitError)) throw err;
     const current = await getCurrentProxy(apiUrl).catch(() => null);
-    if (!current || isGoogleBlocked(current.address) || (visitsPerIp.get(current.address) ?? 0) >= MAX_VISITS_PER_IP) throw err;
+    if (!current || isGoogleBlocked(current.address)) throw err;
     const latest = lastProxy.get(apiUrl);
     if (latest?.config.address === current.address) latest.visited = true;
     countVisitOn(current);
