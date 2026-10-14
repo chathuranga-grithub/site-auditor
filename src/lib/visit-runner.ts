@@ -283,10 +283,10 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
       report.searchOnly = true;
       if (fromGoogle.position != null) report.google = { page: fromGoogle.page, position: fromGoogle.position };
       const from = Date.now();
-      if (dwellSec) {
-        send({ type: "step", message: `Looking through Google's results for ${dwellSec}s (search only: nothing is clicked)…` });
-        await browseResults(main, dwellSec, signal);
-      }
+      // Never closed straight away: at least 5–10s (random) on the results, longer if Time on Results is.
+      const stay = Math.max(dwellSec ?? 0, MIN_RESULTS_SEC + Math.floor(Math.random() * (MAX_MIN_RESULTS_SEC - MIN_RESULTS_SEC + 1)));
+      send({ type: "step", message: `Looking through Google's results for ${stay}s (search only: nothing is clicked)…` });
+      await browseResults(main, stay, signal);
       report.onSiteSec = Math.round((Date.now() - from) / 1000);
       if (stopped()) return finish(report);
       send({ type: "step", message: "Search done (search only: no click, no site visit)." });
@@ -858,6 +858,10 @@ async function solveCaptcha(tab: Page, send: VisitOptions["send"], signal: Abort
  * Remove once there's a proper solution for Google's CAPTCHA (campaign visits must click the result).
  */
 const TEMP_OPEN_DIRECTLY_ON_CAPTCHA = false;
+
+/** Search only: the results page stays open at least this long (random, from the first to the second) before the browser closes. */
+const MIN_RESULTS_SEC = 5;
+const MAX_MIN_RESULTS_SEC = 10;
 
 /** How many of Google's results pages the site is looked for on before it's "not on Google". */
 const SEARCH_PAGES = 3;
