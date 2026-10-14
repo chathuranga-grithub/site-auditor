@@ -71,7 +71,7 @@ export function parseNewCampaign(body: Record<string, unknown>, proxyApis: numbe
   const durationDays = optional(body.durationDays) ?? DEFAULT_DURATION_DAYS;
   if (!Number.isInteger(durationDays) || durationDays < 1 || durationDays > MAX_DURATION_DAYS) return `Duration must be 1 to ${MAX_DURATION_DAYS} days.`;
   const day1Visits = optional(body.day1Visits) ?? DEFAULT_DAY1_VISITS;
-  if (!Number.isInteger(day1Visits) || day1Visits < 1 || day1Visits > MAX_DAY1_VISITS) return `Day 1 visits must be 1 to ${MAX_DAY1_VISITS}.`;
+  if (!Number.isInteger(day1Visits) || day1Visits < 1 || day1Visits > MAX_DAY1_VISITS) return `Day 1 visits must be 1 to ${MAX_DAY1_VISITS.toLocaleString("en-US")}.`;
   const dailyIncreasePct = optional(body.dailyIncreasePct) ?? DEFAULT_DAILY_INCREASE_PCT;
   if (!(dailyIncreasePct >= 0 && dailyIncreasePct <= MAX_DAILY_INCREASE_PCT)) return `Daily increase must be 0 to ${MAX_DAILY_INCREASE_PCT}%.`;
   // Each visit at the same time needs its own proxy API link. With none saved yet, 1 is still allowed.

@@ -9,7 +9,7 @@ export const DEFAULT_TARGET_CTR = 5;
 
 /** Visit plan: visits on day 1, then compounded by a daily increase. */
 export const DEFAULT_DAY1_VISITS = 10;
-export const MAX_DAY1_VISITS = 1000;
+export const MAX_DAY1_VISITS = 10000;
 export const DEFAULT_DAILY_INCREASE_PCT = 5;
 export const MAX_DAILY_INCREASE_PCT = 100;
 /** Visits run at the same time, each through its own proxy API link: at most the links saved in Settings. */

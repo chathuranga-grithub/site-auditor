@@ -217,7 +217,7 @@ export function NewCampaign({ editing }: { editing?: Campaign } = {}) {
               <Field label="Duration (days)" hint={editing ? durationHint(editing, form.durationDays, minDays) : `1 – ${MAX_DURATION_DAYS}, checked daily`}>
                 <input className={input} type="number" min={minDays} max={MAX_DURATION_DAYS} value={form.durationDays} onChange={set("durationDays")} required />
               </Field>
-              <Field label="Day 1 Visits" hint={`1 – ${MAX_DAY1_VISITS} visits on the first day`}>
+              <Field label="Day 1 Visits" hint={`1 – ${MAX_DAY1_VISITS.toLocaleString("en-US")} visits on the first day`}>
                 <input className={input} type="number" min={1} max={MAX_DAY1_VISITS} value={form.day1Visits} onChange={set("day1Visits")} required />
               </Field>
               <Field label="Daily Increase %" hint="Added to the day before, compounded">
