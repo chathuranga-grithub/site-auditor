@@ -106,11 +106,56 @@ export function rangeDays(today: string, n: number | "all", items: OverviewItem[
   });
 }
 
-const nextDay = (day: string) => {
+const nextDay = (day: string) => addDays(day, 1);
+
+const addDays = (day: string, n: number) => {
   const d = new Date(`${day}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + 1);
+  d.setUTCDate(d.getUTCDate() + n);
   return d.toISOString().slice(0, 10);
 };
+
+/** Every day from `from` to `to`, both included. */
+const daysFrom = (from: string, to: string) => Array.from({ length: Math.max(1, daysBetween(from, to) + 1) }, (_, i) => addDays(from, i));
+
+/** The dashboard's periods (Vietnam dates; weeks start on Monday). */
+export type Period = "today" | "yesterday" | "week" | "last-week" | "month" | "30" | "all";
+
+/**
+ * A period's days, and the days it's compared with (null: none): the same days of the week or month
+ * before (this week so far against last week's same days), else the same number of days just before.
+ */
+export function periodDays(today: string, period: Period, items: OverviewItem[]): { days: string[]; before: string[] | null } {
+  const monday = addDays(today, -((new Date(`${today}T00:00:00Z`).getUTCDay() + 6) % 7));
+  const back = (days: string[], n: number) => days.map((d) => addDays(d, -n));
+  switch (period) {
+    case "today":
+      return { days: [today], before: [addDays(today, -1)] };
+    case "yesterday":
+      return { days: [addDays(today, -1)], before: [addDays(today, -2)] };
+    case "week": {
+      const days = daysFrom(monday, today);
+      return { days, before: back(days, 7) };
+    }
+    case "last-week": {
+      const days = daysFrom(addDays(monday, -7), addDays(monday, -1));
+      return { days, before: back(days, 7) };
+    }
+    case "month": {
+      const days = daysFrom(`${today.slice(0, 8)}01`, today);
+      // Last month's same days (as many as it has).
+      const first = new Date(`${today.slice(0, 8)}01T00:00:00Z`);
+      first.setUTCMonth(first.getUTCMonth() - 1);
+      const from = first.toISOString().slice(0, 10);
+      const lastOfPrev = addDays(`${today.slice(0, 8)}01`, -1);
+      const to = [addDays(from, days.length - 1), lastOfPrev].sort()[0];
+      return { days, before: daysFrom(from, to) };
+    }
+    case "30":
+      return { days: rangeDays(today, 30, items), before: back(rangeDays(today, 30, items), 30) };
+    case "all":
+      return { days: rangeDays(today, "all", items), before: null };
+  }
+}
 
 /** The site a campaign is for, as shown and grouped: its host without www. */
 export const siteOf = (c: Campaign) => (c.siteUrl ? stripWwwHost(c.siteUrl) || c.siteUrl : NO_SITE);
@@ -131,12 +176,8 @@ export interface Overview {
   campaigns: { item: OverviewItem; total: Totals; perDay: Totals[]; allTime: Totals }[];
 }
 
-export function buildOverview(items: OverviewItem[], days: string[]): Overview {
-  const before = days.map((d) => {
-    const x = new Date(`${d}T00:00:00Z`);
-    x.setUTCDate(x.getUTCDate() - days.length);
-    return x.toISOString().slice(0, 10);
-  });
+/** `before`: the days the range is compared with (default: the same number of days just before it). */
+export function buildOverview(items: OverviewItem[], days: string[], before: string[] = days.map((d) => addDays(d, -days.length))): Overview {
   const total = empty();
   const previous = empty();
   const perDay = days.map(() => empty());
