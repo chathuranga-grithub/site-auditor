@@ -105,6 +105,11 @@ export interface VisitOptions {
    */
   googleTurn?: () => void;
   /**
+   * false: the search starts as soon as the browser has its IP, not after the other browsers' searches
+   * (campaign visits: never waiting). Default: in turn, one at a time (src/lib/google-turn.ts).
+   */
+  queueSearch?: boolean;
+  /**
    * Claims the confirmed proxy IP before any page opens; null = another visit running now has it
    * (then ProxyIpInUseError is thrown). Returns the release, called when the visit ends.
    */
@@ -134,7 +139,7 @@ interface Target {
   note?: string;
 }
 
-export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = false, searchFirst, googleTurn, claimIp, profileDir, dwellSec, readPages = false, device = "desktop", deviceProfile, signal, send }: VisitOptions): Promise<VisitReport> {
+export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = false, searchFirst, googleTurn, queueSearch = true, claimIp, profileDir, dwellSec, readPages = false, device = "desktop", deviceProfile, signal, send }: VisitOptions): Promise<VisitReport> {
   // The turn taken for this visit: used by its first search only.
   let heldTurn = googleTurn;
   const report: VisitReport = {
@@ -247,7 +252,8 @@ export async function runVisitTest({ url, proxyApiUrl, mobile, freshProxy = fals
       const restored = await restoreGoogleCookies(context, exit.ip);
       if (restored) send({ type: "step", message: `Google's cookies from an earlier visit on this IP put back (${restored}).` });
       try {
-        const turn = heldTurn;
+        // Not in turn (queueSearch false): a turn that's no turn, so the search starts at once.
+        const turn = queueSearch ? heldTurn : () => {};
         heldTurn = undefined;
         fromGoogle = await searchGoogleFirst(main, searchFirst, url, send, signal, turn);
         // Got through to the results: Google's cookies kept for the next visit on this IP.
