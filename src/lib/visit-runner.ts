@@ -657,19 +657,21 @@ async function searchGoogleFirst(
     return null;
   }
   const params = searchParams(keyword, country);
-  // One Google search at a time across all the app's browsers (src/lib/google-turn.ts).
+  // Search only without a site: none to look for ("" matches no result). Worked out before the turn is
+  // taken: nothing may fail between taking it and the try that gives it back.
+  const host = siteUrl ? new URL(siteUrl).hostname.replace(/^www\./, "").toLowerCase() : "";
+  // One Google search at a time across all the app's browsers (src/lib/google-turn.ts); at most a few
+  // minutes' wait (then this try ends and the run starts again with a new IP).
   let waited = false;
   const release = await takeGoogleTurn(signal, () => {
     waited = true;
     send({ type: "wait", seconds: null, reason: "its turn to search Google (one browser at a time)" });
-    send({ type: "step", message: "Waiting for the other browser to finish its Google search (one at a time, so Google doesn't see them together)…" });
+    send({ type: "step", message: "Waiting for the other browser to finish its Google search (one at a time, so Google doesn't see them together; 3 minutes at most)…" });
   });
   if (waited) send({ type: "waited" });
-  send({ type: "stage", stage: "search" });
-  send({ type: "step", message: `Searching Google for “${keyword}” (as in Vietnam: gl=${params.gl}, hl=${params.hl})…` });
-  // Search only without a site: none to look for ("" matches no result).
-  const host = siteUrl ? new URL(siteUrl).hostname.replace(/^www\./, "").toLowerCase() : "";
   try {
+    send({ type: "stage", stage: "search" });
+    send({ type: "step", message: `Searching Google for “${keyword}” (as in Vietnam: gl=${params.gl}, hl=${params.hl})…` });
     // The site looked for on Google's first SEARCH_PAGES pages, going on with "Next" like a person.
     for (let n = 1; n <= SEARCH_PAGES; n++) {
       if (n === 1) await typeSearch(tab, params);
